@@ -131,7 +131,12 @@ export const handle: Handle = async ({ event, resolve }) => {
 	return response;
 };
 
-export const handleError: HandleServerError = ({ error, event }) => {
+export const handleError: HandleServerError = ({ error, event, status }) => {
+	// 404s aren't server errors; don't spam the log with browser/extension
+	// probes for /favicon.ico and friends.
+	if (status === 404) {
+		return { message: 'Not found', code: 'not_found' };
+	}
 	const id = Math.random().toString(36).slice(2, 10);
 	log.error('unhandled', {
 		id,

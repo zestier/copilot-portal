@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import type {
 		Conversation,
 		Message,
@@ -20,9 +20,11 @@
 	$effect(() => {
 		// Reset local message list when the conversation prop changes.
 		void conversation.id;
-		messages = [...initialMessages];
-		// Reattach to any in-progress turn so a refresh-mid-stream resumes.
-		void resumeIfActive();
+		untrack(() => {
+			messages = [...initialMessages];
+			// Reattach to any in-progress turn so a refresh-mid-stream resumes.
+			void resumeIfActive();
+		});
 	});
 
 	let composer = $state('');
