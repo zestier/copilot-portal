@@ -127,6 +127,12 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	const pendingEdits: PendingEdit[] = [];
 
 	function dispatch(ev: PortalEvent) {
+		// Suppress the SDK's `done` event: we always emit our own terminal
+		// `done` in the finally block, after the auto-title `conversation.update`
+		// has been pushed. Otherwise clients (which break their stream loop on
+		// the first `done`) would miss the title update.
+		if (ev.type === 'done') return;
+
 		eventLog.push(ev);
 		for (const q of subscribers) q.push(ev);
 
