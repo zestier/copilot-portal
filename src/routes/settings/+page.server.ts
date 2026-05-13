@@ -2,11 +2,46 @@ import { redirect } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { PageServerLoad, Actions } from './$types';
 import * as settings from '$lib/server/db/repos/settings';
+import * as tokens from '$lib/server/db/repos/tokens';
+import { fetchAuthStatus, fetchModels } from '$lib/server/copilot/bridge';
+import { loadConfig } from '$lib/server/config';
+import { log } from '$lib/server/log';
 import type { PermissionPolicy, UserSettings } from '$lib/types';
 
-export const load: PageServerLoad = ({ locals }) => {
+export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.userId) throw redirect(302, '/login');
-	return { settings: settings.getOrDefault(locals.userId) };
+	const cfg = loadConfig();
+	const authToken = tokens.getGithubToken(locals.userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
+
+	let copilot: {
+		auth: { isAuthenticated: boolean; authType?: string; login?: string; statusMessage?: string };
+		models: { id: string; name: string }[];
+		error?: string;
+	};
+	try {
+		const [auth, models] = await Promise.all([fetchAuthStatus(authToken), fetchModels(authToken)]);
+		copilot = {
+			auth: {
+				isAuthenticated: auth.isAuthenticated,
+				authType: auth.authType,
+				login: auth.login,
+				statusMessage: auth.statusMessage
+			},
+			models: models.map((m) => ({ id: m.id, name: m.name }))
+		};
+	} catch (e) {
+		log.warn('settings.copilot_status_failed', { err: String(e) });
+		copilot = {
+			auth: { isAuthenticated: false, statusMessage: String(e) },
+			models: [],
+			error: e instanceof Error ? e.message : String(e)
+		};
+	}
+
+	return {
+		settings: settings.getOrDefault(locals.userId),
+		copilot
+	};
 };
 
 const SaveSchema = z.object({

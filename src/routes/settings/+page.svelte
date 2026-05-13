@@ -2,6 +2,14 @@
 	import type { PageData } from './$types';
 	let { data, form }: { data: PageData; form: { ok?: boolean } | null } = $props();
 	const s = $derived(data.settings);
+	const copilot = $derived(data.copilot);
+
+	function authLabel(a: typeof copilot.auth): string {
+		if (!a.isAuthenticated) return 'Not signed in';
+		const who = a.login ? `@${a.login}` : 'signed in';
+		const via = a.authType ? ` via ${a.authType}` : '';
+		return `${who}${via}`;
+	}
 </script>
 
 <svelte:head><title>Settings — Copilot Portal</title></svelte:head>
@@ -9,10 +17,42 @@
 <div class="wrap">
 	<h1>Settings</h1>
 
+	<section
+		class="copilot-status"
+		class:ok={copilot.auth.isAuthenticated}
+		class:bad={!copilot.auth.isAuthenticated}
+	>
+		<div class="row">
+			<strong>Copilot:</strong>
+			<span>{authLabel(copilot.auth)}</span>
+		</div>
+		{#if copilot.auth.statusMessage && !copilot.auth.isAuthenticated}
+			<div class="muted small">{copilot.auth.statusMessage}</div>
+		{/if}
+		{#if !copilot.auth.isAuthenticated}
+			<div class="muted small">
+				Run <code>copilot auth login</code> on the host, or set a per-user token in the database, then
+				reload.
+			</div>
+		{/if}
+	</section>
+
 	<form method="POST" action="?/save">
 		<label>
 			Default model
-			<input name="defaultModel" value={s.defaultModel ?? ''} placeholder="claude-sonnet-4.5" />
+			{#if copilot.models.length > 0}
+				<select name="defaultModel" value={s.defaultModel ?? ''}>
+					<option value="">(use server default)</option>
+					{#each copilot.models as m (m.id)}
+						<option value={m.id}>{m.name} — {m.id}</option>
+					{/each}
+				</select>
+			{:else}
+				<input name="defaultModel" value={s.defaultModel ?? ''} placeholder="claude-sonnet-4.5" />
+				<span class="muted small">
+					Model list unavailable{copilot.error ? `: ${copilot.error}` : ''}.
+				</span>
+			{/if}
 		</label>
 		<label>
 			Default working directory
@@ -68,5 +108,30 @@
 	.ok {
 		color: var(--success);
 		margin-left: 0.5rem;
+	}
+	.copilot-status {
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		padding: 0.75rem 1rem;
+		margin-bottom: 1.5rem;
+	}
+	.copilot-status.ok {
+		border-color: var(--success, #2a7);
+	}
+	.copilot-status.bad {
+		border-color: var(--danger, #c33);
+	}
+	.copilot-status .row {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+	}
+	.small {
+		font-size: 0.85em;
+	}
+	code {
+		background: var(--surface, #0002);
+		padding: 0 0.25rem;
+		border-radius: 3px;
 	}
 </style>

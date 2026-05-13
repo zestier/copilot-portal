@@ -5,7 +5,12 @@
 // upgrading, audit the event names and PermissionRequest shape used below.
 // All coupling lives in this file.
 
-import { CopilotClient, type PermissionRequestResult } from '@github/copilot-sdk';
+import {
+	CopilotClient,
+	type PermissionRequestResult,
+	type GetAuthStatusResponse,
+	type ModelInfo
+} from '@github/copilot-sdk';
 import type { PortalEvent, PermissionPolicy, PermissionDecision } from '$lib/types';
 import { AsyncQueue } from './async-queue';
 import { register as registerPermission, newRequestId, decideByPolicy } from './permissions';
@@ -46,6 +51,28 @@ export async function shutdownClient() {
 		log.warn('copilot.client.stop_failed', { err: String(e) });
 	}
 	sharedClient = null;
+}
+
+// --- Status / introspection helpers ---
+//
+// listModels() is rate-limited upstream and the SDK already caches per-client;
+// we still cache here so that repeated UI loads don't hit the SDK at all.
+let modelsCache: { at: number; models: ModelInfo[] } | null = null;
+const MODELS_TTL_MS = 5 * 60_000;
+
+export async function fetchAuthStatus(authToken?: string): Promise<GetAuthStatusResponse> {
+	const client = await getClient(authToken);
+	return client.getAuthStatus();
+}
+
+export async function fetchModels(authToken?: string): Promise<ModelInfo[]> {
+	if (modelsCache && Date.now() - modelsCache.at < MODELS_TTL_MS) {
+		return modelsCache.models;
+	}
+	const client = await getClient(authToken);
+	const models = await client.listModels();
+	modelsCache = { at: Date.now(), models };
+	return models;
 }
 
 export interface BridgeOpenOptions {

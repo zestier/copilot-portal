@@ -194,7 +194,7 @@
 	}
 
 	function onKeydown(e: KeyboardEvent) {
-		if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+		if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
 			e.preventDefault();
 			send();
 		}
@@ -237,7 +237,7 @@
 		<textarea
 			bind:value={composer}
 			onkeydown={onKeydown}
-			placeholder="Message Copilot…  (Cmd/Ctrl+Enter to send)"
+			placeholder="Message Copilot…  (Shift+Enter for newline)"
 			rows="3"
 			disabled={streaming && !pendingPermission}
 		></textarea>
