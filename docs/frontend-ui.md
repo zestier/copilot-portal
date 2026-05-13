@@ -87,8 +87,13 @@ includes them inline in the prompt.
 
 ### `Sidebar.svelte`
 
-Conversation list with last-message preview and relative timestamp. Click to
-navigate; long-press / right-click for rename / delete / change-workdir.
+Conversation list with relative timestamps. Each row has a kebab (⋯) menu
+exposing **Rename** (inline edit), **Archive**/**Unarchive**, and **Delete**.
+Archived conversations are tucked into a collapsible "Archived (N)" group.
+A **Select** button enables multi-select mode with a bulk action bar at the
+bottom for archiving, unarchiving, or deleting in batches. API failures
+surface in a dismissible inline banner. Click a row to navigate; archiving
+releases the conversation's pooled SDK client.
 
 ## Streaming on the client
 

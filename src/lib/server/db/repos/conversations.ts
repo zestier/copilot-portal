@@ -87,8 +87,19 @@ export function touch(id: string) {
 
 export function archive(id: string, userId: string): boolean {
 	const r = getDb()
-		.prepare('UPDATE conversations SET archived_at = ? WHERE id = ? AND user_id = ?')
+		.prepare(
+			'UPDATE conversations SET archived_at = ? WHERE id = ? AND user_id = ? AND archived_at IS NULL'
+		)
 		.run(Date.now(), id, userId);
+	return r.changes > 0;
+}
+
+export function unarchive(id: string, userId: string): boolean {
+	const r = getDb()
+		.prepare(
+			'UPDATE conversations SET archived_at = NULL WHERE id = ? AND user_id = ? AND archived_at IS NOT NULL'
+		)
+		.run(id, userId);
 	return r.changes > 0;
 }
 

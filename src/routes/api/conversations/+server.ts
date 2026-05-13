@@ -6,9 +6,10 @@ import * as settings from '$lib/server/db/repos/settings';
 import { loadConfig } from '$lib/server/config';
 import { defaultWorkdirFor, resolveAndValidate } from '$lib/server/workdir';
 
-export const GET: RequestHandler = ({ locals }) => {
+export const GET: RequestHandler = ({ locals, url }) => {
 	if (!locals.userId) throw error(401);
-	return json({ conversations: convs.list(locals.userId) });
+	const includeArchived = url.searchParams.get('archived') === '1';
+	return json({ conversations: convs.list(locals.userId, { includeArchived }) });
 };
 
 const CreateBody = z.object({

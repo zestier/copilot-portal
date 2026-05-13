@@ -83,6 +83,42 @@ describe('db migrations + repos', () => {
 		expect(settings.hasGrant(u.id, c.id, 'read')).toBe(true);
 	});
 
+	it('archives and unarchives conversations and filters list accordingly', () => {
+		const u = users.ensureLocalUser();
+		const a = convs.create(u.id, { title: 'a', workdir: '/tmp', model: null });
+		const b = convs.create(u.id, { title: 'b', workdir: '/tmp', model: null });
+
+		expect(
+			convs
+				.list(u.id)
+				.map((c) => c.id)
+				.sort()
+		).toEqual([a.id, b.id].sort());
+
+		expect(convs.archive(a.id, u.id)).toBe(true);
+		// Idempotent: archiving again returns false.
+		expect(convs.archive(a.id, u.id)).toBe(false);
+
+		const active = convs.list(u.id);
+		expect(active.map((c) => c.id)).toEqual([b.id]);
+		const all = convs.list(u.id, { includeArchived: true });
+		expect(all.map((c) => c.id).sort()).toEqual([a.id, b.id].sort());
+		expect(convs.get(a.id, u.id)?.archivedAt).toBeTypeOf('number');
+
+		// Authorization: another user cannot archive/unarchive.
+		const other = users.upsertGithub({
+			githubLogin: 'other2',
+			githubId: 43,
+			displayName: null,
+			avatarUrl: null
+		});
+		expect(convs.unarchive(a.id, other.id)).toBe(false);
+
+		expect(convs.unarchive(a.id, u.id)).toBe(true);
+		expect(convs.unarchive(a.id, u.id)).toBe(false);
+		expect(convs.get(a.id, u.id)?.archivedAt).toBeNull();
+	});
+
 	it('saves and loads settings with defaults', () => {
 		const u = users.ensureLocalUser();
 		const s = settings.getOrDefault(u.id);

@@ -15,13 +15,33 @@ export const GET: RequestHandler = ({ params, locals }) => {
 	});
 };
 
-const PatchBody = z.object({ title: z.string().min(1).max(200) });
+const PatchBody = z
+	.object({
+		title: z.string().min(1).max(200).optional(),
+		archived: z.boolean().optional()
+	})
+	.refine((b) => b.title !== undefined || b.archived !== undefined, {
+		message: 'No fields to update'
+	});
 
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.userId) throw error(401);
 	const body = PatchBody.parse(await request.json());
-	const ok = convs.rename(params.id!, locals.userId, body.title);
-	if (!ok) throw error(404);
+	const id = params.id!;
+	const conv = convs.get(id, locals.userId);
+	if (!conv) throw error(404);
+
+	if (body.title !== undefined) {
+		convs.rename(id, locals.userId, body.title);
+	}
+	if (body.archived !== undefined) {
+		if (body.archived) {
+			convs.archive(id, locals.userId);
+			await pool.release(id);
+		} else {
+			convs.unarchive(id, locals.userId);
+		}
+	}
 	return json({ ok: true });
 };
 

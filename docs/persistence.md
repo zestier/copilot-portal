@@ -137,7 +137,8 @@ export function list(userId: string, opts: ListOpts): Conversation[] { ... }
 export function create(userId: string, input: CreateConvInput): Conversation { ... }
 export function rename(id: string, userId: string, title: string): void { ... }
 export function touch(id: string): void { ... }
-export function archive(id: string, userId: string): void { ... }
+export function archive(id: string, userId: string): boolean { ... }
+export function unarchive(id: string, userId: string): boolean { ... }
 ```
 
 ## Backup and export
@@ -152,4 +153,6 @@ export function archive(id: string, userId: string): void { ... }
 ## Retention
 
 No automatic deletion. The UI offers per-conversation delete (cascades).
-Archived conversations are hidden from the sidebar but preserved.
+Archived conversations are collapsed under an "Archived" group in the sidebar
+but preserved; users can unarchive them or include them in API listings via
+`GET /api/conversations?archived=1`.

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
+	import { tick } from 'svelte';
 	import type { Conversation, User } from '$lib/types';
 
 	let {
@@ -12,25 +13,181 @@
 		onnavigate?: () => void;
 	} = $props();
 
+	let openMenuId = $state<string | null>(null);
+	let renamingId = $state<string | null>(null);
+	let renameValue = $state('');
+	let archivedOpen = $state(false);
+	let selectMode = $state(false);
+	let selected = $state(new Set<string>());
+	let bulkBusy = $state(false);
+	let errorMsg = $state<string | null>(null);
+	let errorTimer: ReturnType<typeof setTimeout> | null = null;
+	let firstMenuItem: HTMLButtonElement | null = $state(null);
+	let renameInput: HTMLInputElement | null = $state(null);
+
+	const active = $derived(conversations.filter((c) => c.archivedAt == null));
+	const archived = $derived(conversations.filter((c) => c.archivedAt != null));
+
+	function flashError(msg: string) {
+		errorMsg = msg;
+		if (errorTimer) clearTimeout(errorTimer);
+		errorTimer = setTimeout(() => (errorMsg = null), 5000);
+	}
+
+	async function api(
+		url: string,
+		init: globalThis.RequestInit,
+		errLabel: string
+	): Promise<boolean> {
+		try {
+			const res = await fetch(url, init);
+			if (!res.ok) {
+				flashError(`${errLabel} failed (${res.status})`);
+				return false;
+			}
+			return true;
+		} catch {
+			flashError(`${errLabel} failed`);
+			return false;
+		}
+	}
+
 	async function newChat() {
 		const res = await fetch('/api/conversations', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ title: 'New chat' })
 		});
-		if (!res.ok) return;
+		if (!res.ok) {
+			flashError(`Could not create chat (${res.status})`);
+			return;
+		}
 		const body = await res.json();
 		await invalidateAll();
 		onnavigate?.();
 		location.href = `/conversations/${body.conversation.id}`;
 	}
 
-	async function deleteConv(id: string, ev: Event) {
+	async function openMenu(id: string) {
+		openMenuId = id;
+		await tick();
+		firstMenuItem?.focus();
+	}
+
+	function closeMenu() {
+		openMenuId = null;
+	}
+
+	function toggleMenu(id: string, ev: Event) {
 		ev.preventDefault();
+		ev.stopPropagation();
+		if (openMenuId === id) closeMenu();
+		else openMenu(id);
+	}
+
+	async function startRename(c: Conversation) {
+		closeMenu();
+		renamingId = c.id;
+		renameValue = c.title;
+		await tick();
+		renameInput?.focus();
+		renameInput?.select();
+	}
+
+	async function commitRename(c: Conversation) {
+		const next = renameValue.trim();
+		const id = c.id;
+		renamingId = null;
+		if (!next || next === c.title) return;
+		const ok = await api(
+			`/api/conversations/${id}`,
+			{
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ title: next })
+			},
+			'Rename'
+		);
+		if (ok) await invalidateAll();
+	}
+
+	function cancelRename() {
+		renamingId = null;
+	}
+
+	async function setArchived(id: string, archived: boolean) {
+		closeMenu();
+		const ok = await api(
+			`/api/conversations/${id}`,
+			{
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ archived })
+			},
+			archived ? 'Archive' : 'Unarchive'
+		);
+		if (ok) await invalidateAll();
+	}
+
+	async function deleteConv(id: string) {
+		closeMenu();
 		if (!confirm('Delete this conversation? This cannot be undone.')) return;
-		await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
-		await invalidateAll();
-		if (location.pathname === `/conversations/${id}`) location.href = '/';
+		const ok = await api(`/api/conversations/${id}`, { method: 'DELETE' }, 'Delete');
+		if (ok) {
+			await invalidateAll();
+			if (location.pathname === `/conversations/${id}`) location.href = '/';
+		}
+	}
+
+	function toggleSelectMode() {
+		selectMode = !selectMode;
+		selected = new Set();
+	}
+
+	function toggleSelected(id: string) {
+		const next = new Set(selected);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		selected = next;
+	}
+
+	async function bulk(action: 'archive' | 'unarchive' | 'delete') {
+		const ids = [...selected];
+		if (ids.length === 0) return;
+		if (action === 'delete') {
+			if (
+				!confirm(
+					`Delete ${ids.length} conversation${ids.length === 1 ? '' : 's'}? This cannot be undone.`
+				)
+			)
+				return;
+		}
+		bulkBusy = true;
+		try {
+			const results = await Promise.all(
+				ids.map((id) => {
+					if (action === 'delete') {
+						return fetch(`/api/conversations/${id}`, { method: 'DELETE' }).then((r) => r.ok);
+					}
+					return fetch(`/api/conversations/${id}`, {
+						method: 'PATCH',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ archived: action === 'archive' })
+					}).then((r) => r.ok);
+				})
+			);
+			const failed = results.filter((ok) => !ok).length;
+			if (failed > 0) flashError(`${failed} of ${ids.length} ${action} operations failed`);
+			await invalidateAll();
+			if (action === 'delete') {
+				const currentId = location.pathname.match(/^\/conversations\/([^/]+)/)?.[1];
+				if (currentId && ids.includes(currentId)) location.href = '/';
+			}
+			selected = new Set();
+			selectMode = false;
+		} finally {
+			bulkBusy = false;
+		}
 	}
 
 	function fmt(ts: number) {
@@ -41,31 +198,231 @@
 		if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
 		return d.toLocaleDateString();
 	}
+
+	function onWindowClick() {
+		closeMenu();
+	}
+
+	function onWindowKey(ev: KeyboardEvent) {
+		if (ev.key === 'Escape') {
+			if (openMenuId) {
+				closeMenu();
+				ev.stopPropagation();
+			} else if (renamingId) {
+				cancelRename();
+			}
+		}
+	}
+
+	function stop(ev: Event) {
+		ev.stopPropagation();
+	}
 </script>
+
+<svelte:window onclick={onWindowClick} onkeydown={onWindowKey} />
 
 <div class="sidebar-inner">
 	<div class="top">
 		<button class="btn primary block" onclick={newChat}>+ New chat</button>
+		<button
+			class="btn block select-toggle"
+			class:active={selectMode}
+			onclick={toggleSelectMode}
+			disabled={conversations.length === 0}
+		>
+			{selectMode ? 'Cancel selection' : 'Select'}
+		</button>
 	</div>
 
-	<nav class="convs">
+	{#if errorMsg}
+		<div class="error-banner" role="status" aria-live="polite">
+			{errorMsg}
+			<button class="banner-close" aria-label="Dismiss" onclick={() => (errorMsg = null)}>×</button>
+		</div>
+	{/if}
+
+	<nav class="convs" aria-label="Conversations">
 		<div class="section-label">Conversations</div>
-		{#if conversations.length === 0}
+		{#if active.length === 0}
 			<p class="muted empty">No conversations yet.</p>
 		{/if}
-		{#each conversations as c (c.id)}
-			<a class="conv" href={`/conversations/${c.id}`} onclick={onnavigate}>
-				<div class="title">{c.title}</div>
-				<div class="meta muted">{fmt(c.updatedAt)}</div>
-				<button
-					class="del"
-					title="Delete"
-					aria-label="Delete conversation"
-					onclick={(e) => deleteConv(c.id, e)}>×</button
-				>
-			</a>
+		{#each active as c (c.id)}
+			{@const isMenu = openMenuId === c.id}
+			{@const isRenaming = renamingId === c.id}
+			<div class="conv" class:selected={selected.has(c.id)}>
+				{#if selectMode}
+					<input
+						type="checkbox"
+						class="select-box"
+						aria-label={`Select ${c.title}`}
+						checked={selected.has(c.id)}
+						onclick={stop}
+						onchange={() => toggleSelected(c.id)}
+					/>
+				{/if}
+				{#if isRenaming}
+					<input
+						bind:this={renameInput}
+						bind:value={renameValue}
+						class="rename-input"
+						maxlength="200"
+						onclick={stop}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') {
+								e.preventDefault();
+								commitRename(c);
+							} else if (e.key === 'Escape') {
+								e.preventDefault();
+								cancelRename();
+							}
+						}}
+						onblur={() => commitRename(c)}
+					/>
+				{:else}
+					<a
+						class="title-area"
+						href={`/conversations/${c.id}`}
+						onclick={(e) => {
+							if (selectMode) {
+								e.preventDefault();
+								toggleSelected(c.id);
+							} else {
+								onnavigate?.();
+							}
+						}}
+					>
+						<div class="title">{c.title}</div>
+						<div class="meta muted">{fmt(c.updatedAt)}</div>
+					</a>
+				{/if}
+				{#if !selectMode && !isRenaming}
+					<button
+						class="menu-btn"
+						class:open={isMenu}
+						title="More actions"
+						aria-label={`Actions for ${c.title}`}
+						aria-haspopup="true"
+						aria-expanded={isMenu}
+						onclick={(e) => toggleMenu(c.id, e)}>⋯</button
+					>
+				{/if}
+				{#if isMenu}
+					<div class="menu" onclick={stop} onkeydown={stop} role="presentation">
+						<button bind:this={firstMenuItem} onclick={() => startRename(c)}>Rename</button>
+						<button onclick={() => setArchived(c.id, true)}>Archive</button>
+						<button class="danger" onclick={() => deleteConv(c.id)}>Delete</button>
+					</div>
+				{/if}
+			</div>
 		{/each}
+
+		{#if archived.length > 0}
+			<button
+				class="section-toggle"
+				aria-expanded={archivedOpen}
+				onclick={() => (archivedOpen = !archivedOpen)}
+			>
+				<span class="caret" class:open={archivedOpen}>▸</span>
+				Archived ({archived.length})
+			</button>
+			{#if archivedOpen}
+				{#each archived as c (c.id)}
+					{@const isMenu = openMenuId === c.id}
+					{@const isRenaming = renamingId === c.id}
+					<div class="conv archived" class:selected={selected.has(c.id)}>
+						{#if selectMode}
+							<input
+								type="checkbox"
+								class="select-box"
+								aria-label={`Select ${c.title}`}
+								checked={selected.has(c.id)}
+								onclick={stop}
+								onchange={() => toggleSelected(c.id)}
+							/>
+						{/if}
+						{#if isRenaming}
+							<input
+								bind:this={renameInput}
+								bind:value={renameValue}
+								class="rename-input"
+								maxlength="200"
+								onclick={stop}
+								onkeydown={(e) => {
+									if (e.key === 'Enter') {
+										e.preventDefault();
+										commitRename(c);
+									} else if (e.key === 'Escape') {
+										e.preventDefault();
+										cancelRename();
+									}
+								}}
+								onblur={() => commitRename(c)}
+							/>
+						{:else}
+							<a
+								class="title-area"
+								href={`/conversations/${c.id}`}
+								onclick={(e) => {
+									if (selectMode) {
+										e.preventDefault();
+										toggleSelected(c.id);
+									} else {
+										onnavigate?.();
+									}
+								}}
+							>
+								<div class="title">{c.title}</div>
+								<div class="meta muted">{fmt(c.updatedAt)}</div>
+							</a>
+						{/if}
+						{#if !selectMode && !isRenaming}
+							<button
+								class="menu-btn"
+								class:open={isMenu}
+								title="More actions"
+								aria-label={`Actions for ${c.title}`}
+								aria-haspopup="true"
+								aria-expanded={isMenu}
+								onclick={(e) => toggleMenu(c.id, e)}>⋯</button
+							>
+						{/if}
+						{#if isMenu}
+							<div class="menu" onclick={stop} onkeydown={stop} role="presentation">
+								<button bind:this={firstMenuItem} onclick={() => startRename(c)}>Rename</button>
+								<button onclick={() => setArchived(c.id, false)}>Unarchive</button>
+								<button class="danger" onclick={() => deleteConv(c.id)}>Delete</button>
+							</div>
+						{/if}
+					</div>
+				{/each}
+			{/if}
+		{/if}
 	</nav>
+
+	{#if selectMode}
+		<div class="bulk-bar" role="toolbar" aria-label="Bulk actions">
+			<span class="muted">{selected.size} selected</span>
+			<button
+				class="btn"
+				disabled={bulkBusy ||
+					selected.size === 0 ||
+					[...selected].every((id) => active.find((c) => c.id === id) == null)}
+				onclick={() => bulk('archive')}>Archive</button
+			>
+			<button
+				class="btn"
+				disabled={bulkBusy ||
+					selected.size === 0 ||
+					[...selected].every((id) => archived.find((c) => c.id === id) == null)}
+				onclick={() => bulk('unarchive')}>Unarchive</button
+			>
+			<button
+				class="btn danger"
+				disabled={bulkBusy || selected.size === 0}
+				onclick={() => bulk('delete')}>Delete</button
+			>
+		</div>
+	{/if}
 
 	<div class="bottom">
 		<a class="settings-link" href="/settings" onclick={onnavigate}>⚙ Settings</a>
@@ -85,10 +442,41 @@
 	}
 	.top {
 		padding: 1rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
 	}
 	.block {
 		display: block;
 		width: 100%;
+	}
+	.select-toggle {
+		font-size: 0.85em;
+		padding: 0.3rem 0.6rem;
+	}
+	.select-toggle.active {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+	.error-banner {
+		margin: 0 0.75rem 0.5rem;
+		padding: 0.5rem 0.7rem;
+		background: color-mix(in srgb, var(--danger) 18%, var(--surface));
+		border: 1px solid var(--danger);
+		border-radius: 6px;
+		font-size: 0.85em;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.banner-close {
+		margin-left: auto;
+		background: transparent;
+		border: 0;
+		color: inherit;
+		cursor: pointer;
+		font-size: 1rem;
+		line-height: 1;
 	}
 	.convs {
 		flex: 1;
@@ -105,49 +493,165 @@
 		color: var(--text-muted);
 		padding: 0.5rem 0.5rem 0.25rem;
 	}
+	.section-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		background: transparent;
+		border: 0;
+		color: var(--text-muted);
+		font-size: 0.75rem;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		padding: 0.75rem 0.5rem 0.25rem;
+		cursor: pointer;
+		text-align: left;
+	}
+	.section-toggle:hover {
+		color: var(--text);
+	}
+	.caret {
+		display: inline-block;
+		transition: transform 120ms ease-out;
+	}
+	.caret.open {
+		transform: rotate(90deg);
+	}
 	.empty {
 		padding: 0 0.5rem;
 		font-size: 0.9em;
 	}
 	.conv {
 		position: relative;
-		display: block;
-		padding: 0.5rem 0.6rem;
+		display: flex;
+		align-items: stretch;
+		gap: 0.4rem;
+		padding: 0.4rem 0.5rem 0.4rem 0.6rem;
 		border-radius: 6px;
-		color: inherit;
 	}
-	.conv:hover {
+	.conv:hover,
+	.conv:focus-within {
 		background: var(--surface-2);
+	}
+	.conv.selected {
+		background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+	}
+	.conv.archived .title,
+	.conv.archived .meta {
+		opacity: 0.7;
+	}
+	.select-box {
+		align-self: center;
+		margin: 0;
+		cursor: pointer;
+	}
+	.title-area {
+		flex: 1;
+		min-width: 0;
+		display: block;
+		color: inherit;
+		padding-right: 0.25rem;
+	}
+	.title-area:hover {
 		text-decoration: none;
 	}
-	.conv .title {
+	.title {
 		font-size: 0.95em;
 		font-weight: 500;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		padding-right: 1.25rem;
 	}
-	.conv .meta {
+	.meta {
 		font-size: 0.75em;
 	}
-	.del {
-		position: absolute;
-		right: 0.4rem;
-		top: 0.4rem;
+	.rename-input {
+		flex: 1;
+		min-width: 0;
+		padding: 0.25rem 0.4rem;
+		font-size: 0.95em;
+	}
+	.menu-btn {
+		align-self: center;
 		background: transparent;
 		border: 0;
 		color: var(--text-muted);
-		font-size: 1rem;
+		font-size: 1.1rem;
 		line-height: 1;
-		opacity: 0;
+		padding: 0.2rem 0.4rem;
+		border-radius: 4px;
 		cursor: pointer;
+		opacity: 0;
+		flex-shrink: 0;
 	}
-	.conv:hover .del {
+	.conv:hover .menu-btn,
+	.conv:focus-within .menu-btn,
+	.menu-btn:focus-visible,
+	.menu-btn.open {
 		opacity: 1;
 	}
-	.del:hover {
+	@media (hover: none) {
+		.menu-btn {
+			opacity: 1;
+		}
+	}
+	.menu-btn:hover {
+		background: var(--surface);
+		color: var(--text);
+	}
+	.menu-btn:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 1px;
+	}
+	.menu {
+		position: absolute;
+		right: 0.4rem;
+		top: 100%;
+		z-index: 30;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+		display: flex;
+		flex-direction: column;
+		min-width: 140px;
+		padding: 0.25rem;
+	}
+	.menu button {
+		background: transparent;
+		border: 0;
+		color: var(--text);
+		text-align: left;
+		padding: 0.4rem 0.6rem;
+		border-radius: 4px;
+		font-size: 0.9em;
+		cursor: pointer;
+	}
+	.menu button:hover,
+	.menu button:focus-visible {
+		background: var(--surface-2);
+		outline: none;
+	}
+	.menu button.danger {
 		color: var(--danger);
+	}
+	.menu button.danger:hover,
+	.menu button.danger:focus-visible {
+		background: var(--danger);
+		color: #fff;
+	}
+	.bulk-bar {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		align-items: center;
+		padding: 0.5rem 0.75rem;
+		border-top: 1px solid var(--border);
+		background: var(--surface);
+	}
+	.bulk-bar .btn {
+		padding: 0.3rem 0.6rem;
+		font-size: 0.85em;
 	}
 	.bottom {
 		padding: 0.75rem 1rem;
