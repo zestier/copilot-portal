@@ -1,0 +1,118 @@
+import { z } from 'zod';
+
+const Schema = z
+	.object({
+		HOST: z.string().default('127.0.0.1'),
+		PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+		DATA_DIR: z.string().default('./data'),
+		LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+
+		AUTH_MODE: z.enum(['github', 'shared-secret', 'none']).default('none'),
+		SESSION_SECRET: z.string().min(32).optional(),
+		ENCRYPTION_KEY: z.string().optional(), // base64, 32 bytes raw
+		I_KNOW_THIS_IS_LOCAL: z
+			.string()
+			.optional()
+			.transform((v) => v === '1' || v === 'true'),
+
+		GITHUB_CLIENT_ID: z.string().optional(),
+		GITHUB_CLIENT_SECRET: z.string().optional(),
+		ALLOWED_GITHUB_LOGINS: z
+			.string()
+			.optional()
+			.transform((v) =>
+				v
+					? v
+							.split(',')
+							.map((s) => s.trim().toLowerCase())
+							.filter(Boolean)
+					: []
+			),
+
+		SHARED_SECRET: z.string().optional(),
+
+		COPILOT_GITHUB_TOKEN: z.string().optional(),
+		DEFAULT_MODEL: z.string().default('claude-sonnet-4.5'),
+
+		IDLE_TIMEOUT_MIN: z.coerce.number().int().positive().default(15),
+		MAX_CONCURRENT_SESSIONS: z.coerce.number().int().positive().default(4)
+	})
+	.superRefine((cfg, ctx) => {
+		if (cfg.AUTH_MODE === 'none') {
+			if (!cfg.I_KNOW_THIS_IS_LOCAL || cfg.HOST !== '127.0.0.1') {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: 'AUTH_MODE=none requires HOST=127.0.0.1 and I_KNOW_THIS_IS_LOCAL=1.'
+				});
+			}
+		} else {
+			if (!cfg.SESSION_SECRET) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: 'SESSION_SECRET is required unless AUTH_MODE=none.'
+				});
+			}
+		}
+		if (cfg.AUTH_MODE === 'github') {
+			if (!cfg.GITHUB_CLIENT_ID || !cfg.GITHUB_CLIENT_SECRET) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: 'GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are required for AUTH_MODE=github.'
+				});
+			}
+			if (!cfg.ALLOWED_GITHUB_LOGINS || cfg.ALLOWED_GITHUB_LOGINS.length === 0) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: 'ALLOWED_GITHUB_LOGINS must be a non-empty list for AUTH_MODE=github.'
+				});
+			}
+		}
+		if (cfg.AUTH_MODE === 'shared-secret' && !cfg.SHARED_SECRET) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: 'SHARED_SECRET is required for AUTH_MODE=shared-secret.'
+			});
+		}
+		if (cfg.ENCRYPTION_KEY) {
+			try {
+				const raw = Buffer.from(cfg.ENCRYPTION_KEY, 'base64');
+				if (raw.length !== 32) {
+					ctx.addIssue({
+						code: z.ZodIssueCode.custom,
+						message: 'ENCRYPTION_KEY must decode to exactly 32 bytes (base64).'
+					});
+				}
+			} catch {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: 'ENCRYPTION_KEY must be valid base64.'
+				});
+			}
+		} else if (cfg.AUTH_MODE === 'github') {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: 'ENCRYPTION_KEY is required for AUTH_MODE=github (encrypts stored tokens).'
+			});
+		}
+	});
+
+export type AppConfig = z.infer<typeof Schema>;
+
+let cached: AppConfig | null = null;
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+	if (cached) return cached;
+	const result = Schema.safeParse(env);
+	if (!result.success) {
+		const msg = result.error.issues
+			.map((i) => `  - ${i.path.join('.') || '<env>'}: ${i.message}`)
+			.join('\n');
+		throw new Error(`Invalid configuration:\n${msg}`);
+	}
+	cached = result.data;
+	return cached;
+}
+
+export function resetConfigForTests() {
+	cached = null;
+}

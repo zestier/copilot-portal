@@ -1,0 +1,8 @@
+.svelte-kit/
+build/
+node_modules/
+data/
+package-lock.json
+
+.devcontainer/devcontainer-lock.json
+docs/

@@ -1,11 +1,49 @@
-# Copilot Portal — Design Docs
+# Copilot Portal
 
 A self-hosted web portal for interacting with GitHub Copilot's agent runtime, built
 on top of the official [`github/copilot-sdk`](https://github.com/github/copilot-sdk).
 Intended to be run on a personal/home machine and exposed via a Cloudflare Tunnel
 (or similar) for remote access from a phone or laptop.
 
-> **Status:** Design only. These docs bootstrap the project.
+> **Status:** Initial implementation (Phases 0–2 of the roadmap). The
+> Copilot SDK is pinned to `@github/copilot-sdk@^0.3.0` (preview).
+
+## Quick start (local, no auth)
+
+```bash
+cp .env.example .env
+# Edit .env: set ENCRYPTION_KEY (and SESSION_SECRET if not AUTH_MODE=none).
+#   openssl rand -base64 32   # ENCRYPTION_KEY
+#   openssl rand -base64 48   # SESSION_SECRET
+# For pure-local dev, leave AUTH_MODE=none and set HOST=127.0.0.1 +
+# I_KNOW_THIS_IS_LOCAL=1.
+
+# Authenticate the Copilot CLI on the host (the SDK reuses these creds):
+#   npx @github/copilot auth login
+
+npm install
+npm run dev   # http://127.0.0.1:5173
+```
+
+## Production (Docker + Cloudflare Tunnel)
+
+```bash
+docker compose up -d --build
+```
+
+See [docs/deployment.md](docs/deployment.md) for the OAuth + tunnel setup.
+
+## Scripts
+
+| Script             | Purpose                                     |
+| ------------------ | ------------------------------------------- |
+| `npm run dev`      | Vite dev server with HMR.                   |
+| `npm run build`    | Production build into `build/`.             |
+| `npm start`        | Run the production build (`node build`).    |
+| `npm run check`    | `svelte-check` + TS.                        |
+| `npm run lint`     | ESLint + Prettier check.                    |
+| `npm test`         | Vitest unit tests.                          |
+| `npm run test:e2e` | Playwright e2e (not configured by default). |
 
 ## Goals
 
