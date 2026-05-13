@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # ---- build ----
-FROM node:20-bookworm-slim AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 
 # Install build deps for better-sqlite3.
@@ -19,7 +19,7 @@ COPY . .
 RUN pnpm run build && pnpm prune --prod
 
 # ---- runtime ----
-FROM node:20-bookworm-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 
 # git is commonly invoked by Copilot's tools; tini for clean shutdown.
 RUN apt-get update && apt-get install -y --no-install-recommends \

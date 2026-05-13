@@ -9,7 +9,7 @@ fronted by a Cloudflare Tunnel for remote access.
 # Dockerfile
 
 # ---- build ----
-FROM node:20-bookworm-slim AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -17,7 +17,7 @@ COPY . .
 RUN npm run build && npm prune --omit=dev
 
 # ---- runtime ----
-FROM node:20-bookworm-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 # git is commonly invoked by the Copilot CLI's tools; include it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates curl tini \
