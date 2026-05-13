@@ -17,6 +17,7 @@ import { register as registerPermission, newRequestId, decideByPolicy } from './
 import * as settingsRepo from '../db/repos/settings';
 import { ulid } from 'ulid';
 import { log } from '../log';
+import { StubCopilotClient, isStubMode } from './bridge-stub';
 
 let sharedClient: CopilotClient | null = null;
 let starting: Promise<CopilotClient> | null = null;
@@ -25,12 +26,14 @@ export async function getClient(authToken?: string): Promise<CopilotClient> {
 	if (sharedClient) return sharedClient;
 	if (starting) return starting;
 	starting = (async () => {
-		const client = new CopilotClient({
-			useStdio: true,
-			autoStart: false,
-			useLoggedInUser: true,
-			gitHubToken: authToken
-		});
+		const client = isStubMode()
+			? (new StubCopilotClient() as unknown as CopilotClient)
+			: new CopilotClient({
+					useStdio: true,
+					autoStart: false,
+					useLoggedInUser: true,
+					gitHubToken: authToken
+				});
 		await client.start();
 		sharedClient = client;
 		log.info('copilot.client.started');

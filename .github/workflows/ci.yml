@@ -20,5 +20,18 @@ jobs:
       - run: pnpm run lint
       - run: pnpm run check
       - run: pnpm test
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Playwright e2e
+        run: pnpm run test:e2e
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
       - name: Build Docker image
         run: docker build -t copilot-portal:ci .

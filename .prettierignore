@@ -4,6 +4,9 @@ node_modules/
 .pnpm-store/
 pnpm-lock.yaml
 data/
+e2e/.tmp-data/
+playwright-report/
+test-results/
 package-lock.json
 
 .devcontainer/devcontainer-lock.json

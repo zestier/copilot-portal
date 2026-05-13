@@ -16,7 +16,8 @@
 		"format": "prettier --write .",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"test:e2e": "playwright test"
+		"test:e2e": "pnpm run build && playwright test",
+		"test:e2e:ui": "pnpm run build && playwright test --ui"
 	},
 	"dependencies": {
 		"@github/copilot-sdk": "^0.3.0",

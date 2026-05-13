@@ -22,6 +22,14 @@ export default ts.config(
 		}
 	},
 	{
-		ignores: ['build/', '.svelte-kit/', 'dist/', 'data/']
+		ignores: [
+			'build/',
+			'.svelte-kit/',
+			'dist/',
+			'data/',
+			'e2e/.tmp-data/',
+			'playwright-report/',
+			'test-results/'
+		]
 	}
 );

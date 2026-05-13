@@ -1,0 +1,22 @@
+# Playwright e2e tests
+
+End-to-end tests for the portal, run against the production build with an
+isolated SQLite database and a **stubbed** Copilot client (`COPILOT_STUB=1`)
+so no real GitHub Copilot credentials or network are required.
+
+## Run locally
+
+```bash
+pnpm exec playwright install --with-deps chromium   # one-time
+pnpm test:e2e
+```
+
+The `webServer` in `playwright.config.ts` builds the app and launches
+`node build` on port 4173 against `e2e/.tmp-data/` (wiped on each run).
+
+## Stub mode
+
+When the server starts with `COPILOT_STUB=1`, `bridge.ts` swaps the real
+`CopilotClient` for an in-process fake that responds to `send({prompt})`
+with a streamed `"Stubbed reply to: <prompt>"`. The full turn-runner,
+SSE, and persistence paths are exercised normally.

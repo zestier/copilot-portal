@@ -36,15 +36,15 @@ See [docs/deployment.md](docs/deployment.md) for the OAuth + tunnel setup.
 
 ## Scripts
 
-| Script              | Purpose                                     |
-| ------------------- | ------------------------------------------- |
-| `pnpm run dev`      | Vite dev server with HMR.                   |
-| `pnpm run build`    | Production build into `build/`.             |
-| `pnpm start`        | Run the production build (`node build`).    |
-| `pnpm run check`    | `svelte-check` + TS.                        |
-| `pnpm run lint`     | ESLint + Prettier check.                    |
-| `pnpm test`         | Vitest unit tests.                          |
-| `pnpm run test:e2e` | Playwright e2e (not configured by default). |
+| Script              | Purpose                                        |
+| ------------------- | ---------------------------------------------- |
+| `pnpm run dev`      | Vite dev server with HMR.                      |
+| `pnpm run build`    | Production build into `build/`.                |
+| `pnpm start`        | Run the production build (`node build`).       |
+| `pnpm run check`    | `svelte-check` + TS.                           |
+| `pnpm run lint`     | ESLint + Prettier check.                       |
+| `pnpm test`         | Vitest unit tests.                             |
+| `pnpm run test:e2e` | Build + Playwright e2e (uses stubbed Copilot). |
 
 This project uses **pnpm** (declared via `packageManager` in `package.json`).
 Use `corepack enable` once to make pnpm available without a global install.
