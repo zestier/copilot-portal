@@ -73,8 +73,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 		});
 	}
 
-	// CSRF + origin check for mutating JSON API calls.
-	if (path.startsWith('/api/') && event.request.method !== 'GET') {
+	// Origin check for mutating JSON API calls. Skipped when TUNNEL_HOST is
+	// set because event.url.origin won't match what the browser sent. The
+	// session cookie is SameSite=Lax which still blocks cross-site CSRF.
+	if (!process.env.TUNNEL_HOST && path.startsWith('/api/') && event.request.method !== 'GET') {
 		const origin = event.request.headers.get('origin');
 		const referer = event.request.headers.get('referer');
 		const expectedOrigin = event.url.origin;

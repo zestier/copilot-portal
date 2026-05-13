@@ -56,13 +56,14 @@ Disables auth. **Only** honored when `HOST=127.0.0.1` *and* an explicit
 
 ## CSRF
 
-- All mutating endpoints require either a same-origin `Origin`/`Referer`
-  header **or** an `X-CSRF-Token` header matching a value embedded in the
-  page's `<meta>`. SvelteKit form actions get this for free; the JSON API
-  needs explicit checks.
+- By default, mutating endpoints require a same-origin `Origin`/`Referer`
+  header (SvelteKit's built-in check + an explicit check for the JSON API).
 - The session cookie is `SameSite=Lax`, which blocks cross-site `POST` from
-  classic forms but not `fetch` from a malicious origin — hence the explicit
-  origin check.
+  classic forms and cross-site credentialed `fetch`.
+- When `TUNNEL_HOST` is set, both origin checks are skipped — the request's
+  `Host` won't match what the server thinks its origin is, so the checks
+  would reject every request. SameSite=Lax cookies still apply. Front with
+  an authenticating reverse proxy if you need stronger guarantees.
 
 ## Copilot token handling
 
