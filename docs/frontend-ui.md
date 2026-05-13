@@ -74,16 +74,19 @@ clicking the path copies it to clipboard.
 
 ### `FileBrowser.svelte`
 
-Read-only, git-aware file browser scoped to a conversation's `workdir`.
-Surfaced as a **Files** tab on `/conversations/[id]` (sits next to **Chat**).
-Two-pane layout: a left rail that switches between **Files** (hierarchical
-tree with per-entry git status badges and roll-ups to ancestor directories,
-plus toggles for hidden / ignored files) and **Commits** (branch / HEAD
-header with ahead/behind, plus the recent commit log with "Load more").
-The right pane renders either the selected file (text content + binary
-placeholder, capped at 1 MiB) with a **Content** / **Diff** toggle, or a
-selected commit's detail with its file list and per-file diff. Mobile
-collapses both grids into stacked single-pane rows.
+Read-only, git-aware file browser rooted at the **server process's working
+directory** (resolved to its realpath at startup). The conversation id in
+the API URL is used only for ownership/auth; every conversation in a given
+deployment browses the same workspace root. Surfaced as a **Files** tab on
+`/conversations/[id]` (sits next to **Chat**). Two-pane layout: a left rail
+that switches between **Files** (hierarchical tree with per-entry git
+status badges and roll-ups to ancestor directories, plus toggles for hidden
+/ ignored files) and **Commits** (branch / HEAD header with ahead/behind,
+plus the recent commit log with "Load more"). The right pane renders either
+the selected file (text content + binary placeholder, capped at 1 MiB) with
+a **Content** / **Diff** toggle, or a selected commit's detail with its
+file list and per-file diff. Mobile collapses both grids into stacked
+single-pane rows.
 
 Backed by:
 
@@ -96,9 +99,9 @@ Backed by:
 | `GET /api/conversations/[id]/git/log?limit=&skip=`   | Recent commits.               |
 | `GET /api/conversations/[id]/git/commit/[sha]`       | Commit metadata + changed files. |
 
-All paths are constrained to the conversation's workdir realpath; symlinks
-that escape are rejected. `git` is spawned with `shell: false`, hard
-timeouts, and output size caps.
+All paths are constrained to the workspace root realpath; symlinks that
+escape are rejected. `git` is spawned with `shell: false`, hard timeouts,
+and output size caps.
 
 ### `PermissionPrompt.svelte`
 

@@ -1,10 +1,12 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { authorizeConversation } from '$lib/server/conversation-auth';
+import { workspaceRoot } from '$lib/server/files';
 import { showCommit, GitError } from '$lib/server/git';
 
 export const GET: RequestHandler = async ({ params, locals }) => {
-	const { workdir } = authorizeConversation(params.id, locals.userId);
+	authorizeConversation(params.id, locals.userId);
+	const workdir = workspaceRoot();
 	const sha = params.sha;
 	if (!sha) throw error(400, 'sha required');
 	try {

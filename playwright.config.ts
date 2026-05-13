@@ -12,6 +12,7 @@ rmSync(dataDir, { recursive: true, force: true });
 mkdirSync(dataDir, { recursive: true });
 
 const PORT = Number(process.env.E2E_PORT ?? 4173);
+const buildEntry = resolve(__dirname, 'build');
 
 export default defineConfig({
 	testDir: './e2e',
@@ -34,12 +35,13 @@ export default defineConfig({
 		}
 	],
 	webServer: {
-		command: 'node build',
+		command: `node ${JSON.stringify(buildEntry)}`,
 		url: `http://127.0.0.1:${PORT}/api/health`,
 		reuseExistingServer: !process.env.CI,
 		timeout: 60_000,
 		stdout: 'pipe',
 		stderr: 'pipe',
+		cwd: dataDir,
 		env: {
 			NODE_ENV: 'production',
 			HOST: '127.0.0.1',
@@ -49,7 +51,8 @@ export default defineConfig({
 			I_KNOW_THIS_IS_LOCAL: '1',
 			ENCRYPTION_KEY: randomBytes(32).toString('base64'),
 			COPILOT_STUB: '1',
-			LOG_LEVEL: 'warn'
+			LOG_LEVEL: 'warn',
+			DB_MIGRATIONS_DIR: resolve(__dirname, 'src/lib/server/db/migrations')
 		}
 	}
 });
