@@ -21,6 +21,7 @@
 		if (!res.ok) return;
 		const body = await res.json();
 		await invalidateAll();
+		onnavigate?.();
 		location.href = `/conversations/${body.conversation.id}`;
 	}
 
