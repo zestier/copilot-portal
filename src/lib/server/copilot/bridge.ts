@@ -162,24 +162,24 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	const onToolStart = (e: unknown) => {
 		const ev = e as {
 			data?: {
-				invocationId?: string;
+				toolCallId?: string;
 				toolName?: string;
-				args?: unknown;
+				arguments?: unknown;
 			};
 		};
 		if (!activeQueue) return;
 		activeQueue.push({
 			type: 'tool.call',
-			toolCallId: ev?.data?.invocationId ?? ulid(),
+			toolCallId: ev?.data?.toolCallId ?? ulid(),
 			tool: ev?.data?.toolName ?? 'unknown',
-			args: ev?.data?.args ?? null
+			args: ev?.data?.arguments ?? null
 		});
 	};
 
 	const onToolComplete = (e: unknown) => {
 		const ev = e as {
 			data?: {
-				invocationId?: string;
+				toolCallId?: string;
 				toolName?: string;
 				success?: boolean;
 				result?: unknown;
@@ -190,7 +190,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		const ok = ev?.data?.success !== false && !ev?.data?.error;
 		activeQueue.push({
 			type: 'tool.result',
-			toolCallId: ev?.data?.invocationId ?? ulid(),
+			toolCallId: ev?.data?.toolCallId ?? ulid(),
 			ok,
 			summary: summarizeResult(ev?.data?.result, ev?.data?.error),
 			output: ev?.data?.result ?? ev?.data?.error ?? null
