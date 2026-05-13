@@ -14,6 +14,7 @@ import { ulid } from 'ulid';
 import { log } from '../log';
 import * as messages from '../db/repos/messages';
 import * as convs from '../db/repos/conversations';
+import * as usageRepo from '../db/repos/usage';
 import * as pool from './pool';
 import { deriveTitle, isDefaultTitle } from '../title';
 import { AsyncQueue } from './async-queue';
@@ -162,6 +163,22 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				diff: ev.diff,
 				textOffset: assistantBuf.length
 			});
+		} else if (ev.type === 'context.usage') {
+			try {
+				usageRepo.upsert(opts.conversationId, {
+					currentTokens: ev.currentTokens,
+					tokenLimit: ev.tokenLimit,
+					messagesLength: ev.messagesLength,
+					systemTokens: ev.systemTokens,
+					conversationTokens: ev.conversationTokens,
+					toolDefinitionsTokens: ev.toolDefinitionsTokens
+				});
+			} catch (usageErr) {
+				log.warn('turn.usage.persist_failed', {
+					conversationId: opts.conversationId,
+					err: String(usageErr)
+				});
+			}
 		}
 	}
 

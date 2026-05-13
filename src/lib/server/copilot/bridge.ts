@@ -259,12 +259,60 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		activeQueue = null;
 	};
 
+	const onUsageInfo = (e: unknown) => {
+		const ev = e as {
+			data?: {
+				currentTokens?: number;
+				tokenLimit?: number;
+				messagesLength?: number;
+				systemTokens?: number;
+				conversationTokens?: number;
+				toolDefinitionsTokens?: number;
+				isInitial?: boolean;
+			};
+		};
+		const d = ev?.data;
+		if (!activeQueue || !d) return;
+		if (typeof d.currentTokens !== 'number' || typeof d.tokenLimit !== 'number') return;
+		activeQueue.push({
+			type: 'context.usage',
+			currentTokens: d.currentTokens,
+			tokenLimit: d.tokenLimit,
+			messagesLength: d.messagesLength ?? 0,
+			systemTokens: d.systemTokens,
+			conversationTokens: d.conversationTokens,
+			toolDefinitionsTokens: d.toolDefinitionsTokens,
+			isInitial: d.isInitial
+		});
+	};
+
+	const onCompactionStart = () => {
+		if (!activeQueue) return;
+		activeQueue.push({ type: 'context.compaction', phase: 'start' });
+	};
+
+	const onCompactionComplete = (e: unknown) => {
+		const ev = e as {
+			data?: { tokensRemoved?: number; messagesRemoved?: number };
+		};
+		if (!activeQueue) return;
+		activeQueue.push({
+			type: 'context.compaction',
+			phase: 'complete',
+			tokensRemoved: ev?.data?.tokensRemoved,
+			messagesRemoved: ev?.data?.messagesRemoved
+		});
+	};
+
 	sdkSession.on('assistant.message_delta', onDelta);
 	sdkSession.on('assistant.reasoning_delta', onReasoningDelta);
 	sdkSession.on('assistant.message', onAssistantMessage);
 	sdkSession.on('tool.execution_start', onToolStart);
 	sdkSession.on('tool.execution_complete', onToolComplete);
 	sdkSession.on('session.idle', onSessionIdle);
+	sdkSession.on('session.usage_info', onUsageInfo);
+	sdkSession.on('session.compaction_start', onCompactionStart);
+	sdkSession.on('session.compaction_complete', onCompactionComplete);
 
 	const session: ConversationSession = {
 		conversationId: opts.conversationId,

@@ -109,3 +109,65 @@ describe('bridge.open() session resume behavior', () => {
 		expect(clientStub.createSession.mock.calls[0][0].sessionId).toBe('conv-123');
 	});
 });
+
+describe('bridge.open() context-usage event translation', () => {
+	it('subscribes to session.usage_info and compaction events', async () => {
+		clientStub.getSessionMetadata.mockResolvedValue(undefined);
+		const { open } = await importBridge();
+		await open(baseOpts);
+
+		const subscribed = sdkSessionStub.on.mock.calls.map((c) => c[0]);
+		expect(subscribed).toEqual(
+			expect.arrayContaining([
+				'session.usage_info',
+				'session.compaction_start',
+				'session.compaction_complete'
+			])
+		);
+	});
+
+	it('translates session.usage_info into a context.usage PortalEvent during a turn', async () => {
+		clientStub.getSessionMetadata.mockResolvedValue(undefined);
+		// `send()` is invoked inside the bridge's session.send wrapper. We
+		// resolve it on a microtask so the bridge sets up its activeQueue
+		// before we synthesize the SDK event.
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			// fire the SDK event after the bridge has installed its handlers
+			// and activeQueue is set.
+			await Promise.resolve();
+			const handlers = new Map<string, (e: unknown) => void>(
+				sdkSessionStub.on.mock.calls.map((c) => [c[0] as string, c[1] as (e: unknown) => void])
+			);
+			handlers.get('session.usage_info')?.({
+				data: {
+					currentTokens: 1234,
+					tokenLimit: 100_000,
+					messagesLength: 4,
+					systemTokens: 700,
+					conversationTokens: 500,
+					toolDefinitionsTokens: 34,
+					isInitial: true
+				}
+			});
+			handlers.get('session.idle')?.({});
+			return 'msg-id';
+		});
+
+		const { open } = await importBridge();
+		const session = await open(baseOpts);
+		const ac = new AbortController();
+		const events: unknown[] = [];
+		for await (const ev of session.send('hi', ac.signal)) {
+			events.push(ev);
+			if ((ev as { type: string }).type === 'done') break;
+		}
+
+		const usage = events.find((e) => (e as { type: string }).type === 'context.usage') as
+			| { currentTokens: number; tokenLimit: number; isInitial?: boolean }
+			| undefined;
+		expect(usage).toBeTruthy();
+		expect(usage!.currentTokens).toBe(1234);
+		expect(usage!.tokenLimit).toBe(100_000);
+		expect(usage!.isInitial).toBe(true);
+	});
+});

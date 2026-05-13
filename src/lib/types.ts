@@ -89,9 +89,39 @@ export type PortalEvent =
 	| { type: 'file.edit'; path: string; diff: string }
 	| { type: 'conversation.update'; conversationId: string; title?: string }
 	| { type: 'reasoning.summary'; text: string }
+	| {
+			type: 'context.usage';
+			currentTokens: number;
+			tokenLimit: number;
+			messagesLength: number;
+			systemTokens?: number;
+			conversationTokens?: number;
+			toolDefinitionsTokens?: number;
+			isInitial?: boolean;
+	  }
+	| {
+			type: 'context.compaction';
+			phase: 'start' | 'complete';
+			tokensRemoved?: number;
+			messagesRemoved?: number;
+	  }
 	| { type: 'error'; code: string; message: string }
 	| { type: 'heartbeat' }
 	| { type: 'done' };
+
+// Latest context-window snapshot persisted per conversation. Mirrors the
+// shape of the `context.usage` PortalEvent (sans the `type` and `isInitial`
+// transport fields) so the UI can seed its meter from page load.
+export interface ConversationUsage {
+	conversationId: string;
+	currentTokens: number;
+	tokenLimit: number;
+	messagesLength: number;
+	systemTokens: number | null;
+	conversationTokens: number | null;
+	toolDefinitionsTokens: number | null;
+	updatedAt: number;
+}
 
 export type PermissionDecision = 'allow-once' | 'allow-always' | 'deny';
 

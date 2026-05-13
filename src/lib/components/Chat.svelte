@@ -3,6 +3,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import type {
 		Conversation,
+		ConversationUsage,
 		Message,
 		PortalEvent,
 		PermissionDecision,
@@ -11,20 +12,35 @@
 	import { streamSse } from '$lib/client/sse';
 	import Message_ from './Message.svelte';
 	import PermissionPrompt from './PermissionPrompt.svelte';
+	import ContextMeter from './ContextMeter.svelte';
 
 	let {
 		conversation,
-		initialMessages
-	}: { conversation: Conversation; initialMessages: Message[] } = $props();
+		initialMessages,
+		initialUsage = null
+	}: {
+		conversation: Conversation;
+		initialMessages: Message[];
+		initialUsage?: ConversationUsage | null;
+	} = $props();
 
 	let messages = $state<Message[]>([]);
 	let title = $state<string>(untrack(() => conversation.title));
+	let usage = $state<ConversationUsage | null>(untrack(() => initialUsage));
+	let recentCompaction = $state<{ tokensRemoved?: number; messagesRemoved?: number } | null>(null);
+	let compactionTimer: ReturnType<typeof setTimeout> | null = null;
 	$effect(() => {
 		// Reset local message list when the conversation prop changes.
 		void conversation.id;
 		untrack(() => {
 			messages = [...initialMessages];
 			title = conversation.title;
+			usage = initialUsage;
+			recentCompaction = null;
+			if (compactionTimer) {
+				clearTimeout(compactionTimer);
+				compactionTimer = null;
+			}
 			// Reattach to any in-progress turn so a refresh-mid-stream resumes.
 			void resumeIfActive();
 		});
@@ -180,6 +196,33 @@
 				}
 				break;
 			}
+			case 'context.usage': {
+				usage = {
+					conversationId: conversation.id,
+					currentTokens: ev.currentTokens,
+					tokenLimit: ev.tokenLimit,
+					messagesLength: ev.messagesLength,
+					systemTokens: ev.systemTokens ?? null,
+					conversationTokens: ev.conversationTokens ?? null,
+					toolDefinitionsTokens: ev.toolDefinitionsTokens ?? null,
+					updatedAt: Date.now()
+				};
+				break;
+			}
+			case 'context.compaction': {
+				if (ev.phase === 'complete') {
+					recentCompaction = {
+						tokensRemoved: ev.tokensRemoved,
+						messagesRemoved: ev.messagesRemoved
+					};
+					if (compactionTimer) clearTimeout(compactionTimer);
+					compactionTimer = setTimeout(() => {
+						recentCompaction = null;
+						compactionTimer = null;
+					}, 6000);
+				}
+				break;
+			}
 		}
 		scrollToBottom();
 	}
@@ -277,7 +320,10 @@
 
 <div class="chat">
 	<header class="head">
-		<h2>{title}</h2>
+		<div class="head-row">
+			<h2>{title}</h2>
+			<ContextMeter {usage} {recentCompaction} />
+		</div>
 		<div class="meta muted">
 			<span title={conversation.workdir}>📁 {conversation.workdir}</span>
 			{#if conversation.model}<span>· {conversation.model}</span>{/if}
@@ -337,6 +383,12 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.1rem;
+	}
+	.head-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
 	}
 	.head h2 {
 		margin: 0;
@@ -398,7 +450,9 @@
 		font-size: 0.85em;
 	}
 	@keyframes thinking-bounce {
-		0%, 80%, 100% {
+		0%,
+		80%,
+		100% {
 			transform: translateY(0);
 			opacity: 0.35;
 		}

@@ -129,6 +129,26 @@ async function send(text: string) {
 A visible "Stop" button calls `cancelCurrent()`, which closes the SSE; the
 server detects `request.signal.aborted` and aborts the SDK call.
 
+## Context-window meter
+
+The chat header renders a `ContextMeter` next to the conversation title showing
+`currentTokens / tokenLimit` plus a percentage. The bar fill is color-coded by
+threshold: green below 70%, amber 70–90%, red above 90%. Clicking the bar
+toggles a per-bucket breakdown (system / conversation / tools / messages) when
+the SDK provided one.
+
+Data flow:
+
+- Initial value comes from `+page.server.ts`, which reads the latest snapshot
+  from the `conversation_usage` table and passes it to `Chat.svelte` as
+  `initialUsage`.
+- Live updates arrive on the SSE stream as `context.usage` events (translated
+  from `session.usage_info` by the server-side bridge) and are merged into
+  local component state.
+- `context.compaction` events with `phase: 'complete'` show a transient
+  "✨ compacted · −N tokens" notice next to the meter that auto-dismisses
+  after a few seconds.
+
 ## Theming
 
 - Dark mode by default. Light mode toggle in settings.

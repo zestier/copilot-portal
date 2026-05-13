@@ -8,4 +8,8 @@
 	<title>{data.conversation.title} — Copilot Portal</title>
 </svelte:head>
 
-<Chat conversation={data.conversation} initialMessages={data.messages} />
+<Chat
+	conversation={data.conversation}
+	initialMessages={data.messages}
+	initialUsage={data.contextUsage}
+/>

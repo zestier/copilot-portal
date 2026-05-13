@@ -63,6 +63,26 @@ export class CopilotBridge {
 to `PortalEvent`. It is the single point of coupling to the SDK's wire format;
 when the SDK changes, this is the only file that needs updating (plus tests).
 
+### Context-window usage events
+
+In addition to the message/tool/permission events documented above, the bridge
+also subscribes to the SDK's context-window signals and surfaces them on the
+same `PortalEvent` stream:
+
+- `session.usage_info` → `context.usage` — emitted by the SDK once per turn
+  (and once with `isInitial: true` at session start) with `currentTokens`,
+  `tokenLimit`, `messagesLength`, and an optional `{systemTokens,
+  conversationTokens, toolDefinitionsTokens}` breakdown. The turn runner
+  persists the latest snapshot to the `conversation_usage` table so that the
+  meter can render immediately on page load.
+- `session.compaction_start` → `context.compaction` with `phase: 'start'`.
+- `session.compaction_complete` → `context.compaction` with `phase: 'complete'`,
+  carrying optional `tokensRemoved` / `messagesRemoved`.
+
+Per-call telemetry (`assistant.usage` — input/output/cache/reasoning tokens and
+CAPI cost) is intentionally **not** forwarded today; revisit if a per-turn cost
+view is needed.
+
 ## Module: `$lib/server/copilot/pool.ts`
 
 ```ts
