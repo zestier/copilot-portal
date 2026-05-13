@@ -37,6 +37,8 @@
 			title = conversation.title;
 			usage = initialUsage;
 			recentCompaction = null;
+			pinnedToBottom = true;
+			hasNewBelow = false;
 			if (compactionTimer) {
 				clearTimeout(compactionTimer);
 				compactionTimer = null;
@@ -52,6 +54,24 @@
 	let abortCurrent: (() => void) | null = null;
 	let scrollEl: HTMLDivElement | undefined;
 	let textareaEl: HTMLTextAreaElement | undefined;
+	// Sticky-scroll: only auto-scroll if the user is pinned to the bottom.
+	// Otherwise, surface a "New messages" pill (Slack-style) so we don't
+	// yank them away from content they're reading.
+	let pinnedToBottom = $state(true);
+	let hasNewBelow = $state(false);
+	const STICK_THRESHOLD_PX = 40;
+
+	function isNearBottom(el: HTMLElement): boolean {
+		return el.scrollHeight - el.clientHeight - el.scrollTop <= STICK_THRESHOLD_PX;
+	}
+
+	function onMessagesScroll() {
+		const el = scrollEl;
+		if (!el) return;
+		const near = isNearBottom(el);
+		pinnedToBottom = near;
+		if (near) hasNewBelow = false;
+	}
 
 	function autoGrow() {
 		const el = textareaEl;
@@ -67,9 +87,25 @@
 		autoGrow();
 	});
 
-	async function scrollToBottom() {
+	async function scrollToBottom(opts: { force?: boolean } = {}) {
 		await tick();
-		scrollEl?.scrollTo({ top: scrollEl.scrollHeight });
+		const el = scrollEl;
+		if (!el) return;
+		if (opts.force || pinnedToBottom) {
+			el.scrollTo({ top: el.scrollHeight });
+			pinnedToBottom = true;
+			hasNewBelow = false;
+		} else {
+			hasNewBelow = true;
+		}
+	}
+
+	function jumpToLatest() {
+		const el = scrollEl;
+		if (!el) return;
+		el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+		pinnedToBottom = true;
+		hasNewBelow = false;
 	}
 
 	async function consumeStream(
@@ -275,7 +311,7 @@
 			errorCode: null,
 			createdAt: Date.now()
 		});
-		scrollToBottom();
+		scrollToBottom({ force: true });
 		const ac = new AbortController();
 		abortCurrent = () => ac.abort();
 		try {
@@ -353,18 +389,33 @@
 		</div>
 	</header>
 
-	<div class="messages" bind:this={scrollEl}>
-		{#each messages as m (m.id)}
-			<Message_ message={m} />
-		{/each}
-		{#if pendingPermission}
-			<PermissionPrompt request={pendingPermission} onDecide={decidePermission} />
-		{/if}
-		{#if thinking}
-			<div class="thinking" role="status" aria-live="polite">
-				<span class="dot"></span><span class="dot"></span><span class="dot"></span>
-				<span class="label muted">Thinking…</span>
-			</div>
+	<div class="messages-wrap">
+		<div class="messages" bind:this={scrollEl} onscroll={onMessagesScroll}>
+			{#each messages as m (m.id)}
+				<Message_ message={m} />
+			{/each}
+			{#if pendingPermission}
+				<PermissionPrompt request={pendingPermission} onDecide={decidePermission} />
+			{/if}
+			{#if thinking}
+				<div class="thinking" role="status" aria-live="polite">
+					<span class="dot"></span><span class="dot"></span><span class="dot"></span>
+					<span class="label muted">Thinking…</span>
+				</div>
+			{/if}
+		</div>
+		{#if hasNewBelow && !pinnedToBottom}
+			<button
+				type="button"
+				class="jump-latest"
+				onclick={jumpToLatest}
+				aria-label="Jump to latest messages"
+			>
+				New messages
+				<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+					<path d="M4 6l4 4 4-4" />
+				</svg>
+			</button>
 		{/if}
 	</div>
 
@@ -458,6 +509,13 @@
 		display: flex;
 		gap: 0.5rem;
 	}
+	.messages-wrap {
+		position: relative;
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
 	.messages {
 		flex: 1;
 		overflow-y: auto;
@@ -466,6 +524,36 @@
 		flex-direction: column;
 		gap: 0.6rem;
 		min-height: 0;
+	}
+	.jump-latest {
+		position: absolute;
+		left: 50%;
+		bottom: 0.75rem;
+		transform: translateX(-50%);
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		padding: 0.35rem 0.7rem;
+		font-size: 0.8rem;
+		border-radius: 999px;
+		border: 1px solid var(--border);
+		background: var(--accent);
+		color: var(--accent-text);
+		cursor: pointer;
+		box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+		transition:
+			filter 0.12s ease,
+			transform 0.08s ease;
+	}
+	.jump-latest:hover {
+		filter: brightness(1.08);
+	}
+	.jump-latest:active {
+		transform: translateX(-50%) scale(0.96);
+	}
+	.jump-latest:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
 	}
 	.composer {
 		border-top: 1px solid var(--border);
