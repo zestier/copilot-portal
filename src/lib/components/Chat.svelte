@@ -256,6 +256,23 @@
 	$effect(() => {
 		scrollToBottom();
 	});
+
+	// Show a "thinking" indicator while we're awaiting the first token of the
+	// next assistant message (i.e., streaming but no in-progress assistant
+	// message exists yet, or it exists but has no content and no tool activity).
+	const thinking = $derived.by(() => {
+		if (!streaming || pendingPermission) return false;
+		const last = messages[messages.length - 1];
+		if (!last || last.role !== 'assistant') return true;
+		const hasContent = last.content.length > 0;
+		const hasTools = (last.toolCalls?.length ?? 0) > 0 || (last.fileEdits?.length ?? 0) > 0;
+		return !hasContent && !hasTools;
+	});
+
+	$effect(() => {
+		void thinking;
+		scrollToBottom();
+	});
 </script>
 
 <div class="chat">
@@ -273,6 +290,12 @@
 		{/each}
 		{#if pendingPermission}
 			<PermissionPrompt request={pendingPermission} onDecide={decidePermission} />
+		{/if}
+		{#if thinking}
+			<div class="thinking" role="status" aria-live="polite">
+				<span class="dot"></span><span class="dot"></span><span class="dot"></span>
+				<span class="label muted">Thinking…</span>
+			</div>
 		{/if}
 	</div>
 
@@ -349,5 +372,44 @@
 		display: flex;
 		justify-content: flex-end;
 		gap: 0.4rem;
+	}
+	.thinking {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		padding: 0.4rem 0.1rem;
+	}
+	.thinking .dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--fg, currentColor);
+		opacity: 0.35;
+		animation: thinking-bounce 1.2s infinite ease-in-out;
+	}
+	.thinking .dot:nth-child(2) {
+		animation-delay: 0.15s;
+	}
+	.thinking .dot:nth-child(3) {
+		animation-delay: 0.3s;
+	}
+	.thinking .label {
+		margin-left: 0.35rem;
+		font-size: 0.85em;
+	}
+	@keyframes thinking-bounce {
+		0%, 80%, 100% {
+			transform: translateY(0);
+			opacity: 0.35;
+		}
+		40% {
+			transform: translateY(-3px);
+			opacity: 0.9;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.thinking .dot {
+			animation: none;
+		}
 	}
 </style>
