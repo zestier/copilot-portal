@@ -1,4 +1,4 @@
-import { ulid } from 'ulid';
+import { ulid } from '../ids';
 import { getDb } from '../index';
 import type { UserSettings, PermissionPolicy } from '$lib/types';
 

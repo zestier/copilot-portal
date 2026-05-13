@@ -1,4 +1,4 @@
-import { ulid } from 'ulid';
+import { ulid } from '../ids';
 import { getDb } from '../index';
 import type { User } from '$lib/types';
 
