@@ -35,7 +35,14 @@ const Schema = z
 		DEFAULT_MODEL: z.string().default('claude-sonnet-4.5'),
 
 		IDLE_TIMEOUT_MIN: z.coerce.number().int().positive().default(15),
-		MAX_CONCURRENT_SESSIONS: z.coerce.number().int().positive().default(4)
+		MAX_CONCURRENT_SESSIONS: z.coerce.number().int().positive().default(4),
+
+		// Set to "1" to enable POST /api/admin/redeploy (rebuilds and restarts
+		// the process; requires the supervisor `pnpm run serve` to relaunch).
+		ENABLE_REDEPLOY: z
+			.string()
+			.optional()
+			.transform((v) => v === '1' || v === 'true')
 	})
 	.superRefine((cfg, ctx) => {
 		if (cfg.AUTH_MODE === 'none') {
