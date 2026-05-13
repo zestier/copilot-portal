@@ -116,16 +116,55 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	let currentMessageId: string | null = null;
 	let activeQueue: AsyncQueue<PortalEvent> | null = null;
 
-	const sdkSession = (await client.createSession({
-		model: opts.model,
-		sessionId: opts.conversationId,
-		streaming: true,
-		onPermissionRequest: async (req) => {
-			return await handlePermission(req as PermissionRequestLike, opts, (ev) => {
-				activeQueue?.push(ev);
+	const onPermissionRequest = async (req: unknown) => {
+		return await handlePermission(req as PermissionRequestLike, opts, (ev) => {
+			activeQueue?.push(ev);
+		});
+	};
+
+	// Resume the SDK-side session if it already exists so the agent keeps its
+	// in-session state (conversation memory, per-session SQL store such as
+	// todos/inbox_entries, etc.) across portal server restarts. The portal's
+	// in-memory pool is cleared on restart, but the SDK persists per-session
+	// state by id and only rehydrates it via resumeSession.
+	let existingMetadata: unknown;
+	try {
+		existingMetadata = await client.getSessionMetadata(opts.conversationId);
+	} catch (e) {
+		log.warn('copilot.session.metadata_lookup_failed', {
+			conversationId: opts.conversationId,
+			err: (e as Error).message
+		});
+	}
+
+	let sdkSession: SdkSession;
+	if (existingMetadata) {
+		try {
+			sdkSession = (await client.resumeSession(opts.conversationId, {
+				model: opts.model,
+				streaming: true,
+				onPermissionRequest
+			})) as unknown as SdkSession;
+		} catch (e) {
+			log.warn('copilot.session.resume_failed_falling_back_to_create', {
+				conversationId: opts.conversationId,
+				err: (e as Error).message
 			});
+			sdkSession = (await client.createSession({
+				model: opts.model,
+				sessionId: opts.conversationId,
+				streaming: true,
+				onPermissionRequest
+			})) as unknown as SdkSession;
 		}
-	})) as unknown as SdkSession;
+	} else {
+		sdkSession = (await client.createSession({
+			model: opts.model,
+			sessionId: opts.conversationId,
+			streaming: true,
+			onPermissionRequest
+		})) as unknown as SdkSession;
+	}
 
 	// --- SDK event subscriptions: stable across many turns. ---
 	const onDelta = (e: unknown) => {
