@@ -9,7 +9,10 @@ export default defineConfig({
 	},
 	server: {
 		port: 5173,
-		strictPort: false
+		strictPort: false,
+		// Allow the public hostname the dev server is reached through
+		// (e.g. a Cloudflare tunnel). Set TUNNEL_HOST=foo.example.
+		allowedHosts: process.env.TUNNEL_HOST ? [process.env.TUNNEL_HOST] : undefined
 	},
 	ssr: {
 		// better-sqlite3 is native; never bundle it.
