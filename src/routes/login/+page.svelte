@@ -26,6 +26,7 @@
 	.login {
 		max-width: 360px;
 		margin: 10vh auto;
+		margin: 10dvh auto;
 		padding: 2rem;
 		display: flex;
 		flex-direction: column;

@@ -39,6 +39,7 @@
 	.home {
 		max-width: 540px;
 		margin: 10vh auto;
+		margin: 10dvh auto;
 		padding: 2rem;
 		text-align: center;
 		display: flex;

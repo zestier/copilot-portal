@@ -67,6 +67,7 @@
 		display: grid;
 		grid-template-columns: 280px 1fr;
 		height: 100vh;
+		height: 100dvh;
 		overflow: hidden;
 		transition: grid-template-columns 150ms ease-out;
 	}
