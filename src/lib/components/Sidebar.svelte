@@ -67,7 +67,7 @@
 	</nav>
 
 	<div class="bottom">
-		<a class="settings-link" href="/settings">⚙ Settings</a>
+		<a class="settings-link" href="/settings" onclick={onnavigate}>⚙ Settings</a>
 		{#if user}
 			<div class="user muted">
 				{user.displayName ?? user.githubLogin}

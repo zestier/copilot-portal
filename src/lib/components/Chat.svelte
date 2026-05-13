@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
+	import { invalidateAll } from '$app/navigation';
 	import type {
 		Conversation,
 		Message,
@@ -17,11 +18,13 @@
 	}: { conversation: Conversation; initialMessages: Message[] } = $props();
 
 	let messages = $state<Message[]>([]);
+	let title = $state<string>(untrack(() => conversation.title));
 	$effect(() => {
 		// Reset local message list when the conversation prop changes.
 		void conversation.id;
 		untrack(() => {
 			messages = [...initialMessages];
+			title = conversation.title;
 			// Reattach to any in-progress turn so a refresh-mid-stream resumes.
 			void resumeIfActive();
 		});
@@ -169,6 +172,14 @@
 				}
 				break;
 			}
+			case 'conversation.update': {
+				if (ev.title && ev.title !== title) {
+					title = ev.title;
+					// Refresh the layout data so the sidebar reflects the new title.
+					void invalidateAll();
+				}
+				break;
+			}
 		}
 		scrollToBottom();
 	}
@@ -249,7 +260,7 @@
 
 <div class="chat">
 	<header class="head">
-		<h2>{conversation.title}</h2>
+		<h2>{title}</h2>
 		<div class="meta muted">
 			<span title={conversation.workdir}>📁 {conversation.workdir}</span>
 			{#if conversation.model}<span>· {conversation.model}</span>{/if}

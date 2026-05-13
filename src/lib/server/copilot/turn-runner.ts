@@ -15,6 +15,7 @@ import { log } from '../log';
 import * as messages from '../db/repos/messages';
 import * as convs from '../db/repos/conversations';
 import * as pool from './pool';
+import { deriveTitle, isDefaultTitle } from '../title';
 import { AsyncQueue } from './async-queue';
 import type { BridgeOpenOptions } from './bridge';
 import type { PortalEvent } from '$lib/types';
@@ -201,6 +202,33 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 					}
 				}
 				convs.touch(opts.conversationId);
+
+				// Auto-title: on the first turn of a conversation whose title is
+				// still the placeholder, derive a short name from the user's
+				// prompt and notify subscribers so the UI can update in place.
+				try {
+					const conv = convs.get(opts.conversationId, opts.bridge.userId);
+					if (conv && isDefaultTitle(conv.title)) {
+						const newTitle = deriveTitle(opts.prompt);
+						if (newTitle && newTitle !== conv.title) {
+							const renamed = convs.rename(opts.conversationId, opts.bridge.userId, newTitle);
+							if (renamed) {
+								const ev: PortalEvent = {
+									type: 'conversation.update',
+									conversationId: opts.conversationId,
+									title: newTitle
+								};
+								eventLog.push(ev);
+								for (const q of subscribers) q.push(ev);
+							}
+						}
+					}
+				} catch (titleErr) {
+					log.warn('turn.autotitle.failed', {
+						conversationId: opts.conversationId,
+						err: String(titleErr)
+					});
+				}
 			} catch (persistErr) {
 				log.error('turn.persist.failed', {
 					conversationId: opts.conversationId,
