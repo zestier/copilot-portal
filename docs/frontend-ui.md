@@ -72,6 +72,34 @@ Renders unified diff with side-by-side or inline toggle. Per-edit
 "open in editor" link is just informational on the web build; on desktop,
 clicking the path copies it to clipboard.
 
+### `FileBrowser.svelte`
+
+Read-only, git-aware file browser scoped to a conversation's `workdir`.
+Surfaced as a **Files** tab on `/conversations/[id]` (sits next to **Chat**).
+Two-pane layout: a left rail that switches between **Files** (hierarchical
+tree with per-entry git status badges and roll-ups to ancestor directories,
+plus toggles for hidden / ignored files) and **Commits** (branch / HEAD
+header with ahead/behind, plus the recent commit log with "Load more").
+The right pane renders either the selected file (text content + binary
+placeholder, capped at 1 MiB) with a **Content** / **Diff** toggle, or a
+selected commit's detail with its file list and per-file diff. Mobile
+collapses both grids into stacked single-pane rows.
+
+Backed by:
+
+| Endpoint                                              | Returns                       |
+| ----------------------------------------------------- | ----------------------------- |
+| `GET /api/conversations/[id]/fs/tree?path=&hidden=&ignored=` | Directory listing + git status per entry. |
+| `GET /api/conversations/[id]/fs/file?path=&ref=`     | File content (working tree or git revision); binary detected. |
+| `GET /api/conversations/[id]/fs/diff?target=&sha=&path=` | Unified diff (working tree vs HEAD/index, or commit). |
+| `GET /api/conversations/[id]/git/status`             | Branch, HEAD sha, upstream, ahead/behind, dirty count. |
+| `GET /api/conversations/[id]/git/log?limit=&skip=`   | Recent commits.               |
+| `GET /api/conversations/[id]/git/commit/[sha]`       | Commit metadata + changed files. |
+
+All paths are constrained to the conversation's workdir realpath; symlinks
+that escape are rejected. `git` is spawned with `shell: false`, hard
+timeouts, and output size caps.
+
 ### `PermissionPrompt.svelte`
 
 Modal-ish inline card that blocks further streaming. Shows tool name,

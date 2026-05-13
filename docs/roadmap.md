@@ -24,6 +24,13 @@ Phased plan. Each phase ends in a usable artifact.
 - Sidebar with conversation list, rename, delete.
 - Markdown rendering with code blocks (no syntax highlighting yet).
 
+## Phase 2.5 — Read-only file browser
+
+- Hierarchical git-aware file browser scoped to a conversation's workdir.
+- Per-entry status badges, branch/HEAD + ahead/behind, recent commit log
+  with per-file diffs.
+- Surfaced as a **Files** tab on the conversation page; chat unchanged.
+
 **Exit criteria:** I can have a multi-turn conversation with Copilot from
 a browser tab on my laptop, persistent across restarts.
 
