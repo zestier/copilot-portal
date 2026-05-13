@@ -71,7 +71,8 @@
 						resultJson: null,
 						status: 'pending',
 						startedAt: Date.now(),
-						endedAt: null
+						endedAt: null,
+						textOffset: m.content.length
 					});
 				}
 				break;
@@ -104,7 +105,8 @@
 						messageId: m.id,
 						path: ev.path,
 						diff: ev.diff,
-						createdAt: Date.now()
+						createdAt: Date.now(),
+						textOffset: m.content.length
 					});
 				}
 				break;

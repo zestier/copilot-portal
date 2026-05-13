@@ -23,9 +23,36 @@ export const GET: RequestHandler = ({ params, locals }) => {
 		lines.push(`---`);
 		lines.push(`## ${m.role} — ${new Date(m.createdAt).toISOString()}`);
 		lines.push('');
-		lines.push(m.content);
-		lines.push('');
-		for (const tc of m.toolCalls ?? []) {
+		const tools = m.toolCalls ?? [];
+		const edits = m.fileEdits ?? [];
+		const content = m.content ?? '';
+
+		const trailingTools = tools.filter((t) => t.textOffset == null);
+		const trailingEdits = edits.filter((e) => e.textOffset == null);
+		type Anchor =
+			| { offset: number; order: number; kind: 'tool'; tool: (typeof tools)[number] }
+			| { offset: number; order: number; kind: 'edit'; edit: (typeof edits)[number] };
+		const anchors: Anchor[] = [];
+		let order = 0;
+		for (const t of tools)
+			if (t.textOffset != null)
+				anchors.push({
+					offset: Math.min(t.textOffset, content.length),
+					order: order++,
+					kind: 'tool',
+					tool: t
+				});
+		for (const e of edits)
+			if (e.textOffset != null)
+				anchors.push({
+					offset: Math.min(e.textOffset, content.length),
+					order: order++,
+					kind: 'edit',
+					edit: e
+				});
+		anchors.sort((a, b) => a.offset - b.offset || a.order - b.order);
+
+		const emitTool = (tc: (typeof tools)[number]) => {
 			lines.push(`> tool: \`${tc.tool}\` — ${tc.status}`);
 			lines.push('```json');
 			lines.push(tc.argsJson);
@@ -35,13 +62,28 @@ export const GET: RequestHandler = ({ params, locals }) => {
 				lines.push(tc.resultJson);
 				lines.push('```');
 			}
-		}
-		for (const fe of m.fileEdits ?? []) {
+		};
+		const emitEdit = (fe: (typeof edits)[number]) => {
 			lines.push(`> file edit: \`${fe.path}\``);
 			lines.push('```diff');
 			lines.push(fe.diff);
 			lines.push('```');
+		};
+
+		let cursor = 0;
+		for (const a of anchors) {
+			if (a.offset > cursor) {
+				lines.push(content.slice(cursor, a.offset));
+				cursor = a.offset;
+			}
+			if (a.kind === 'tool') emitTool(a.tool);
+			else emitEdit(a.edit);
 		}
+		if (cursor < content.length) lines.push(content.slice(cursor));
+		else if (cursor === 0) lines.push(content);
+		lines.push('');
+		for (const tc of trailingTools) emitTool(tc);
+		for (const fe of trailingEdits) emitEdit(fe);
 	}
 
 	const body = lines.join('\n');

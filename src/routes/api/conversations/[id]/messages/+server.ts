@@ -38,6 +38,19 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	let assistantBuf = '';
 	let assistantId: string | null = null;
 
+	interface PendingTool {
+		toolCallId: string;
+		tool: string;
+		argsJson: string;
+		resultJson: string | null;
+		status: 'pending' | 'ok' | 'error';
+		startedAt: number;
+		endedAt: number | null;
+		textOffset: number;
+	}
+	const pendingTools = new Map<string, PendingTool>();
+	const pendingEdits: { path: string; diff: string; textOffset: number }[] = [];
+
 	const session = await pool.acquire({
 		conversationId: conv.id,
 		userId: locals.userId,
@@ -49,6 +62,31 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			// Persistence sink — called on the server even if the client disconnects.
 			if (ev.type === 'message.start') assistantId = ev.messageId;
 			else if (ev.type === 'message.delta') assistantBuf += ev.text;
+			else if (ev.type === 'tool.call') {
+				pendingTools.set(ev.toolCallId, {
+					toolCallId: ev.toolCallId,
+					tool: ev.tool,
+					argsJson: safeJson(ev.args),
+					resultJson: null,
+					status: 'pending',
+					startedAt: Date.now(),
+					endedAt: null,
+					textOffset: assistantBuf.length
+				});
+			} else if (ev.type === 'tool.result') {
+				const tc = pendingTools.get(ev.toolCallId);
+				if (tc) {
+					tc.status = ev.ok ? 'ok' : 'error';
+					tc.resultJson = safeJson(ev.output ?? ev.summary);
+					tc.endedAt = Date.now();
+				}
+			} else if (ev.type === 'file.edit') {
+				pendingEdits.push({
+					path: ev.path,
+					diff: ev.diff,
+					textOffset: assistantBuf.length
+				});
+			}
 		}
 	});
 
@@ -68,12 +106,27 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		} finally {
 			const status = ac.signal.aborted ? 'interrupted' : 'complete';
 			const c = conv!;
-			if (assistantBuf || assistantId) {
-				messages.append(c.id, {
+			if (assistantBuf || assistantId || pendingTools.size || pendingEdits.length) {
+				const persisted = messages.append(c.id, {
 					role: 'assistant',
 					content: assistantBuf,
 					status
 				});
+				for (const t of pendingTools.values()) {
+					messages.insertToolCall(persisted.id, {
+						id: t.toolCallId,
+						tool: t.tool,
+						argsJson: t.argsJson,
+						resultJson: t.resultJson,
+						status: t.status === 'pending' ? 'error' : t.status,
+						startedAt: t.startedAt,
+						endedAt: t.endedAt,
+						textOffset: t.textOffset
+					});
+				}
+				for (const e of pendingEdits) {
+					messages.insertFileEdit(persisted.id, e.path, e.diff, e.textOffset);
+				}
 			}
 			convs.touch(c.id);
 		}
@@ -81,3 +134,11 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 	return sseResponse(gen());
 };
+
+function safeJson(v: unknown): string {
+	try {
+		return typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+	} catch {
+		return String(v);
+	}
+}

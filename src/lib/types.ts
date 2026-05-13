@@ -42,6 +42,7 @@ export interface ToolCallRecord {
 	status: 'pending' | 'ok' | 'error' | 'denied';
 	startedAt: number;
 	endedAt: number | null;
+	textOffset: number | null;
 }
 
 export interface FileEditRecord {
@@ -50,6 +51,7 @@ export interface FileEditRecord {
 	path: string;
 	diff: string;
 	createdAt: number;
+	textOffset: number | null;
 }
 
 export interface UserSettings {
@@ -85,6 +87,7 @@ export type PortalEvent =
 			output?: unknown;
 	  }
 	| { type: 'file.edit'; path: string; diff: string }
+	| { type: 'conversation.update'; conversationId: string; title?: string }
 	| { type: 'reasoning.summary'; text: string }
 	| { type: 'error'; code: string; message: string }
 	| { type: 'heartbeat' }

@@ -21,6 +21,7 @@ interface ToolRow {
 	status: string;
 	started_at: number;
 	ended_at: number | null;
+	text_offset: number | null;
 }
 
 interface EditRow {
@@ -29,6 +30,7 @@ interface EditRow {
 	path: string;
 	diff: string;
 	created_at: number;
+	text_offset: number | null;
 }
 
 function rowToMessage(r: MsgRow): Message {
@@ -74,7 +76,8 @@ export function listByConversation(conversationId: string): Message[] {
 			resultJson: t.result_json,
 			status: t.status as ToolCallRecord['status'],
 			startedAt: t.started_at,
-			endedAt: t.ended_at
+			endedAt: t.ended_at,
+			textOffset: t.text_offset
 		});
 	}
 	const byMsgE: Record<string, FileEditRecord[]> = {};
@@ -84,7 +87,8 @@ export function listByConversation(conversationId: string): Message[] {
 			messageId: e.message_id,
 			path: e.path,
 			diff: e.diff,
-			createdAt: e.created_at
+			createdAt: e.created_at,
+			textOffset: e.text_offset
 		});
 	}
 	for (const m of msgs) {
@@ -144,10 +148,20 @@ export function updateContent(id: string, content: string, status: MessageStatus
 export function insertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messageId'>) {
 	getDb()
 		.prepare(
-			`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+			`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at, text_offset)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
-		.run(t.id, messageId, t.tool, t.argsJson, t.resultJson, t.status, t.startedAt, t.endedAt);
+		.run(
+			t.id,
+			messageId,
+			t.tool,
+			t.argsJson,
+			t.resultJson,
+			t.status,
+			t.startedAt,
+			t.endedAt,
+			t.textOffset
+		);
 }
 
 export function updateToolCall(
@@ -175,11 +189,17 @@ export function updateToolCall(
 		.run(...values);
 }
 
-export function insertFileEdit(messageId: string, path: string, diff: string) {
+export function insertFileEdit(
+	messageId: string,
+	path: string,
+	diff: string,
+	textOffset: number | null = null
+) {
 	const id = ulid();
 	getDb()
 		.prepare(
-			`INSERT INTO file_edits(id, message_id, path, diff, created_at) VALUES (?, ?, ?, ?, ?)`
+			`INSERT INTO file_edits(id, message_id, path, diff, created_at, text_offset)
+			 VALUES (?, ?, ?, ?, ?, ?)`
 		)
-		.run(id, messageId, path, diff, Date.now());
+		.run(id, messageId, path, diff, Date.now(), textOffset);
 }
