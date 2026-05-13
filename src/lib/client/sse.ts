@@ -5,9 +5,11 @@ export async function* streamSse<T>(
 	init: RequestInit & { signal?: AbortSignal } = {}
 ): AsyncIterable<T> {
 	const res = await fetch(url, init);
-	if (!res.ok || !res.body) {
+	if (!res.ok) {
 		throw new Error(`SSE fetch failed: ${res.status}`);
 	}
+	// 204 / empty body: nothing to stream.
+	if (res.status === 204 || !res.body) return;
 	const reader = res.body.getReader();
 	const decoder = new TextDecoder();
 	let buf = '';

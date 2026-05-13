@@ -82,7 +82,15 @@ export interface BridgeOpenOptions {
 	model: string;
 	policy: PermissionPolicy;
 	authToken?: string;
-	onEvent: (e: PortalEvent) => void;
+	/**
+	 * Optional sink for every event the bridge emits during a turn. Receives
+	 * events on the server even if the iterable consumer has stopped pulling.
+	 *
+	 * NOTE: New code should subscribe to the per-turn event log in
+	 * `turn-runner.ts` instead — that decouples persistence from any one
+	 * consumer's lifecycle. This hook remains for backward-compatible callers.
+	 */
+	onEvent?: (e: PortalEvent) => void;
 }
 
 // Per-conversation session wrapper.
@@ -246,7 +254,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			}
 			try {
 				for await (const ev of q) {
-					opts.onEvent(ev);
+					opts.onEvent?.(ev);
 					yield ev;
 				}
 			} finally {

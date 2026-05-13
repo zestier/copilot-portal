@@ -21,6 +21,8 @@
 		// Reset local message list when the conversation prop changes.
 		void conversation.id;
 		messages = [...initialMessages];
+		// Reattach to any in-progress turn so a refresh-mid-stream resumes.
+		void resumeIfActive();
 	});
 
 	let composer = $state('');
@@ -32,6 +34,41 @@
 	async function scrollToBottom() {
 		await tick();
 		scrollEl?.scrollTo({ top: scrollEl.scrollHeight });
+	}
+
+	async function consumeStream(
+		url: string,
+		init: { method: string; headers?: Record<string, string>; body?: string; signal: AbortSignal }
+	) {
+		try {
+			for await (const ev of streamSse<PortalEvent>(url, init)) {
+				applyEvent(ev);
+				if (ev.type === 'done') break;
+			}
+		} catch (e) {
+			if (init.signal.aborted) return;
+			applyEvent({
+				type: 'error',
+				code: 'network',
+				message: e instanceof Error ? e.message : String(e)
+			});
+		}
+	}
+
+	async function resumeIfActive() {
+		if (streaming) return;
+		const ac = new AbortController();
+		abortCurrent = () => ac.abort();
+		streaming = true;
+		try {
+			await consumeStream(`/api/conversations/${conversation.id}/messages`, {
+				method: 'GET',
+				signal: ac.signal
+			});
+		} finally {
+			streaming = false;
+			abortCurrent = null;
+		}
 	}
 
 	function applyEvent(ev: PortalEvent) {
@@ -171,23 +208,11 @@
 		const ac = new AbortController();
 		abortCurrent = () => ac.abort();
 		try {
-			for await (const ev of streamSse<PortalEvent>(
-				`/api/conversations/${conversation.id}/messages`,
-				{
-					method: 'POST',
-					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ content: text }),
-					signal: ac.signal
-				}
-			)) {
-				applyEvent(ev);
-				if (ev.type === 'done') break;
-			}
-		} catch (e) {
-			applyEvent({
-				type: 'error',
-				code: 'network',
-				message: e instanceof Error ? e.message : String(e)
+			await consumeStream(`/api/conversations/${conversation.id}/messages`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ content: text }),
+				signal: ac.signal
 			});
 		} finally {
 			streaming = false;
@@ -202,7 +227,16 @@
 		}
 	}
 
-	function stop() {
+	async function stop() {
+		// Tell the server to actually cancel the turn (just aborting the
+		// SSE fetch would only detach this client; the turn would keep going).
+		try {
+			await fetch(`/api/conversations/${conversation.id}/messages`, {
+				method: 'DELETE'
+			});
+		} catch {
+			/* ignore */
+		}
 		abortCurrent?.();
 	}
 
