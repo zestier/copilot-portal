@@ -2,12 +2,36 @@
 	import '../app.css';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import { page } from '$app/stores';
+	import { onMount } from 'svelte';
+	import {
+		resolveInitialSidebarOpen,
+		SIDEBAR_DESKTOP_MIN_WIDTH,
+		SIDEBAR_MOBILE_MAX_WIDTH,
+		SIDEBAR_STORAGE_KEY
+	} from '$lib/client/sidebar';
 
 	let { data, children } = $props();
 
+	// Default to open for SSR; the real value is resolved on mount where
+	// localStorage and matchMedia are available.
 	let sidebarOpen = $state(true);
+	let hydrated = $state(false);
 
 	const isLoginPage = $derived($page.url.pathname === '/login');
+
+	onMount(() => {
+		sidebarOpen = resolveInitialSidebarOpen({
+			getStored: () => localStorage.getItem(SIDEBAR_STORAGE_KEY),
+			isDesktop: () => window.matchMedia(`(min-width: ${SIDEBAR_DESKTOP_MIN_WIDTH}px)`).matches
+		});
+		hydrated = true;
+	});
+
+	$effect(() => {
+		if (hydrated) {
+			localStorage.setItem(SIDEBAR_STORAGE_KEY, String(sidebarOpen));
+		}
+	});
 </script>
 
 {#if isLoginPage || !data.user}
@@ -25,7 +49,11 @@
 			<Sidebar
 				conversations={data.conversations}
 				user={data.user}
-				onnavigate={() => (sidebarOpen = false)}
+				onnavigate={() => {
+					if (window.matchMedia(`(max-width: ${SIDEBAR_MOBILE_MAX_WIDTH}px)`).matches) {
+						sidebarOpen = false;
+					}
+				}}
 			/>
 		</aside>
 		<main class="main">
