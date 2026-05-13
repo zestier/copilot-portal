@@ -5,7 +5,7 @@
 
 	let { data, children } = $props();
 
-	let sidebarOpen = $state(false);
+	let sidebarOpen = $state(true);
 
 	const isLoginPage = $derived($page.url.pathname === '/login');
 </script>
@@ -13,7 +13,7 @@
 {#if isLoginPage || !data.user}
 	{@render children()}
 {:else}
-	<div class="layout">
+	<div class="layout" class:collapsed={!sidebarOpen}>
 		<button
 			class="hamburger"
 			aria-label="Toggle sidebar"
@@ -40,11 +40,16 @@
 		grid-template-columns: 280px 1fr;
 		height: 100vh;
 		overflow: hidden;
+		transition: grid-template-columns 150ms ease-out;
+	}
+	.layout.collapsed {
+		grid-template-columns: 0 1fr;
 	}
 	.sidebar {
 		background: var(--surface);
 		border-right: 1px solid var(--border);
 		overflow-y: auto;
+		overflow-x: hidden;
 	}
 	.main {
 		overflow: hidden;
@@ -53,7 +58,6 @@
 		min-width: 0;
 	}
 	.hamburger {
-		display: none;
 		position: fixed;
 		top: 0.5rem;
 		left: 0.5rem;
@@ -66,11 +70,9 @@
 	}
 
 	@media (max-width: 768px) {
-		.layout {
+		.layout,
+		.layout.collapsed {
 			grid-template-columns: 1fr;
-		}
-		.hamburger {
-			display: inline-block;
 		}
 		.sidebar {
 			position: fixed;
