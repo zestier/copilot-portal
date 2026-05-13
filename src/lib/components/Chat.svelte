@@ -293,6 +293,14 @@
 
 	function onKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+			// On touch devices (no fine pointer), let Enter insert a newline
+			// and require the send button — otherwise mobile users have no
+			// way to add newlines.
+			const coarse =
+				typeof window !== 'undefined' &&
+				typeof window.matchMedia === 'function' &&
+				window.matchMedia('(pointer: coarse)').matches;
+			if (coarse) return;
 			e.preventDefault();
 			send();
 		}
@@ -573,6 +581,11 @@
 		outline-offset: 2px;
 	}
 	@media (max-width: 480px) {
+		.kbd-hint {
+			display: none;
+		}
+	}
+	@media (pointer: coarse) {
 		.kbd-hint {
 			display: none;
 		}
