@@ -9,11 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
-COPY package.json package-lock.json* ./
-RUN npm ci || npm install
+# Enable pnpm via corepack.
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml .npmrc* ./
+RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN npm run build && npm prune --omit=dev
+RUN pnpm run build && pnpm prune --prod
 
 # ---- runtime ----
 FROM node:20-bookworm-slim AS runtime

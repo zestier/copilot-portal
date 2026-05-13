@@ -1,7 +1,11 @@
 node_modules/
+.pnpm-store/
 .svelte-kit/
 build/
 dist/
+# We use pnpm; reject stray npm/yarn lockfiles.
+package-lock.json
+yarn.lock
 .env
 .env.*
 !.env.example
