@@ -105,18 +105,19 @@ interface SdkSession {
 export async function open(opts: BridgeOpenOptions): Promise<ConversationSession> {
 	const client = await getClient(opts.authToken);
 
+	let currentMessageId: string | null = null;
+	let activeQueue: AsyncQueue<PortalEvent> | null = null;
+
 	const sdkSession = (await client.createSession({
 		model: opts.model,
 		sessionId: opts.conversationId,
 		streaming: true,
 		onPermissionRequest: async (req) => {
-			return await handlePermission(req as PermissionRequestLike, opts);
+			return await handlePermission(req as PermissionRequestLike, opts, (ev) => {
+				activeQueue?.push(ev);
+			});
 		}
 	})) as unknown as SdkSession;
-
-	let currentMessageId: string | null = null;
-
-	let activeQueue: AsyncQueue<PortalEvent> | null = null;
 
 	// --- SDK event subscriptions: stable across many turns. ---
 	const onDelta = (e: unknown) => {
@@ -284,7 +285,8 @@ interface PermissionRequestLike {
 
 async function handlePermission(
 	req: PermissionRequestLike,
-	opts: BridgeOpenOptions
+	opts: BridgeOpenOptions,
+	emit: (ev: PortalEvent) => void
 ): Promise<PermissionRequestResult> {
 	const tool = req.toolName ?? req.kind ?? 'unknown';
 	const kind = req.kind ?? 'unknown';
@@ -315,7 +317,7 @@ async function handlePermission(
 			reject,
 			createdAt: Date.now()
 		});
-		opts.onEvent({
+		emit({
 			type: 'tool.permission',
 			requestId,
 			tool,
