@@ -7,10 +7,21 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config';
 import { log } from '../log';
 
-let dbInstance: Database.Database | null = null;
+// Pin the singleton on globalThis so that Vite HMR re-importing this module
+// in dev doesn't create a parallel connection (and lose any in-memory state
+// like prepared-statement caches).
+const DB_KEY = Symbol.for('copilot-portal.db');
+type GlobalSlot = Record<symbol, unknown>;
+function getCached(): Database.Database | null {
+	return ((globalThis as unknown as GlobalSlot)[DB_KEY] as Database.Database | undefined) ?? null;
+}
+function setCached(db: Database.Database) {
+	(globalThis as unknown as GlobalSlot)[DB_KEY] = db;
+}
 
 export function getDb(): Database.Database {
-	if (dbInstance) return dbInstance;
+	const cached = getCached();
+	if (cached) return cached;
 	const cfg = loadConfig();
 	const dataDir = resolve(cfg.DATA_DIR);
 	mkdirSync(dataDir, { recursive: true });
@@ -21,7 +32,7 @@ export function getDb(): Database.Database {
 	db.pragma('foreign_keys = ON');
 	db.pragma('busy_timeout = 5000');
 	runMigrations(db);
-	dbInstance = db;
+	setCached(db);
 	log.info('db.open', { path });
 	return db;
 }
@@ -76,8 +87,9 @@ function runMigrations(db: Database.Database) {
 }
 
 export function closeDb() {
-	if (dbInstance) {
-		dbInstance.close();
-		dbInstance = null;
+	const cached = getCached();
+	if (cached) {
+		cached.close();
+		(globalThis as unknown as GlobalSlot)[DB_KEY] = null;
 	}
 }

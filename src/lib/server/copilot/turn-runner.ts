@@ -52,7 +52,17 @@ interface InternalTurn extends Turn {
 	finishedPromise: Promise<void>;
 }
 
-const turns = new Map<string, InternalTurn>();
+// The turn registry is stashed on globalThis so that Vite HMR re-importing
+// this module in dev does NOT wipe out the in-flight turns. Without this,
+// a code edit during a turn would orphan the running turn in the old module
+// closure: the new module's empty map would make `getTurn` return null, the
+// client's resume-on-reload would get 204, and the UI would appear "stuck"
+// with no assistant response while the orphaned turn quietly persisted to
+// the DB minutes later. Same rationale as keeping the DB handle pinned.
+const TURNS_KEY = Symbol.for('copilot-portal.turns');
+type TurnRegistry = Map<string, InternalTurn>;
+const turns: TurnRegistry = ((globalThis as unknown as Record<symbol, TurnRegistry>)[TURNS_KEY] ??=
+	new Map<string, InternalTurn>());
 
 // How long a finished turn lingers in the registry so that a slightly-late
 // subscriber (e.g., a page that reloaded just as the turn completed) can

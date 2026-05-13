@@ -9,8 +9,22 @@ interface Entry {
 	lastUsed: number;
 }
 
-const sessions = new Map<string, Entry>();
-let reaperTimer: NodeJS.Timeout | null = null;
+// Stash on globalThis so Vite HMR re-imports of this module in dev don't
+// orphan the live SDK sessions in the old module's closure. See the
+// matching comment in turn-runner.ts.
+const SESSIONS_KEY = Symbol.for('copilot-portal.pool.sessions');
+const REAPER_KEY = Symbol.for('copilot-portal.pool.reaper');
+type SessionsMap = Map<string, Entry>;
+type GlobalSlot = Record<symbol, unknown>;
+const sessions: SessionsMap =
+	((globalThis as unknown as GlobalSlot)[SESSIONS_KEY] as SessionsMap | undefined) ??
+	(((globalThis as unknown as GlobalSlot)[SESSIONS_KEY] = new Map<string, Entry>()) as SessionsMap);
+function getReaperTimer(): NodeJS.Timeout | null {
+	return ((globalThis as unknown as GlobalSlot)[REAPER_KEY] as NodeJS.Timeout | null) ?? null;
+}
+function setReaperTimer(t: NodeJS.Timeout | null) {
+	(globalThis as unknown as GlobalSlot)[REAPER_KEY] = t;
+}
 
 export async function acquire(opts: BridgeOpenOptions): Promise<ConversationSession> {
 	const existing = sessions.get(opts.conversationId);
@@ -45,10 +59,10 @@ export async function release(conversationId: string) {
 }
 
 export function startIdleReaper() {
-	if (reaperTimer) return;
+	if (getReaperTimer()) return;
 	const cfg = loadConfig();
 	const idleMs = cfg.IDLE_TIMEOUT_MIN * 60_000;
-	reaperTimer = setInterval(async () => {
+	const timer = setInterval(async () => {
 		const now = Date.now();
 		for (const [id, entry] of sessions) {
 			if (now - entry.lastUsed > idleMs) {
@@ -58,13 +72,15 @@ export function startIdleReaper() {
 			}
 		}
 	}, 60_000);
-	reaperTimer.unref?.();
+	timer.unref?.();
+	setReaperTimer(timer);
 }
 
 export async function shutdown() {
-	if (reaperTimer) {
-		clearInterval(reaperTimer);
-		reaperTimer = null;
+	const timer = getReaperTimer();
+	if (timer) {
+		clearInterval(timer);
+		setReaperTimer(null);
 	}
 	const all = [...sessions.values()];
 	sessions.clear();
