@@ -2,35 +2,8 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 import { workspaceRoot } from '$lib/server/files';
-import { status as gitStatus, isGitRepo, numstat, type StatusEntry } from '$lib/server/git';
-
-export type ChangeStatus =
-	| 'untracked'
-	| 'modified'
-	| 'added'
-	| 'deleted'
-	| 'renamed'
-	| 'conflicted';
-
-export interface ChangeEntry {
-	path: string;
-	origPath: string | null;
-	status: ChangeStatus;
-	staged: boolean;
-	unstaged: boolean;
-	added: number | null;
-	removed: number | null;
-}
-
-function aggregate(e: StatusEntry): ChangeStatus | null {
-	if (e.index === 'conflicted' || e.worktree === 'conflicted') return 'conflicted';
-	if (e.index === 'untracked' || e.worktree === 'untracked') return 'untracked';
-	if (e.index === 'renamed' || e.worktree === 'renamed') return 'renamed';
-	if (e.index === 'added' || e.worktree === 'added') return 'added';
-	if (e.index === 'deleted' || e.worktree === 'deleted') return 'deleted';
-	if (e.index === 'modified' || e.worktree === 'modified') return 'modified';
-	return null;
-}
+import { status as gitStatus, isGitRepo, numstat, aggregateStatus } from '$lib/server/git';
+import type { ChangeEntry } from '$lib/types';
 
 export const GET: RequestHandler = async ({ params, locals }) => {
 	authorizeConversation(params.id, locals.userId);
@@ -48,8 +21,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	}
 	const entries: ChangeEntry[] = [];
 	for (const e of raw) {
-		const agg = aggregate(e);
-		if (!agg) continue;
+		const agg = aggregateStatus(e);
+		if (!agg || agg === 'ignored') continue;
 		const staged = e.index !== 'unmodified' && e.index !== 'untracked' && e.index !== 'ignored';
 		const unstaged =
 			e.worktree !== 'unmodified' && e.worktree !== 'untracked' && e.worktree !== 'ignored';

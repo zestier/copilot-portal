@@ -217,6 +217,25 @@ export interface StatusOptions {
 }
 
 /**
+ * Collapse a {@link StatusEntry} into a single high-level status value, mirroring
+ * how the UI presents a path. Returns `null` for unmodified entries (and for
+ * ignored entries when `includeIgnored` is false).
+ */
+export function aggregateStatus(
+	e: StatusEntry,
+	opts: { includeIgnored?: boolean } = {}
+): 'untracked' | 'ignored' | 'modified' | 'added' | 'deleted' | 'renamed' | 'conflicted' | null {
+	if (e.index === 'conflicted' || e.worktree === 'conflicted') return 'conflicted';
+	if (e.index === 'untracked' || e.worktree === 'untracked') return 'untracked';
+	if (opts.includeIgnored && (e.index === 'ignored' || e.worktree === 'ignored')) return 'ignored';
+	if (e.index === 'renamed' || e.worktree === 'renamed') return 'renamed';
+	if (e.index === 'added' || e.worktree === 'added') return 'added';
+	if (e.index === 'deleted' || e.worktree === 'deleted') return 'deleted';
+	if (e.index === 'modified' || e.worktree === 'modified') return 'modified';
+	return null;
+}
+
+/**
  * Returns one entry per changed (or untracked/ignored) path. Unchanged
  * tracked files are omitted to keep the response small; the UI merges
  * statuses into directory listings client-side or via `mergeStatusIntoTree`.

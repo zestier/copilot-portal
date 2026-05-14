@@ -1,13 +1,8 @@
 // Shared client-side types for the file browser.
 
-export type FileBrowserStatus =
-	| 'untracked'
-	| 'ignored'
-	| 'modified'
-	| 'added'
-	| 'deleted'
-	| 'renamed'
-	| 'conflicted';
+import type { ChangeStatus, ChangeEntry, ChangesResponse } from '$lib/types';
+
+export type { ChangeStatus, ChangeEntry, ChangesResponse };
 
 export interface FsEntry {
 	name: string;
@@ -15,8 +10,8 @@ export interface FsEntry {
 	type: 'file' | 'directory' | 'symlink' | 'other';
 	size: number | null;
 	mtimeMs: number | null;
-	status: FileBrowserStatus | null;
-	containsChanges: FileBrowserStatus | null;
+	status: ChangeStatus | null;
+	containsChanges: ChangeStatus | null;
 	added: number | null;
 	removed: number | null;
 }
@@ -50,24 +45,9 @@ export interface LogEntry {
 }
 
 export interface CommitFile {
-	status: FileBrowserStatus;
+	status: ChangeStatus;
 	path: string;
 	origPath: string | null;
-}
-
-export interface ChangeEntry {
-	path: string;
-	origPath: string | null;
-	status: FileBrowserStatus;
-	staged: boolean;
-	unstaged: boolean;
-	added: number | null;
-	removed: number | null;
-}
-
-export interface ChangesResponse {
-	initialized: boolean;
-	entries: ChangeEntry[];
 }
 
 export interface CommitDetail {
@@ -98,7 +78,7 @@ export interface FileResponseBinary {
 }
 export type FileResponse = FileResponseText | FileResponseBinary;
 
-export const STATUS_LABEL: Record<FileBrowserStatus, string> = {
+export const STATUS_LABEL: Record<ChangeStatus, string> = {
 	untracked: 'U',
 	ignored: 'I',
 	modified: 'M',
@@ -108,7 +88,7 @@ export const STATUS_LABEL: Record<FileBrowserStatus, string> = {
 	conflicted: '!'
 };
 
-export const STATUS_COLOR: Record<FileBrowserStatus, string> = {
+export const STATUS_COLOR: Record<ChangeStatus, string> = {
 	untracked: 'var(--success)',
 	ignored: 'var(--text-muted)',
 	modified: 'var(--warning)',

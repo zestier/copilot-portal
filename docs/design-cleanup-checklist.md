@@ -78,7 +78,7 @@ the suggested unified convention.
       return shape for mutators (boolean "changed?" vs void).
   - `src/lib/server/db/repos/{conversations,messages,settings,tokens,usage,users}.ts`
 
-- [ ] **10. Hoist API response types and dedupe the `aggregate` reducers.**
+- [x] **10. Hoist API response types and dedupe the `aggregate` reducers.**
       Move `ChangeEntry` / `AggregatedStatus` and the two `aggregate(StatusEntry)`
       functions into `src/lib/server/git.ts` (single function with an
       `{includeIgnored}` option). Public shapes belong in `src/lib/types.ts`.

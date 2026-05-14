@@ -10,7 +10,7 @@
 		FileResponse,
 		CommitDetail,
 		ChangeEntry,
-		FileBrowserStatus
+		ChangeStatus
 	} from '$lib/client/file-browser';
 	import { STATUS_LABEL, STATUS_COLOR } from '$lib/client/file-browser';
 
@@ -22,7 +22,7 @@
 	let pane = $state<Pane>('changes');
 	let viewMode = $state<ViewMode>('content');
 	let selectedPath = $state<string | null>(null);
-	let selectedStatus = $state<FileBrowserStatus | null>(null);
+	let selectedStatus = $state<ChangeStatus | null>(null);
 	let fileData = $state<FileResponse | null>(null);
 	let fileLoading = $state(false);
 	let fileError = $state<string | null>(null);

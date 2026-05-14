@@ -6,29 +6,10 @@ import {
 	status as gitStatus,
 	isGitRepo,
 	numstat,
-	type StatusEntry,
+	aggregateStatus,
 	type NumstatEntry
 } from '$lib/server/git';
-
-export type AggregatedStatus =
-	| 'untracked'
-	| 'ignored'
-	| 'modified'
-	| 'added'
-	| 'deleted'
-	| 'renamed'
-	| 'conflicted';
-
-function aggregate(e: StatusEntry): AggregatedStatus | null {
-	if (e.index === 'conflicted' || e.worktree === 'conflicted') return 'conflicted';
-	if (e.index === 'untracked' || e.worktree === 'untracked') return 'untracked';
-	if (e.index === 'ignored' || e.worktree === 'ignored') return 'ignored';
-	if (e.index === 'renamed' || e.worktree === 'renamed') return 'renamed';
-	if (e.index === 'added' || e.worktree === 'added') return 'added';
-	if (e.index === 'deleted' || e.worktree === 'deleted') return 'deleted';
-	if (e.index === 'modified' || e.worktree === 'modified') return 'modified';
-	return null;
-}
+import type { ChangeStatus } from '$lib/types';
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
 	authorizeConversation(params.id, locals.userId);
@@ -41,15 +22,15 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 	if (!dir.ok) throw error(dir.status ?? 400, dir.reason);
 
 	let initialized = false;
-	const statusByPath = new Map<string, AggregatedStatus>();
-	const dirAgg = new Map<string, AggregatedStatus>();
+	const statusByPath = new Map<string, ChangeStatus>();
+	const dirAgg = new Map<string, ChangeStatus>();
 	const statsByPath = new Map<string, { added: number | null; removed: number | null }>();
 	const dirStats = new Map<string, { added: number; removed: number }>();
 	if (await isGitRepo(workdir)) {
 		initialized = true;
 		const entries = await gitStatus(workdir, { includeIgnored });
 		for (const e of entries) {
-			const agg = aggregate(e);
+			const agg = aggregateStatus(e, { includeIgnored });
 			if (!agg) continue;
 			statusByPath.set(e.path, agg);
 			const parts = e.path.split('/');

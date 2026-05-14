@@ -140,6 +140,32 @@ export interface ConversationUsage {
 
 export type PermissionDecision = 'allow-once' | 'allow-always' | 'deny';
 
+// --- File browser / git response shapes (shared by client & server) ---
+
+export type ChangeStatus =
+	| 'untracked'
+	| 'ignored'
+	| 'modified'
+	| 'added'
+	| 'deleted'
+	| 'renamed'
+	| 'conflicted';
+
+export interface ChangeEntry {
+	path: string;
+	origPath: string | null;
+	status: ChangeStatus;
+	staged: boolean;
+	unstaged: boolean;
+	added: number | null;
+	removed: number | null;
+}
+
+export interface ChangesResponse {
+	initialized: boolean;
+	entries: ChangeEntry[];
+}
+
 export interface PermissionRequestView {
 	requestId: string;
 	tool: string;
