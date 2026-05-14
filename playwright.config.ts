@@ -53,10 +53,11 @@ export default defineConfig({
 			COPILOT_STUB: '1',
 			LOG_LEVEL: 'warn',
 			DB_MIGRATIONS_DIR: resolve(__dirname, 'src/lib/server/db/migrations'),
+			// Each conversation's workdir lives under $DATA_DIR/workspaces/<id>.
 			// dataDir lives inside the copilot-portal source tree, which is itself a
-			// git repo. Without this, the server's workspaceRoot (=dataDir) would
-			// inherit the outer repo when running `git` commands. Tell git to stop
-			// walking at dataDir so each test sees an isolated workspace.
+			// git repo. Without this, git commands run inside conversation workdirs
+			// would walk up into the outer repo. Tell git to stop at dataDir so each
+			// test sees an isolated workspace.
 			GIT_CEILING_DIRECTORIES: dataDir
 		}
 	}

@@ -10,7 +10,7 @@ the suggested unified convention.
 
 ## High impact
 
-- [ ] **1. Honor per-conversation `workdir`.** Use the `workdir` returned by
+- [x] **1. Honor per-conversation `workdir`.** Use the `workdir` returned by
       `authorizeConversation` instead of `workspaceRoot()` in every fs/git
       route, or delete the field and document the single-workspace model.
   - `src/lib/server/conversation-auth.ts`

@@ -1,13 +1,12 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { authorizeConversation } from '$lib/server/conversation-auth';
-import { workspaceRoot } from '$lib/server/files';
 import { status as gitStatus, isGitRepo, numstat, aggregateStatus } from '$lib/server/git';
 import type { ChangeEntry } from '$lib/types';
 
 export const GET: RequestHandler = async ({ params, locals }) => {
-	authorizeConversation(params.id, locals.userId);
-	const workdir = workspaceRoot();
+	const conv = authorizeConversation(params.id, locals.userId);
+	const workdir = conv.workdir;
 	if (!(await isGitRepo(workdir))) {
 		return json({ initialized: false, entries: [] as ChangeEntry[] });
 	}

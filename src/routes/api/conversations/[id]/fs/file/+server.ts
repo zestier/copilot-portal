@@ -1,12 +1,12 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { authorizeConversation } from '$lib/server/conversation-auth';
-import { readFileSafe, workspaceRoot } from '$lib/server/files';
+import { readFileSafe } from '$lib/server/files';
 import { showFile, GitError } from '$lib/server/git';
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
-	authorizeConversation(params.id, locals.userId);
-	const workdir = workspaceRoot();
+	const conv = authorizeConversation(params.id, locals.userId);
+	const workdir = conv.workdir;
 	const relPath = url.searchParams.get('path');
 	if (!relPath) throw error(400, 'path is required');
 	const ref = url.searchParams.get('ref');
