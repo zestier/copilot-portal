@@ -150,11 +150,13 @@
 			</select>
 		</label>
 
-		<button class="btn primary" type="submit">Save</button>
-		{#if form?.ok}<span class="ok">Saved.</span>{/if}
+		<div class="form-actions">
+			<button class="btn primary" type="submit">Save</button>
+			{#if form?.ok}<span class="ok">Saved.</span>{/if}
+		</div>
 	</form>
 
-	<form method="POST" action="/logout">
+	<form method="POST" action="/logout" class="logout-form">
 		<button class="btn">Log out</button>
 	</form>
 
@@ -162,9 +164,10 @@
 		<section class="deploy">
 			<h2>Update</h2>
 			<p class="muted small">
-				Runs <code>check</code>, <code>test</code>, and <code>build</code>, then exits so the
-				<code>pnpm run serve</code> supervisor relaunches on the new code. "Pull &amp; restart" also
-				does <code>git pull</code> and <code>pnpm install</code> first.
+				Runs <code>pnpm run verify</code> (lint, type-check, unit tests, and e2e — which also
+				rebuilds), then exits so the <code>pnpm run serve</code> supervisor relaunches on the
+				refreshed code. "Pull &amp; restart" also does <code>git pull</code> and
+				<code>pnpm install</code> first.
 			</p>
 			<div class="deploy-buttons">
 				<button class="btn" onclick={() => redeploy({ pull: true })} disabled={deployBusy}>
@@ -186,15 +189,36 @@
 
 <style>
 	.wrap {
-		max-width: 540px;
-		margin: 3rem auto;
-		padding: 0 1rem;
+		width: 100%;
+		max-width: 640px;
+		min-width: 0;
+		margin: 0 auto;
+		padding: 2.5rem 1.5rem 3rem;
+		height: 100%;
+		overflow-y: auto;
+	}
+	h1 {
+		margin: 0 0 1.5rem;
 	}
 	form {
 		display: flex;
 		flex-direction: column;
 		gap: 0.85rem;
-		margin-bottom: 2rem;
+		margin-bottom: 1.25rem;
+	}
+	form input,
+	form select {
+		width: 100%;
+	}
+	.form-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		margin-top: 0.25rem;
+	}
+	.logout-form {
+		display: block;
+		margin-bottom: 0;
 	}
 	label {
 		display: flex;
