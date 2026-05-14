@@ -5,8 +5,16 @@ import type { RequestHandler } from './$types';
 import { loadConfig } from '$lib/server/config';
 import { log } from '$lib/server/log';
 import { requireUserId } from '$lib/server/auth/require';
+import { sseResponse } from '$lib/server/sse';
 
 type Step = { label: string; cmd: string };
+
+type RedeployEvent =
+	| { type: 'step'; label: string; cmd: string }
+	| { type: 'log'; stream: 'stdout' | 'stderr'; text: string }
+	| { type: 'step-done'; label: string; code: number }
+	| { type: 'done'; ok: true; restarting: true }
+	| { type: 'done'; ok: false; failedStep?: string; code?: number; message?: string };
 
 // `pnpm run verify` (the last build step) ends with `pnpm run test:e2e`,
 // which in turn runs `pnpm run build`. The supervisor (scripts/serve.mjs)
@@ -26,6 +34,78 @@ const BUILD_STEPS: Step[] = [{ label: 'pnpm run verify', cmd: 'pnpm run verify' 
 const Body = z.object({ pull: z.boolean().optional().default(true) });
 
 let inFlight = false;
+
+function runStep(label: string, cmd: string, emit: (ev: RedeployEvent) => void): Promise<number> {
+	return new Promise<number>((resolve) => {
+		emit({ type: 'step', label, cmd });
+		const p = spawn('bash', ['-lc', cmd], { cwd: process.cwd(), env: process.env });
+		p.stdout.on('data', (b: Buffer) => emit({ type: 'log', stream: 'stdout', text: b.toString() }));
+		p.stderr.on('data', (b: Buffer) => emit({ type: 'log', stream: 'stderr', text: b.toString() }));
+		p.on('error', (err) => {
+			emit({ type: 'log', stream: 'stderr', text: `spawn error: ${err.message}\n` });
+			resolve(1);
+		});
+		p.on('close', (code) => {
+			emit({ type: 'step-done', label, code: code ?? 1 });
+			resolve(code ?? 1);
+		});
+	});
+}
+
+async function* runRedeploy(steps: Step[]): AsyncGenerator<RedeployEvent> {
+	const queue: RedeployEvent[] = [];
+	let wake: (() => void) | null = null;
+	const emit = (ev: RedeployEvent) => {
+		queue.push(ev);
+		wake?.();
+	};
+
+	try {
+		let failedStep: string | undefined;
+		let failedCode = 0;
+		for (const { label, cmd } of steps) {
+			const done = runStep(label, cmd, emit);
+			// Drain emitted events as the step runs.
+			let code: number | undefined;
+			done.then((c) => {
+				code = c;
+				wake?.();
+			});
+			while (code === undefined || queue.length > 0) {
+				if (queue.length === 0) {
+					await new Promise<void>((r) => {
+						wake = r;
+					});
+					wake = null;
+					continue;
+				}
+				yield queue.shift()!;
+			}
+			if (code !== 0) {
+				failedStep = label;
+				failedCode = code;
+				log.warn('redeploy.failed', { step: label, code });
+				break;
+			}
+		}
+		if (failedStep) {
+			yield { type: 'done', ok: false, failedStep, code: failedCode };
+		} else {
+			yield { type: 'done', ok: true, restarting: true };
+			log.info('redeploy.ok.exiting');
+			// Let the supervisor relaunch us. Defer slightly so the SSE payload
+			// reaches the client before the socket dies. If the supervisor isn't
+			// running this is a no-op and the cleared inFlight flag below lets
+			// future POSTs proceed.
+			setTimeout(() => process.exit(0), 500).unref();
+		}
+	} catch (err) {
+		log.error('redeploy.crash', { err: String(err) });
+		yield { type: 'done', ok: false, message: String(err) };
+	} finally {
+		inFlight = false;
+	}
+}
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	const userId = requireUserId(locals);
@@ -47,90 +127,5 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	inFlight = true;
 	log.info('redeploy.start', { userId, pull });
 
-	const encoder = new TextEncoder();
-	const stream = new ReadableStream<Uint8Array>({
-		async start(controller) {
-			let closed = false;
-			const send = (data: unknown) => {
-				if (closed) return;
-				try {
-					controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-				} catch {
-					closed = true;
-				}
-			};
-			const close = () => {
-				if (closed) return;
-				closed = true;
-				try {
-					controller.close();
-				} catch {
-					/* already closed */
-				}
-			};
-
-			const runStep = (label: string, cmd: string) =>
-				new Promise<number>((resolve) => {
-					send({ type: 'step', label, cmd });
-					const p = spawn('bash', ['-lc', cmd], {
-						cwd: process.cwd(),
-						env: process.env
-					});
-					p.stdout.on('data', (b: Buffer) =>
-						send({ type: 'log', stream: 'stdout', text: b.toString() })
-					);
-					p.stderr.on('data', (b: Buffer) =>
-						send({ type: 'log', stream: 'stderr', text: b.toString() })
-					);
-					p.on('error', (err) => {
-						send({ type: 'log', stream: 'stderr', text: `spawn error: ${err.message}\n` });
-						resolve(1);
-					});
-					p.on('close', (code) => {
-						send({ type: 'step-done', label, code: code ?? 1 });
-						resolve(code ?? 1);
-					});
-				});
-
-			try {
-				let failedStep: string | undefined;
-				let failedCode = 0;
-				for (const { label, cmd } of steps) {
-					const code = await runStep(label, cmd);
-					if (code !== 0) {
-						failedStep = label;
-						failedCode = code;
-						log.warn('redeploy.failed', { step: label, code });
-						break;
-					}
-				}
-				if (failedStep) {
-					send({ type: 'done', ok: false, failedStep, code: failedCode });
-				} else {
-					send({ type: 'done', ok: true, restarting: true });
-					log.info('redeploy.ok.exiting');
-					// Let the supervisor relaunch us. Defer slightly so the SSE
-					// payload reaches the client before the socket dies. If the
-					// supervisor isn't running this is a no-op and the cleared
-					// inFlight flag below lets future POSTs proceed.
-					setTimeout(() => process.exit(0), 500).unref();
-				}
-			} catch (err) {
-				log.error('redeploy.crash', { err: String(err) });
-				send({ type: 'done', ok: false, message: String(err) });
-			} finally {
-				close();
-				inFlight = false;
-			}
-		}
-	});
-
-	return new Response(stream, {
-		headers: {
-			'content-type': 'text/event-stream',
-			'cache-control': 'no-cache, no-transform',
-			connection: 'keep-alive',
-			'x-accel-buffering': 'no'
-		}
-	});
+	return sseResponse(runRedeploy(steps));
 };

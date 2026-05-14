@@ -1,10 +1,12 @@
 // SSE response helper: takes an async iterable of JSON-able events and
 // returns a Response with the right headers. Sends a heartbeat comment
 // every 15 s to keep proxies from idling the connection.
+//
+// Generic over the event payload type so callers (chat streams, redeploy,
+// etc.) get type-checked events without each rebuilding the encoding /
+// heartbeat / error-frame contract.
 
-import type { PortalEvent } from '$lib/types';
-
-export function sseResponse(events: AsyncIterable<PortalEvent>): Response {
+export function sseResponse<T>(events: AsyncIterable<T>): Response {
 	const encoder = new TextEncoder();
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {

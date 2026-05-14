@@ -67,7 +67,7 @@ the suggested unified convention.
 
 ## Medium impact
 
-- [ ] **8. Route `redeploy` through the shared SSE helper.** Extend
+- [x] **8. Route `redeploy` through the shared SSE helper.** Extend
       `sseResponse` to accept arbitrary JSON event payloads so the redeploy
       endpoint gets heartbeats and shares the encoding contract.
   - `src/lib/server/sse.ts`
