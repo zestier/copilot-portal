@@ -92,25 +92,32 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				});
 
 			try {
+				let failedStep: string | undefined;
+				let failedCode = 0;
 				for (const { label, cmd } of steps) {
 					const code = await runStep(label, cmd);
 					if (code !== 0) {
+						failedStep = label;
+						failedCode = code;
 						log.warn('redeploy.failed', { step: label, code });
-						send({ type: 'done', ok: false, failedStep: label, code });
-						close();
-						inFlight = false;
-						return;
+						break;
 					}
 				}
-				send({ type: 'done', ok: true, restarting: true });
-				close();
-				log.info('redeploy.ok.exiting');
-				// Let the supervisor relaunch us. Defer slightly so the SSE
-				// payload reaches the client before the socket dies.
-				setTimeout(() => process.exit(0), 500).unref();
+				if (failedStep) {
+					send({ type: 'done', ok: false, failedStep, code: failedCode });
+				} else {
+					send({ type: 'done', ok: true, restarting: true });
+					log.info('redeploy.ok.exiting');
+					// Let the supervisor relaunch us. Defer slightly so the SSE
+					// payload reaches the client before the socket dies. If the
+					// supervisor isn't running this is a no-op and the cleared
+					// inFlight flag below lets future POSTs proceed.
+					setTimeout(() => process.exit(0), 500).unref();
+				}
 			} catch (err) {
 				log.error('redeploy.crash', { err: String(err) });
 				send({ type: 'done', ok: false, message: String(err) });
+			} finally {
 				close();
 				inFlight = false;
 			}
