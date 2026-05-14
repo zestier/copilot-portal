@@ -53,6 +53,16 @@ export interface ResumableStreamOptions<T> {
 	// Aborts the per-attempt request from outside (e.g., page is closing).
 	// If aborted, the helper exits without reconnecting.
 	externalSignal?: AbortSignal;
+	// Returns true when the loop should *not* consume a reconnect attempt
+	// right now — e.g. the page is hidden or the device is offline (phone
+	// locked, radio asleep). Default: browser-aware check using
+	// document.hidden / navigator.onLine; no-op in non-browser contexts.
+	isPaused?: () => boolean;
+	// Resolves when the paused condition clears (or the supplied signal
+	// aborts). Called when `isPaused()` returns true. Default: listens for
+	// `visibilitychange` and `online` events in the browser; resolves
+	// immediately otherwise.
+	waitForWake?: (signal?: AbortSignal) => Promise<void>;
 }
 
 export interface ResumableStreamResult {
@@ -60,6 +70,46 @@ export interface ResumableStreamResult {
 	doneSeen: boolean;
 	lastStatus: number;
 	stoppedReason: 'done' | 'user-abort' | 'no-live-turn' | 'max-attempts' | 'external-abort';
+}
+
+function defaultIsPaused(): boolean {
+	if (typeof document !== 'undefined' && document.hidden) return true;
+	if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+	return false;
+}
+
+function defaultWaitForWake(signal?: AbortSignal): Promise<void> {
+	if (!defaultIsPaused()) return Promise.resolve();
+	if (typeof document === 'undefined' || typeof window === 'undefined') {
+		return Promise.resolve();
+	}
+	return new Promise<void>((resolve) => {
+		const cleanup = () => {
+			document.removeEventListener('visibilitychange', check);
+			window.removeEventListener('online', check);
+			signal?.removeEventListener('abort', onAbort);
+		};
+		const check = () => {
+			if (!defaultIsPaused()) {
+				cleanup();
+				resolve();
+			}
+		};
+		const onAbort = () => {
+			cleanup();
+			resolve();
+		};
+		document.addEventListener('visibilitychange', check);
+		window.addEventListener('online', check);
+		if (signal) {
+			if (signal.aborted) {
+				cleanup();
+				resolve();
+				return;
+			}
+			signal.addEventListener('abort', onAbort, { once: true });
+		}
+	});
 }
 
 const DEFAULTS = {
@@ -86,6 +136,8 @@ export async function runResumableStream<T>(
 			return () => clearInterval(h);
 		});
 	const makeAbort = opts.createAbortController ?? (() => new AbortController());
+	const isPaused = opts.isPaused ?? defaultIsPaused;
+	const waitForWake = opts.waitForWake ?? defaultWaitForWake;
 
 	let lastStatus = 0;
 	let req: ResumableInitial = opts.initial;
@@ -96,6 +148,30 @@ export async function runResumableStream<T>(
 		}
 		if (opts.externalSignal?.aborted) {
 			return { attempts: attempt, doneSeen: false, lastStatus, stoppedReason: 'external-abort' };
+		}
+
+		// If the device is offline or the page is hidden, don't burn an
+		// attempt: wait for a wake event (visibility / online) before
+		// trying again. After a wake, reset the attempt counter so a long
+		// phone-lock doesn't leave us one failure away from giving up.
+		if (isPaused()) {
+			await waitForWake(opts.externalSignal);
+			if (opts.isUserAborted()) {
+				return { attempts: attempt, doneSeen: false, lastStatus, stoppedReason: 'user-abort' };
+			}
+			if (opts.externalSignal?.aborted) {
+				return {
+					attempts: attempt,
+					doneSeen: false,
+					lastStatus,
+					stoppedReason: 'external-abort'
+				};
+			}
+			attempt = -1; // becomes 0 after the loop's ++
+			// Only switch to GET if we've already connected at least once;
+			// preserve the original POST body for the initial attempt.
+			if (lastStatus !== 0) req = { method: 'GET' };
+			continue;
 		}
 
 		const ac = makeAbort();
@@ -169,7 +245,13 @@ export async function runResumableStream<T>(
 		// No reason to sleep if we've used our last attempt.
 		if (attempt + 1 >= maxAttempts) break;
 
-		await sleep(backoff(attempt));
+		// If we're paused (page hidden / offline), skip the backoff sleep
+		// and let the next iteration's `isPaused` gate wait for a wake
+		// event instead. This avoids burning the budget on a sleeping
+		// radio and shortens the perceived reconnect latency on unlock.
+		if (!isPaused()) {
+			await sleep(backoff(attempt));
+		}
 		if (opts.isUserAborted()) {
 			return { attempts: attempt + 1, doneSeen: false, lastStatus, stoppedReason: 'user-abort' };
 		}

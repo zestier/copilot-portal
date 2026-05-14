@@ -499,4 +499,128 @@ describe('runResumableStream', () => {
 		expect(result.stoppedReason).toBe('external-abort');
 		expect(result.attempts).toBe(1);
 	});
+
+	it('does not consume attempts while paused, and resets the budget on wake', async () => {
+		const clock = makeClock();
+		let paused = true;
+		const wakers: Array<() => void> = [];
+		const waitForWake = () =>
+			new Promise<void>((resolve) => {
+				wakers.push(resolve);
+			});
+		const connected: ReturnType<typeof makeControllableStream<Ev>>[] = [];
+
+		const runP = runResumableStream<Ev>({
+			initial: { method: 'POST', body: 'hi' },
+			isDone,
+			isUserAborted: () => false,
+			onEvent: () => {},
+			connect: (_req, args) => {
+				const s = makeControllableStream<Ev>();
+				connected.push(s);
+				s.captureArgs(args);
+				return s.stream;
+			},
+			now: clock.now,
+			sleep: clock.sleep,
+			setStallTimer: () => () => {},
+			maxAttempts: 2,
+			backoffMs: () => 10,
+			isPaused: () => paused,
+			waitForWake
+		});
+
+		// Initially paused → no connection yet, one waker registered.
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		expect(connected).toHaveLength(0);
+		expect(wakers).toHaveLength(1);
+
+		// Wake: attempt budget resets, first connection opens.
+		paused = false;
+		wakers.shift()!();
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		expect(connected).toHaveLength(1);
+
+		// End stream 1 while paused: the post-failure sleep is skipped
+		// and the next iteration enters the pause gate.
+		paused = true;
+		connected[0].end();
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+		expect(wakers).toHaveLength(1);
+
+		// Wake: budget reset means another two attempts are available.
+		paused = false;
+		wakers.shift()!();
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		expect(connected).toHaveLength(2);
+
+		connected[1].end();
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		await clock.advance(10);
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		// Without the budget reset, we'd already be at max-attempts after
+		// stream 1's end. The reset lets us reach a third connection.
+		expect(connected).toHaveLength(3);
+
+		connected[2].pushEvent({ type: 'done' });
+		const result = await runP;
+		expect(result.stoppedReason).toBe('done');
+	});
+
+	it('reattaches via GET on the post-pause reconnect (no POST body replay)', async () => {
+		const clock = makeClock();
+		let paused = false;
+		const wakers: Array<() => void> = [];
+		const connects: ResumableInitial[] = [];
+		const streams: ReturnType<typeof makeControllableStream<Ev>>[] = [];
+
+		const runP = runResumableStream<Ev>({
+			initial: { method: 'POST', body: 'hello' },
+			isDone,
+			isUserAborted: () => false,
+			onEvent: () => {},
+			connect: (req, args) => {
+				connects.push(req);
+				const s = makeControllableStream<Ev>();
+				streams.push(s);
+				s.captureArgs(args);
+				return s.stream;
+			},
+			now: clock.now,
+			sleep: clock.sleep,
+			setStallTimer: () => () => {},
+			backoffMs: () => 5,
+			isPaused: () => paused,
+			waitForWake: () =>
+				new Promise<void>((resolve) => {
+					wakers.push(resolve);
+				})
+		});
+
+		// First attempt connects with POST.
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(connects[0]).toEqual({ method: 'POST', body: 'hello' });
+
+		// Stream ends without `done`; pause kicks in before the next attempt.
+		paused = true;
+		streams[0].end();
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(wakers).toHaveLength(1);
+
+		// Wake up.
+		paused = false;
+		wakers.shift()!();
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		// Post-wake reconnect must use GET, not replay the POST body.
+		expect(connects[1]).toEqual({ method: 'GET' });
+
+		streams[1].pushEvent({ type: 'done' });
+		const result = await runP;
+		expect(result.stoppedReason).toBe('done');
+	});
 });

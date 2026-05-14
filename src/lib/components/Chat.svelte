@@ -163,18 +163,21 @@
 		externalAc?.abort();
 		externalAc = new AbortController();
 		const ac = externalAc;
-		await runResumableStream<PortalEvent>({
+		// Buffer transient network errors instead of immediately surfacing
+		// them in the message list. A locked phone / sleeping radio can
+		// produce a flurry of fetch failures while the resumable loop
+		// retries; if we eventually reconnect, those failures were
+		// invisible and shouldn't pollute the conversation. Only if the
+		// loop exhausts its retry budget do we surface a single error.
+		const bufferedNetworkErrors: unknown[] = [];
+		const result = await runResumableStream<PortalEvent>({
 			initial,
 			externalSignal: ac.signal,
 			isDone: (ev) => ev.type === 'done',
 			isUserAborted: () => userAborted,
 			onEvent: applyEvent,
 			onNetworkError: (e) => {
-				applyEvent({
-					type: 'error',
-					code: 'network',
-					message: e instanceof Error ? e.message : String(e)
-				});
+				bufferedNetworkErrors.push(e);
 			},
 			connect: (req, args) =>
 				streamSse<PortalEvent>(`/api/conversations/${conversation.id}/messages`, {
@@ -186,6 +189,15 @@
 					onActivity: args.onActivity
 				})
 		});
+		if (result.stoppedReason === 'max-attempts' && bufferedNetworkErrors.length > 0) {
+			const last = bufferedNetworkErrors[bufferedNetworkErrors.length - 1];
+			applyEvent({
+				type: 'error',
+				code: 'network',
+				message: last instanceof Error ? last.message : String(last)
+			});
+		}
+		return result;
 	}
 
 	async function resumeIfActive() {
@@ -199,23 +211,30 @@
 		}
 	}
 
-	// When the tab is hidden, browsers may freeze the SSE fetch reader; on
-	// return to visibility, kick the connection so we resume cleanly.
+	// When the tab becomes visible (or the device comes back online),
+	// kick a resume if we aren't already streaming. Note we deliberately
+	// do NOT abort an in-flight stream here: aborting the externalSignal
+	// terminates `runResumableStream` with `external-abort`, which would
+	// leave us with no live consumer. The resumable loop's internal
+	// pause-on-hidden / pause-on-offline gating + stall watchdog already
+	// recover a frozen reader cleanly.
 	$effect(() => {
 		if (typeof document === 'undefined') return;
-		const onVisible = () => {
+		const kick = () => {
 			if (document.visibilityState !== 'visible') return;
-			if (streaming) {
-				// Force a reconnect by aborting the in-flight request; the
-				// resumable loop will reattach via GET on the next iteration.
-				externalAc?.abort();
-				externalAc = new AbortController();
-			} else {
-				void resumeIfActive();
-			}
+			if (streaming) return;
+			void resumeIfActive();
 		};
-		document.addEventListener('visibilitychange', onVisible);
-		return () => document.removeEventListener('visibilitychange', onVisible);
+		const onOnline = () => {
+			if (streaming) return;
+			void resumeIfActive();
+		};
+		document.addEventListener('visibilitychange', kick);
+		window.addEventListener('online', onOnline);
+		return () => {
+			document.removeEventListener('visibilitychange', kick);
+			window.removeEventListener('online', onOnline);
+		};
 	});
 
 	function applyEvent(ev: PortalEvent) {
