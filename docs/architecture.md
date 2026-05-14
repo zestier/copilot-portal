@@ -88,7 +88,7 @@ Server → client SSE events, one JSON object per `data:` line:
 | `done`                | `{}`                                                 |
 
 Permission acknowledgements are a separate POST:
-`POST /api/conversations/:id/permissions/:requestId { decision: "allow" | "deny" | "always" }`.
+`POST /api/conversations/:id/permissions/:requestId { decision: "allow-once" | "allow-always" | "deny" }`.
 
 ## Concurrency model
 

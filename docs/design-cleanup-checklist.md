@@ -100,7 +100,7 @@ the suggested unified convention.
   - `src/hooks.server.ts`
   - All `src/routes/api/**/+server.ts` files
 
-- [ ] **13. Reconcile permission-decision vocabulary with docs.** Code uses
+- [x] **13. Reconcile permission-decision vocabulary with docs.** Code uses
       `allow-once | allow-always | deny`; update `docs/architecture.md` and
       `docs/backend-sdk-integration.md` (or change the code — code is right).
   - `src/lib/types.ts`
