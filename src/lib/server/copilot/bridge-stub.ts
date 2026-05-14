@@ -6,6 +6,7 @@
 // fields each event must carry.
 
 import { ulid } from 'ulid';
+import { loadConfig } from '../config';
 
 type Listener = (e: unknown) => void;
 
@@ -152,5 +153,5 @@ export class StubCopilotClient {
 }
 
 export function isStubMode(): boolean {
-	return process.env.COPILOT_STUB === '1' || process.env.COPILOT_STUB === 'true';
+	return loadConfig().COPILOT_STUB;
 }

@@ -38,10 +38,11 @@ export function getDb(): Database.Database {
 }
 
 function migrationsDir(): string {
+	const cfg = loadConfig();
 	// Explicit override (used by tests / non-standard layouts where cwd is
 	// not the repository root).
-	if (process.env.DB_MIGRATIONS_DIR && existsSync(process.env.DB_MIGRATIONS_DIR)) {
-		return process.env.DB_MIGRATIONS_DIR;
+	if (cfg.DB_MIGRATIONS_DIR && existsSync(cfg.DB_MIGRATIONS_DIR)) {
+		return cfg.DB_MIGRATIONS_DIR;
 	}
 	// At runtime under SvelteKit/Vite, import.meta.url points into compiled output.
 	// Try alongside this file first; fall back to source path during dev.

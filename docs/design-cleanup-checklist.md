@@ -85,7 +85,7 @@ the suggested unified convention.
   - `src/routes/api/conversations/[id]/git/changes/+server.ts`
   - `src/routes/api/conversations/[id]/fs/tree/+server.ts`
 
-- [ ] **11. Centralize env access.** Add `TUNNEL_HOST`, `COPILOT_STUB`, and
+- [x] **11. Centralize env access.** Add `TUNNEL_HOST`, `COPILOT_STUB`, and
       `DB_MIGRATIONS_DIR` to the zod schema in `config.ts` so `loadConfig()`
       stays the only env reader.
   - `src/lib/server/config.ts`

@@ -42,7 +42,24 @@ const Schema = z
 		ENABLE_REDEPLOY: z
 			.string()
 			.optional()
-			.transform((v) => v === '1' || v === 'true')
+			.transform((v) => v === '1' || v === 'true'),
+
+		// When set, the server is reached via a tunnel/proxy whose hostname
+		// won't match event.url.origin. Disables the Origin/Referer check on
+		// mutating API calls (the SameSite=Lax session cookie still blocks
+		// cross-site CSRF).
+		TUNNEL_HOST: z.string().optional(),
+
+		// When "1", `bridge.ts` swaps the real Copilot SDK for the in-process
+		// stub in `bridge-stub.ts`. Used by e2e tests.
+		COPILOT_STUB: z
+			.string()
+			.optional()
+			.transform((v) => v === '1' || v === 'true'),
+
+		// Explicit override for the SQLite migrations directory. Useful for
+		// tests / non-standard layouts where cwd isn't the repo root.
+		DB_MIGRATIONS_DIR: z.string().optional()
 	})
 	.superRefine((cfg, ctx) => {
 		if (cfg.AUTH_MODE === 'none') {
