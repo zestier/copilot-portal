@@ -196,12 +196,33 @@ export function unarchive(id: string, userId: string): boolean { ... }
 
 ## Backup and export
 
-- `GET /api/export` returns a `portal.tar.gz` containing `portal.db` plus
-  a `manifest.json` (excludes `user_tokens` and `byok_keys_ct` by default;
-  flag to include).
 - Restore is offline: stop the container, replace `portal.db`, start.
-- For per-conversation export, `GET /api/conversations/:id/export` emits
-  a single markdown file with messages, tool calls, and diffs inlined.
+- `GET /api/conversations/:id/export` emits a single markdown file with
+  the conversation's messages, tool calls, and diffs inlined.
+- _Roadmap:_ `GET /api/export` will return a `portal.tar.gz` containing
+  `portal.db` plus a `manifest.json` (excludes `user_tokens` and
+  `byok_keys_ct` by default; flag to include). Not yet implemented — use
+  the offline file-copy path until then.
+
+## Admin and operations endpoints
+
+A small set of endpoints exists outside the per-conversation CRUD surface.
+They are authenticated like the rest of `/api/*` (session cookie required)
+and live alongside the data routes:
+
+- `POST /api/admin/redeploy` — streams a Server-Sent Events feed of a
+  `git fetch` / `git pull` / `pnpm install` / `pnpm run verify` pipeline,
+  then exits the process so the supervisor (`scripts/serve.mjs`) can
+  relaunch from the refreshed `build/`. Body: `{pull?: boolean}` (defaults
+  to `true`). Gated by the `ENABLE_REDEPLOY` env flag — returns `403`
+  when disabled and `409` if a redeploy is already in flight. Only
+  meaningful when the portal is started via `pnpm run serve`.
+- `POST /api/conversations/:id/permissions/:requestId` — resolves a
+  pending Copilot tool-permission prompt. Body:
+  `{decision: 'allow-once' | 'allow-always' | 'deny'}`. Returns
+  `{ok: true}` on success, `404` if the request id is unknown or no
+  longer pending. The matching SSE feed for pending prompts is published
+  via the conversation's event stream.
 
 ## Retention
 

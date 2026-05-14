@@ -114,7 +114,7 @@ the suggested unified convention.
   - `src/routes/api/conversations/[id]/permissions/[requestId]/+server.ts`
   - `src/routes/api/conversations/[id]/git/commit/[commitSha]/+server.ts`
 
-- [ ] **15. Fix docs drift.** Either implement `GET /api/export` or mark it
+- [x] **15. Fix docs drift.** Either implement `GET /api/export` or mark it
       roadmap-only in `docs/persistence.md`. Add a short "admin" section
       describing the `redeploy` and `permissions/[requestId]` endpoints.
   - `docs/persistence.md`
