@@ -9,8 +9,6 @@
 		PermissionDecision,
 		PermissionRequestView
 	} from '$lib/types';
-	import { streamSse } from '$lib/client/sse';
-	import { runResumableStream } from '$lib/client/resumable-stream';
 	import Message_ from './Message.svelte';
 	import PermissionPrompt from './PermissionPrompt.svelte';
 	import ContextMeter from './ContextMeter.svelte';
@@ -20,7 +18,8 @@
 		conversation,
 		initialMessages,
 		initialUsage = null,
-		parent = null
+		parent = null,
+		initialActiveTurnId = null
 	}: {
 		conversation: Conversation;
 		initialMessages: Message[];
@@ -31,6 +30,7 @@
 			messageId: string | null;
 			messageIndex: number | null;
 		} | null;
+		initialActiveTurnId?: string | null;
 	} = $props();
 
 	let messages = $state<Message[]>([]);
@@ -69,6 +69,10 @@
 		// Reset local message list when the conversation prop changes.
 		void conversation.id;
 		untrack(() => {
+			// Tear down any stream attached to the previous conversation
+			// before we swap state — otherwise its events would land in
+			// the new conversation's `messages` array.
+			closeStream();
 			messages = [...initialMessages];
 			title = conversation.title;
 			usage = initialUsage;
@@ -80,8 +84,11 @@
 				clearTimeout(compactionTimer);
 				compactionTimer = null;
 			}
-			// Reattach to any in-progress turn so a refresh-mid-stream resumes.
-			void resumeIfActive();
+			// Reattach the EventSource to any in-progress turn so a
+			// refresh-mid-stream resumes seamlessly.
+			if (initialActiveTurnId) {
+				attachStream(initialActiveTurnId);
+			}
 			void refreshForks();
 		});
 	});
@@ -89,12 +96,13 @@
 	let composer = $state('');
 	let streaming = $state(false);
 	let pendingPermission = $state<PermissionRequestView | null>(null);
-	// Distinguishes a user-initiated stop (don't auto-reconnect) from a
-	// network/proxy-induced abort triggered by the stall watchdog.
-	let userAborted = false;
-	// AbortController for the page-lifecycle (external) abort, used so that
-	// the visibilitychange handler can nudge a hung stream.
-	let externalAc: AbortController | null = null;
+	// Active EventSource for the in-flight turn (if any). null when idle.
+	// Holding a reference here lets `stop()` close it on user-cancel and
+	// lets the conversation-prop $effect tear it down on navigation.
+	let eventSource: EventSource | null = null;
+	// Id of the turn we're currently streaming. Tracked separately because
+	// EventSource owns its own URL; we need the id for DELETE on cancel.
+	let activeTurnId: string | null = null;
 	let scrollEl: HTMLDivElement | undefined;
 	let textareaEl: HTMLTextAreaElement | undefined;
 	// Sticky-scroll: only auto-scroll if the user is pinned to the bottom.
@@ -156,117 +164,86 @@
 		hasNewBelow = false;
 	}
 
-	async function runStream(initial: {
-		method: string;
-		headers?: Record<string, string>;
-		body?: string;
-	}) {
-		externalAc?.abort();
-		externalAc = new AbortController();
-		const ac = externalAc;
-		// Buffer transient network errors instead of immediately surfacing
-		// them in the message list. A locked phone / sleeping radio can
-		// produce a flurry of fetch failures while the resumable loop
-		// retries; if we eventually reconnect, those failures were
-		// invisible and shouldn't pollute the conversation. Only if the
-		// loop exhausts its retry budget do we surface a single error.
-		const bufferedNetworkErrors: unknown[] = [];
-		const result = await runResumableStream<PortalEvent>({
-			initial,
-			externalSignal: ac.signal,
-			isDone: (ev) => ev.type === 'done',
-			isUserAborted: () => userAborted,
-			onEvent: applyEvent,
-			onNetworkError: (e) => {
-				bufferedNetworkErrors.push(e);
-			},
-			connect: (req, args) =>
-				streamSse<PortalEvent>(`/api/conversations/${conversation.id}/messages`, {
-					method: req.method,
-					headers: req.headers,
-					body: req.body,
-					signal: args.signal,
-					onStatus: args.onStatus,
-					onActivity: args.onActivity
-				})
-		});
-		if (result.stoppedReason === 'max-attempts' && bufferedNetworkErrors.length > 0) {
-			const last = bufferedNetworkErrors[bufferedNetworkErrors.length - 1];
-			applyEvent({
-				type: 'error',
-				code: 'network',
-				message: last instanceof Error ? last.message : String(last)
-			});
-		}
-		return result;
+	// Open an EventSource against an in-flight turn and route its events
+	// through `applyEvent`. The browser owns the connection lifecycle:
+	//   - Auto-reconnects on transient drops (locked phone, sleeping
+	//     radio, proxy idle close).
+	//   - Sends `Last-Event-ID` on reconnect so the server replays only
+	//     events we haven't seen yet.
+	// We only need to handle two terminal cases ourselves:
+	//   1. `done` portal event → turn finished cleanly. Close the stream.
+	//   2. Network error with `readyState === CLOSED` → server refused
+	//      reconnect (typically 410 Gone: turn no longer in registry).
+	//      Refetch persisted messages so the UI catches up, then stop.
+	function attachStream(turnId: string) {
+		closeStream();
+		activeTurnId = turnId;
+		streaming = true;
+
+		const es = new EventSource(`/api/conversations/${conversation.id}/turns/${turnId}/stream`);
+		eventSource = es;
+
+		es.onmessage = (msg) => {
+			let ev: PortalEvent;
+			try {
+				ev = JSON.parse(msg.data) as PortalEvent;
+			} catch {
+				return;
+			}
+			applyEvent(ev);
+			if (ev.type === 'done') {
+				closeStream();
+			}
+		};
+		es.onerror = () => {
+			// Browser closed the connection permanently (e.g. 410 from
+			// our stream endpoint: turn id unknown because the grace
+			// window expired during a long phone lock). We're then
+			// authoritatively desynced from the DB — refetch and stop.
+			// Transient errors keep `readyState === CONNECTING` and the
+			// browser retries automatically; we leave those alone.
+			if (es.readyState === EventSource.CLOSED) {
+				closeStream();
+				void refreshMessages();
+			}
+		};
 	}
 
-	async function resumeIfActive() {
-		if (streaming) return;
-		userAborted = false;
-		streaming = true;
-		try {
-			await runStream({ method: 'GET' });
-		} finally {
-			streaming = false;
+	function closeStream() {
+		if (eventSource) {
+			eventSource.close();
+			eventSource = null;
 		}
+		activeTurnId = null;
+		streaming = false;
 	}
 
 	// Pull the latest persisted messages for this conversation and replace
-	// local state. Used when the tab becomes visible / the device comes
-	// back online: if a turn completed while we were hidden the resumable
-	// stream has nothing left to replay, so without this refetch the UI
-	// would keep showing whatever partial state existed at lock time.
+	// local state. Used as a recovery path when the EventSource closes
+	// without a `done` (e.g. 410 Gone after grace expiry) so the UI
+	// doesn't strand mid-stream content forever.
 	async function refreshMessages() {
-		if (streaming) return;
 		try {
 			const r = await fetch(`/api/conversations/${conversation.id}`);
 			if (!r.ok) return;
-			const data = (await r.json()) as { messages: Message[] };
-			if (streaming) return;
+			const data = (await r.json()) as {
+				messages: Message[];
+				activeTurnId: string | null;
+			};
 			messages = data.messages;
 			// A completed turn means any outstanding permission prompt was
 			// resolved server-side; clear it so we don't strand a dialog.
 			pendingPermission = null;
 			await scrollToBottom();
+			// If a new turn became active between events (unlikely but
+			// possible from another tab), attach to it.
+			if (data.activeTurnId && !eventSource) {
+				attachStream(data.activeTurnId);
+			}
 		} catch {
-			/* non-fatal: next visibility/online event will retry */
+			/* non-fatal */
 		}
 	}
-
-	// When the tab becomes visible (or the device comes back online),
-	// kick a resume if we aren't already streaming. Note we deliberately
-	// do NOT abort an in-flight stream here: aborting the externalSignal
-	// terminates `runResumableStream` with `external-abort`, which would
-	// leave us with no live consumer. The resumable loop's internal
-	// pause-on-hidden / pause-on-offline gating + stall watchdog already
-	// recover a frozen reader cleanly.
-	$effect(() => {
-		if (typeof document === 'undefined') return;
-		const kick = () => {
-			if (document.visibilityState !== 'visible') return;
-			if (streaming) return;
-			// Refetch first: if a turn finished while we were hidden, the
-			// resumable stream has nothing to replay and we'd otherwise be
-			// stuck on stale messages. resumeIfActive() then attaches to
-			// any still-running turn (e.g. one started from another tab).
-			void refreshMessages().then(() => {
-				if (!streaming) void resumeIfActive();
-			});
-		};
-		const onOnline = () => {
-			if (streaming) return;
-			void refreshMessages().then(() => {
-				if (!streaming) void resumeIfActive();
-			});
-		};
-		document.addEventListener('visibilitychange', kick);
-		window.addEventListener('online', onOnline);
-		return () => {
-			document.removeEventListener('visibilitychange', kick);
-			window.removeEventListener('online', onOnline);
-		};
-	});
 
 	function applyEvent(ev: PortalEvent) {
 		switch (ev.type) {
@@ -460,7 +437,6 @@
 		const text = composer.trim();
 		if (!text || streaming) return;
 		composer = '';
-		streaming = true;
 		messages.push({
 			id: `local-${Date.now()}`,
 			conversationId: conversation.id,
@@ -471,15 +447,38 @@
 			createdAt: Date.now()
 		});
 		scrollToBottom({ force: true });
-		userAborted = false;
+
+		// Start the turn server-side, then attach an EventSource to its
+		// stream. The POST is just a "create" — all event delivery flows
+		// through the GET stream so reconnects (browser-driven) just work.
+		streaming = true;
 		try {
-			await runStream({
+			const r = await fetch(`/api/conversations/${conversation.id}/turns`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ content: text })
 			});
-		} finally {
+			if (!r.ok) {
+				let msg = `HTTP ${r.status}`;
+				try {
+					const body = (await r.json()) as { message?: string };
+					if (body.message) msg = body.message;
+				} catch {
+					/* ignore */
+				}
+				streaming = false;
+				applyEvent({ type: 'error', code: 'start_failed', message: msg });
+				return;
+			}
+			const { turnId } = (await r.json()) as { turnId: string };
+			attachStream(turnId);
+		} catch (e) {
 			streaming = false;
+			applyEvent({
+				type: 'error',
+				code: 'network',
+				message: e instanceof Error ? e.message : String(e)
+			});
 		}
 	}
 
@@ -499,17 +498,18 @@
 	}
 
 	async function stop() {
-		// Tell the server to actually cancel the turn (just aborting the
-		// SSE fetch would only detach this client; the turn would keep going).
-		userAborted = true;
-		try {
-			await fetch(`/api/conversations/${conversation.id}/messages`, {
-				method: 'DELETE'
-			});
-		} catch {
-			/* ignore */
+		// Tell the server to actually cancel the turn (just closing the
+		// EventSource would only detach this client; the turn would keep
+		// running). Then close the stream locally.
+		const turnId = activeTurnId;
+		if (turnId) {
+			try {
+				await fetch(`/api/conversations/${conversation.id}/turns/${turnId}`, { method: 'DELETE' });
+			} catch {
+				/* ignore */
+			}
 		}
-		externalAc?.abort();
+		closeStream();
 	}
 
 	$effect(() => {

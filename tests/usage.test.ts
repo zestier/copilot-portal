@@ -146,9 +146,9 @@ describe('turn-runner persists context.usage', () => {
 		});
 
 		const received: PortalEvent[] = [];
-		for await (const ev of turn.subscribe()) {
-			received.push(ev);
-			if (ev.type === 'done') break;
+		for await (const { event } of turn.subscribe()) {
+			received.push(event);
+			if (event.type === 'done') break;
 		}
 
 		// The event was forwarded to subscribers verbatim.

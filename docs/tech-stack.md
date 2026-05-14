@@ -97,7 +97,9 @@ copilot-portal/
 │        │  ├─ +server.ts                  # POST create, GET list
 │        │  └─ [id]/
 │        │     ├─ +server.ts                # GET, DELETE
-│        │     ├─ messages/+server.ts       # POST send, SSE stream
+│        │     ├─ turns/
+│        │     │  ├─ +server.ts                            # POST start turn
+│        │     │  └─ [turnId]/stream/+server.ts            # GET SSE, DELETE cancel
 │        │     └─ permissions/[requestId]/+server.ts
 │        └─ health/+server.ts
 ├─ static/

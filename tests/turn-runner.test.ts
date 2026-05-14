@@ -86,9 +86,9 @@ describe('turn-runner', () => {
 		});
 
 		const received: PortalEvent[] = [];
-		for await (const ev of turn.subscribe()) {
-			received.push(ev);
-			if (ev.type === 'done') break;
+		for await (const { event } of turn.subscribe()) {
+			received.push(event);
+			if (event.type === 'done') break;
 		}
 
 		// Exactly one terminal `done`, and it must come last.
@@ -141,12 +141,99 @@ describe('turn-runner', () => {
 		});
 
 		const received: PortalEvent[] = [];
-		for await (const ev of turn.subscribe()) {
-			received.push(ev);
-			if (ev.type === 'done') break;
+		for await (const { event } of turn.subscribe()) {
+			received.push(event);
+			if (event.type === 'done') break;
 		}
 
 		expect(received.find((e) => e.type === 'conversation.update')).toBeUndefined();
 		expect(convs.get(conv.id, user.id)?.title).toBe('Custom title');
+	});
+
+	it('assigns monotonic ids and replays from Last-Event-ID via sinceId', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const user = users.ensureLocalUser();
+		const wd = mkdtempSync(join(tmpdir(), 'portal-wd-'));
+		const conv = convs.create(user.id, {
+			title: 'Custom title',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+
+		acquireMock.mockResolvedValue(
+			makeFakeSession([
+				{ type: 'message.start', messageId: 'm1', role: 'assistant' },
+				{ type: 'message.delta', messageId: 'm1', text: 'a' },
+				{ type: 'message.delta', messageId: 'm1', text: 'b' },
+				{ type: 'message.delta', messageId: 'm1', text: 'c' },
+				{ type: 'done' }
+			])
+		);
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+
+		// Drain the full transcript; ids must be 0..N-1 contiguous.
+		const all: { id: number; event: PortalEvent }[] = [];
+		for await (const item of turn.subscribe()) {
+			all.push(item);
+			if (item.event.type === 'done') break;
+		}
+		expect(all.length).toBeGreaterThan(0);
+		expect(all.map((x) => x.id)).toEqual(all.map((_, i) => i));
+		expect(all[all.length - 1].event.type).toBe('done');
+
+		// Re-subscribe with `sinceId` = id of the second delta. We should
+		// receive everything strictly after that id, and only that.
+		const secondDeltaId = all.findIndex(
+			(x) => x.event.type === 'message.delta' && x.event.text === 'b'
+		);
+		expect(secondDeltaId).toBeGreaterThan(0);
+
+		const replayed: { id: number; event: PortalEvent }[] = [];
+		for await (const item of turn.subscribe({ sinceId: secondDeltaId })) {
+			replayed.push(item);
+			if (item.event.type === 'done') break;
+		}
+		expect(replayed[0].id).toBe(secondDeltaId + 1);
+		expect(replayed.map((x) => x.id)).toEqual(all.slice(secondDeltaId + 1).map((x) => x.id));
+	});
+
+	it('getTurnById returns null when the turn id does not match', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const user = users.ensureLocalUser();
+		const wd = mkdtempSync(join(tmpdir(), 'portal-wd-'));
+		const conv = convs.create(user.id, {
+			title: 't',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+
+		acquireMock.mockResolvedValue(makeFakeSession([{ type: 'done' }]));
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+
+		expect(turnRunner.getTurnById(conv.id, turn.id)).toBeTruthy();
+		expect(turnRunner.getTurnById(conv.id, 'nonexistent')).toBeNull();
+		expect(turnRunner.getTurnById('other-conversation', turn.id)).toBeNull();
 	});
 });

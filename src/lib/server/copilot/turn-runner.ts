@@ -39,19 +39,35 @@ interface PendingEdit {
 	textOffset: number;
 }
 
+// A single event in the turn's transcript, paired with its monotonic id.
+// `id` corresponds to the event's index in `eventLog`, which is what the
+// SSE layer writes as `id:` and what clients send back as `Last-Event-ID`
+// on reconnect.
+export interface IdentifiedEvent {
+	id: number;
+	event: PortalEvent;
+}
+
+export interface SubscribeOptions {
+	signal?: AbortSignal;
+	// If provided, replay only events strictly after this id. Used by SSE
+	// reconnects to skip what the client already received.
+	sinceId?: number;
+}
+
 export interface Turn {
 	id: string;
 	conversationId: string;
 	startedAt: number;
 	endedAt: number | null;
 	status: 'running' | 'complete' | 'interrupted' | 'error';
-	subscribe(signal?: AbortSignal): AsyncIterable<PortalEvent>;
+	subscribe(opts?: SubscribeOptions): AsyncIterable<IdentifiedEvent>;
 	abort(): Promise<void>;
 }
 
 interface InternalTurn extends Turn {
 	eventLog: PortalEvent[];
-	subscribers: Set<AsyncQueue<PortalEvent>>;
+	subscribers: Set<AsyncQueue<IdentifiedEvent>>;
 	finishedPromise: Promise<void>;
 }
 
@@ -76,6 +92,15 @@ export function getTurn(conversationId: string): Turn | null {
 	return turns.get(conversationId) ?? null;
 }
 
+// Look up a turn by its own id (the ulid in `turn.id`), scoped to a
+// conversation. Used by the streaming endpoint, which keys URLs by
+// `turnId` so reconnects always land on the same logical stream even
+// if a new turn replaced the registry slot.
+export function getTurnById(conversationId: string, turnId: string): Turn | null {
+	const t = turns.get(conversationId);
+	return t && t.id === turnId ? t : null;
+}
+
 export interface StartTurnOptions {
 	bridge: BridgeOpenOptions;
 	prompt: string;
@@ -95,8 +120,19 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	const session = await pool.acquire(opts.bridge);
 
 	const eventLog: PortalEvent[] = [];
-	const subscribers = new Set<AsyncQueue<PortalEvent>>();
+	const subscribers = new Set<AsyncQueue<IdentifiedEvent>>();
 	const turnAc = new AbortController();
+
+	// Append an event to the log and fan it out to live subscribers with
+	// its monotonic id (= index in `eventLog`). All paths that need to
+	// surface an event MUST go through here so that ids stay contiguous
+	// and aligned with the replay buffer.
+	function emit(ev: PortalEvent) {
+		const id = eventLog.length;
+		eventLog.push(ev);
+		const wrapped: IdentifiedEvent = { id, event: ev };
+		for (const q of subscribers) q.push(wrapped);
+	}
 
 	const turn: InternalTurn = {
 		id: ulid(),
@@ -107,8 +143,8 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		eventLog,
 		subscribers,
 		finishedPromise: undefined as unknown as Promise<void>,
-		subscribe(signal?: AbortSignal) {
-			return subscribe(turn, signal);
+		subscribe(subOpts?: SubscribeOptions) {
+			return subscribe(turn, subOpts);
 		},
 		async abort() {
 			turnAc.abort();
@@ -138,8 +174,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		// the first `done`) would miss the title update.
 		if (ev.type === 'done') return;
 
-		eventLog.push(ev);
-		for (const q of subscribers) q.push(ev);
+		emit(ev);
 
 		if (ev.type === 'message.start') assistantId = ev.messageId;
 		else if (ev.type === 'message.delta') {
@@ -262,13 +297,11 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 						if (newTitle && newTitle !== conv.title) {
 							const renamed = convs.rename(opts.conversationId, opts.bridge.userId, newTitle);
 							if (renamed) {
-								const ev: PortalEvent = {
+								emit({
 									type: 'conversation.update',
 									conversationId: opts.conversationId,
 									title: newTitle
-								};
-								eventLog.push(ev);
-								for (const q of subscribers) q.push(ev);
+								});
 							}
 						}
 					}
@@ -306,9 +339,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 			// Make sure subscribers see a terminal event even if the SDK
 			// didn't emit `done` (e.g., on abort path).
 			if (!eventLog.some((e) => e.type === 'done')) {
-				const terminal: PortalEvent = { type: 'done' };
-				eventLog.push(terminal);
-				for (const q of subscribers) q.push(terminal);
+				emit({ type: 'done' });
 			}
 			for (const q of subscribers) q.end();
 			subscribers.clear();
@@ -327,18 +358,31 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	return turn;
 }
 
-async function* subscribe(turn: InternalTurn, signal?: AbortSignal): AsyncIterable<PortalEvent> {
-	// Replay buffered events first.
-	for (const ev of turn.eventLog) {
+async function* subscribe(
+	turn: InternalTurn,
+	opts: SubscribeOptions = {}
+): AsyncIterable<IdentifiedEvent> {
+	const { signal, sinceId } = opts;
+
+	// Replay buffered events from (sinceId, end]. `sinceId` is the last id
+	// the client successfully received — we resume from sinceId+1. If
+	// undefined, send everything from the start.
+	// Note: the for-loop reads turn.eventLog.length each iteration, so any
+	// events appended by dispatch between yields are picked up before we
+	// fall through to the live subscription. No gap, no duplicates.
+	const startIdx = sinceId === undefined ? 0 : sinceId + 1;
+	for (let i = startIdx; i < turn.eventLog.length; i++) {
 		if (signal?.aborted) return;
-		yield ev;
+		yield { id: i, event: turn.eventLog[i] };
 	}
 
 	// If the turn already finished, we're done after the replay.
 	if (turn.status !== 'running') return;
 
-	// Subscribe to live events.
-	const q = new AsyncQueue<PortalEvent>();
+	// Subscribe to live events. Adding q to `subscribers` is synchronous
+	// with the loop exit above (no awaits between them), so dispatch can't
+	// slip an event in unobserved.
+	const q = new AsyncQueue<IdentifiedEvent>();
 	turn.subscribers.add(q);
 
 	const onAbort = () => {

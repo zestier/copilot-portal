@@ -52,23 +52,25 @@ a named tunnel. See [deployment.md](deployment.md).
 User types message in chat UI
         │
         ▼
-POST /api/conversations/:id/messages   (JSON body)
+POST /api/conversations/:id/turns   (JSON body)
         │
         ▼
 SvelteKit server endpoint:
   1. Persist user message to SQLite
-  2. Ensure SDK client exists for this conversation (spin up if needed)
-  3. Call sdk.sendMessage(...) and get an async iterator of events
-  4. Return SSE response, streaming normalized events
+  2. Snapshot workdir and start an in-memory Turn
+  3. Return { turnId } synchronously (no streaming on this response)
         │
         ▼
-Client subscribes to SSE on the same endpoint (POST + SSE response).
-Events update Svelte stores; UI re-renders incrementally.
+Client opens EventSource(/api/conversations/:id/turns/:turnId/stream)
+  - Each event arrives with an id: line
+  - On lock/unlock/network blip the browser auto-reconnects
+    with Last-Event-ID, and the server replays from that offset
+  - On 410 Gone (turn grace expired) the client refetches messages
         │
         ▼
-On stream end:
-  - Persist assistant message, tool calls, and any file edits to SQLite
-  - Update conversation `updated_at`
+On turn end (`done` event):
+  - Server has already persisted assistant message, tool calls, edits
+  - Client closes the EventSource
 ```
 
 ## Streaming protocol

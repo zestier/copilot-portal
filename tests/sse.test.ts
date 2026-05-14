@@ -111,4 +111,41 @@ describe('sseResponse', () => {
 		}
 		expect(parseDataFrames(rest)).toEqual([{ type: 'after-heartbeat' }]);
 	});
+
+	it('emits id: lines when extractId/extractData are provided', async () => {
+		async function* events() {
+			yield { id: 0, event: { type: 'message.start' } };
+			yield { id: 1, event: { type: 'message.delta', text: 'hi' } };
+			yield { id: 2, event: { type: 'done' } };
+		}
+		const text = await readAll(
+			sseResponse(events(), {
+				extractId: (x) => x.id,
+				extractData: (x) => x.event
+			})
+		);
+		// Each frame should carry an id: <n> line followed by data: <json>.
+		const frames = text
+			.split('\n\n')
+			.map((f) => f.trim())
+			.filter((f) => f.length > 0 && !f.startsWith(':'));
+		expect(frames).toHaveLength(3);
+		expect(frames[0]).toBe('id: 0\ndata: {"type":"message.start"}');
+		expect(frames[1]).toBe('id: 1\ndata: {"type":"message.delta","text":"hi"}');
+		expect(frames[2]).toBe('id: 2\ndata: {"type":"done"}');
+	});
+
+	it('omits the id line when extractId returns undefined', async () => {
+		async function* events() {
+			yield { id: undefined, event: { type: 'no-id' } };
+		}
+		const text = await readAll(
+			sseResponse(events(), {
+				extractId: (x) => x.id,
+				extractData: (x) => x.event
+			})
+		);
+		expect(text).not.toContain('id: undefined');
+		expect(text).toContain('data: {"type":"no-id"}');
+	});
 });

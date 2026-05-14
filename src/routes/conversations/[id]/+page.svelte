@@ -37,6 +37,7 @@
 			initialMessages={data.messages}
 			initialUsage={data.contextUsage}
 			parent={data.parent}
+			initialActiveTurnId={data.activeTurnId}
 		/>
 	</div>
 	{#if tab === 'files'}

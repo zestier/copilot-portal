@@ -5,7 +5,6 @@ import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
 import * as settings from '$lib/server/db/repos/settings';
 import * as tokens from '$lib/server/db/repos/tokens';
-import { sseResponse } from '$lib/server/sse';
 import { loadConfig } from '$lib/server/config';
 import { startTurn, getTurn } from '$lib/server/copilot/turn-runner';
 import { snapshot as takeSnapshot } from '$lib/server/snapshots';
@@ -16,10 +15,14 @@ import { authorizeConversation } from '$lib/server/conversation-auth';
 const Body = z.object({ content: z.string().min(1).max(64_000) });
 
 /**
- * Start a new turn. The turn runs on the server independently of this
- * request's lifecycle — if the client disconnects (page refresh, etc.) the
- * turn keeps running and its results are persisted. Reconnect via GET to
- * resume streaming.
+ * Start a new turn. Returns the new turn id synchronously. The turn runs
+ * on the server independently of this request — the client opens an
+ * `EventSource` against `/turns/[turnId]/stream` to receive its events.
+ *
+ * Splitting "start" from "stream" lets us use native `EventSource` for
+ * the streaming half (which is GET-only): the browser then handles
+ * reconnect + `Last-Event-ID` replay for free, which is what makes the
+ * phone-lock-and-unlock case "just work" without custom reconnect glue.
  */
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const conv = authorizeConversation(params.id, locals.userId);
@@ -66,34 +69,5 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		}
 	});
 
-	return sseResponse(turn.subscribe(request.signal));
-};
-
-/**
- * Reattach to the in-progress turn for this conversation, replaying any
- * events that already happened. Used by the client to resume streaming
- * after a page refresh. Returns 204 if no turn is active or recent.
- */
-export const GET: RequestHandler = async ({ params, locals, request }) => {
-	const conv = authorizeConversation(params.id, locals.userId);
-
-	const turn = getTurn(conv.id);
-	if (!turn) return new Response(null, { status: 204 });
-
-	return sseResponse(turn.subscribe(request.signal));
-};
-
-/**
- * Explicit user-initiated cancel for the in-progress turn. Unlike merely
- * dropping the SSE connection, this actually aborts the upstream SDK turn.
- */
-export const DELETE: RequestHandler = async ({ params, locals }) => {
-	const conv = authorizeConversation(params.id, locals.userId);
-
-	const turn = getTurn(conv.id);
-	if (!turn || turn.status !== 'running') {
-		return json({ ok: true, aborted: false });
-	}
-	await turn.abort();
-	return json({ ok: true, aborted: true });
+	return json({ turnId: turn.id, userMessageId: userMsg.id });
 };

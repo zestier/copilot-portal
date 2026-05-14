@@ -34,7 +34,7 @@ test('streamed assistant reply (stubbed) appears and persists across reloads', a
 
 test('rejects empty messages on the server', async ({ request }) => {
 	const id = await createConversation(request);
-	const res = await request.post(`/api/conversations/${id}/messages`, {
+	const res = await request.post(`/api/conversations/${id}/turns`, {
 		data: { content: '' }
 	});
 	expect(res.ok()).toBeFalsy();

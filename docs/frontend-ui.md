@@ -128,37 +128,45 @@ releases the conversation's pooled SDK client.
 
 ## Streaming on the client
 
-`$lib/client/sse.ts` exposes:
-
-```ts
-export async function* streamSse<T>(
-  url: string,
-  init: RequestInit & { signal?: AbortSignal },
-): AsyncIterable<T> { ... }
-```
-
-Uses `fetch` + `ReadableStream` (not `EventSource`, because `EventSource`
-doesn't support POST). Parses `data:` lines as JSON, yields typed events.
-
-Chat composer flow:
+Chat streaming uses the browser's native `EventSource`. The architecture
+splits "start a turn" (POST) from "stream a turn" (GET-only SSE) so we
+can hand the entire reconnect lifecycle — including `Last-Event-ID`
+replay on auto-reconnect — to the browser.
 
 ```ts
 async function send(text: string) {
-  const ac = new AbortController();
-  cancelCurrent = () => ac.abort();
-  for await (const ev of streamSse<PortalEvent>(`/api/conversations/${id}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content: text }),
-    signal: ac.signal,
-  })) {
+  const r = await fetch(`/api/conversations/${id}/turns`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ content: text })
+  });
+  const { turnId } = await r.json();
+  const es = new EventSource(`/api/conversations/${id}/turns/${turnId}/stream`);
+  es.onmessage = (msg) => {
+    const ev = JSON.parse(msg.data) as PortalEvent;
     applyEvent(ev);
-  }
+    if (ev.type === 'done') es.close();
+  };
+  es.onerror = () => {
+    // Transient errors keep readyState === CONNECTING and the browser
+    // auto-reconnects. Only CLOSED is terminal (e.g. server 410 Gone
+    // after the finished-turn grace expired during a phone lock).
+    if (es.readyState === EventSource.CLOSED) {
+      void refreshMessages(); // re-pull persisted state so UI catches up
+    }
+  };
 }
 ```
 
-A visible "Stop" button calls `cancelCurrent()`, which closes the SSE; the
-server detects `request.signal.aborted` and aborts the SDK call.
+Each event the server emits carries a monotonic `id:` line; on
+auto-reconnect the browser sends `Last-Event-ID` and the server replays
+strictly from there. No client-side stall watchdog, no manual backoff,
+no `visibilitychange`/`online` choreography — locking and unlocking the
+phone mid-turn just works.
+
+A visible "Stop" button issues `DELETE /api/conversations/[id]/turns/[turnId]`
+to actually cancel the upstream SDK turn (closing the EventSource alone
+would only detach this client).
 
 ## Context-window meter
 

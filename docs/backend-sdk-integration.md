@@ -125,49 +125,68 @@ Tool-call permission flow:
 A user-configurable default policy (deny-all / prompt-all / allow-readonly /
 allow-all) gates the prompt entirely.
 
-## Conversation send endpoint
+## Conversation turn endpoints
 
-`src/routes/api/conversations/[id]/messages/+server.ts`:
+Two endpoints, split so the streaming half is GET-only and usable from
+the browser's native `EventSource`:
 
-```ts
-export async function POST({ params, request, locals }) {
-  const { id } = params;
-  const body = await request.json();
-  const { content } = z.object({ content: z.string().min(1) }).parse(body);
+`POST /api/conversations/[id]/turns` — persists the user message,
+snapshots the workdir, calls `startTurn(...)`, and returns
+`{ turnId, userMessageId }` synchronously. The turn runs server-side
+independent of this request's lifecycle.
 
-  const conv = await repos.conversations.get(id, locals.userId);
-  if (!conv) return error(404);
+`GET /api/conversations/[id]/turns/[turnId]/stream` — opens an SSE
+stream for an in-flight (or recently-finished, within the grace window)
+turn. Each event carries a monotonic `id:` line:
 
-  await repos.messages.append(id, { role: "user", content });
+```
+id: 0
+data: {"type":"message.start","messageId":"...","role":"assistant"}
 
-  const ac = new AbortController();
-  request.signal.addEventListener("abort", () => ac.abort());
+id: 1
+data: {"type":"message.delta","messageId":"...","text":"hi"}
 
-  const bridge = await pool.acquire(id, {
-    conversationId: id,
-    workingDirectory: conv.workdir,
-    model: conv.model,
-    authToken: locals.copilotToken,
-    onPermission: makePermissionHandler(id),
-    signal: ac.signal,
-  });
+...
 
-  return sseResponse(async function* () {
-    let assistant = "";
-    for await (const ev of bridge.send(content)) {
-      yield ev;
-      if (ev.type === "message.delta") assistant += ev.text;
-      // collect tool calls / file edits for persistence
-    }
-    await repos.messages.append(id, { role: "assistant", content: assistant /*, toolCalls, edits */ });
-    yield { type: "done" };
-  });
-}
+id: N
+data: {"type":"done"}
 ```
 
-`sseResponse` is a small helper that wraps an async generator of JSON-able
-events into a `Response` with `Content-Type: text/event-stream` and proper
-flushing.
+On reconnect the browser auto-includes `Last-Event-ID: <n>`; the route
+reads the header and calls `turn.subscribe({ sinceId })` so we replay
+strictly from `n+1`. Replay events come from the in-memory `eventLog`
+that `turn-runner` already maintains.
+
+Returns `410 Gone` if the turn id is unknown — finished turns linger in
+the registry for a 60 s grace window, after which the client must
+refetch persisted messages via `GET /api/conversations/[id]`.
+
+`DELETE /api/conversations/[id]/turns/[turnId]` — explicit cancel.
+Aborts the upstream SDK turn (just closing the EventSource only
+detaches the client).
+
+```ts
+// stream/+server.ts (sketch)
+export const GET: RequestHandler = ({ params, locals, request }) => {
+  const conv = authorizeConversation(params.id, locals.userId);
+  const turn = getTurnById(conv.id, params.turnId);
+  if (!turn) throw error(410, 'Turn no longer available');
+
+  const lastId = request.headers.get('last-event-id');
+  const sinceId = lastId !== null ? Number(lastId) : undefined;
+
+  return sseResponse(turn.subscribe({ signal: request.signal, sinceId }), {
+    extractId: (item) => item.id,
+    extractData: (item) => item.event
+  });
+};
+```
+
+`sseResponse` is a small helper that wraps an async iterable of
+JSON-able events into a `Response` with `Content-Type: text/event-stream`
+and a 15 s heartbeat. The optional `extractId` / `extractData`
+callbacks let id-tagged streams (chat) opt into per-event `id:` lines
+while plain streams (redeploy) get the default `data:`-only encoding.
 
 ## Auth token plumbing to the SDK
 
