@@ -93,7 +93,7 @@ the suggested unified convention.
   - `src/lib/server/copilot/bridge-stub.ts`
   - `src/lib/server/db/index.ts`
 
-- [ ] **12. Drop redundant `locals.userId` checks in API handlers.** The
+- [x] **12. Drop redundant `locals.userId` checks in API handlers.** The
       hooks gate already 401s `/api/*` for unauthenticated requests; either
       remove the per-handler checks (and type `locals.userId` as `string`)
       or align the hooks error shape with `error(401)`'s JSON body.

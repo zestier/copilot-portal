@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { loadConfig } from '$lib/server/config';
 import { log } from '$lib/server/log';
+import { requireUserId } from '$lib/server/auth/require';
 
 type Step = { label: string; cmd: string };
 
@@ -27,7 +28,7 @@ const Body = z.object({ pull: z.boolean().optional().default(true) });
 let inFlight = false;
 
 export const POST: RequestHandler = async ({ request, locals }) => {
-	if (!locals.userId) throw error(401);
+	const userId = requireUserId(locals);
 	const cfg = loadConfig();
 	if (!cfg.ENABLE_REDEPLOY) {
 		throw error(403, 'Redeploy disabled. Set ENABLE_REDEPLOY=1 and run via `pnpm run serve`.');
@@ -44,7 +45,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const steps: Step[] = pull ? [...PULL_STEPS, ...BUILD_STEPS] : BUILD_STEPS;
 	inFlight = true;
-	log.info('redeploy.start', { userId: locals.userId, pull });
+	log.info('redeploy.start', { userId, pull });
 
 	const encoder = new TextEncoder();
 	const stream = new ReadableStream<Uint8Array>({

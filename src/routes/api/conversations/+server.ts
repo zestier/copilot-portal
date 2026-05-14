@@ -6,11 +6,12 @@ import * as settings from '$lib/server/db/repos/settings';
 import { loadConfig } from '$lib/server/config';
 import { defaultWorkdirFor, resolveAndValidate } from '$lib/server/workdir';
 import { parseBody } from '$lib/server/validate';
+import { requireUserId } from '$lib/server/auth/require';
 
 export const GET: RequestHandler = ({ locals, url }) => {
-	if (!locals.userId) throw error(401);
+	const userId = requireUserId(locals);
 	const includeArchived = url.searchParams.get('archived') === '1';
-	return json({ conversations: convs.list(locals.userId, { includeArchived }) });
+	return json({ conversations: convs.list(userId, { includeArchived }) });
 };
 
 const CreateBody = z.object({
@@ -20,15 +21,15 @@ const CreateBody = z.object({
 });
 
 export const POST: RequestHandler = async ({ locals, request }) => {
-	if (!locals.userId) throw error(401);
+	const userId = requireUserId(locals);
 	const body = await parseBody(request, CreateBody);
 	const cfg = loadConfig();
-	const userSettings = settings.getOrDefault(locals.userId);
+	const userSettings = settings.getOrDefault(userId);
 	const model = body.model ?? userSettings.defaultModel ?? cfg.DEFAULT_MODEL;
 
 	// First create the row so we can use its id for the default workdir.
 	const placeholderWorkdir = body.workdir ?? '';
-	const conv = convs.create(locals.userId, {
+	const conv = convs.create(userId, {
 		title: body.title,
 		workdir: placeholderWorkdir,
 		model
@@ -38,7 +39,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	if (body.workdir) {
 		const res = resolveAndValidate(body.workdir);
 		if (!res.ok) {
-			convs.remove(conv.id, locals.userId);
+			convs.remove(conv.id, userId);
 			throw error(400, res.reason);
 		}
 		workdir = res.path;

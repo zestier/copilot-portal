@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { forkAtMessage, ForkRejected } from '$lib/server/fork';
 import { parseBody } from '$lib/server/validate';
+import { requireUserId } from '$lib/server/auth/require';
 
 // `content` present => edit a user message with the new text.
 // `content` absent  => retry from an assistant message (uses post snapshot).
@@ -30,7 +31,7 @@ const REJECT_STATUS: Record<string, number> = {
  * navigate to it to continue.
  */
 export const POST: RequestHandler = async ({ params, locals, request }) => {
-	if (!locals.userId) throw error(401);
+	const userId = requireUserId(locals);
 	const sourceId = params.id!;
 	const messageId = params.messageId!;
 	// Accept an empty body for retry-from-assistant.
@@ -38,7 +39,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 	try {
 		const { conversation } = await forkAtMessage({
-			userId: locals.userId,
+			userId,
 			sourceConversationId: sourceId,
 			messageId,
 			newContent: parsed.content ?? null

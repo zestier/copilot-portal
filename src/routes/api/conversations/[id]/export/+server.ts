@@ -2,12 +2,13 @@ import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
+import { requireUserId } from '$lib/server/auth/require';
 
 // GET /api/conversations/:id/export — emits a single markdown file
 // summarizing the conversation.
 export const GET: RequestHandler = ({ params, locals }) => {
-	if (!locals.userId) throw error(401);
-	const conv = convs.get(params.id!, locals.userId);
+	const userId = requireUserId(locals);
+	const conv = convs.get(params.id!, userId);
 	if (!conv) throw error(404);
 	const msgs = messages.listByConversation(conv.id);
 

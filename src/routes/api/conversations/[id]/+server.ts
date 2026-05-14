@@ -5,10 +5,11 @@ import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
 import * as pool from '$lib/server/copilot/pool';
 import { parseBody } from '$lib/server/validate';
+import { requireUserId } from '$lib/server/auth/require';
 
 export const GET: RequestHandler = ({ params, locals }) => {
-	if (!locals.userId) throw error(401);
-	const conv = convs.get(params.id!, locals.userId);
+	const userId = requireUserId(locals);
+	const conv = convs.get(params.id!, userId);
 	if (!conv) throw error(404);
 	return json({
 		conversation: conv,
@@ -26,30 +27,30 @@ const PatchBody = z
 	});
 
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {
-	if (!locals.userId) throw error(401);
+	const userId = requireUserId(locals);
 	const body = await parseBody(request, PatchBody);
 	const id = params.id!;
-	const conv = convs.get(id, locals.userId);
+	const conv = convs.get(id, userId);
 	if (!conv) throw error(404);
 
 	if (body.title !== undefined) {
-		convs.rename(id, locals.userId, body.title);
+		convs.rename(id, userId, body.title);
 	}
 	if (body.archived !== undefined) {
 		if (body.archived) {
-			convs.archive(id, locals.userId);
+			convs.archive(id, userId);
 			await pool.release(id);
 		} else {
-			convs.unarchive(id, locals.userId);
+			convs.unarchive(id, userId);
 		}
 	}
 	return json({ ok: true });
 };
 
 export const DELETE: RequestHandler = async ({ params, locals }) => {
-	if (!locals.userId) throw error(401);
+	const userId = requireUserId(locals);
 	await pool.release(params.id!);
-	const ok = convs.remove(params.id!, locals.userId);
+	const ok = convs.remove(params.id!, userId);
 	if (!ok) throw error(404);
 	return json({ ok: true });
 };
