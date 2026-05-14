@@ -77,16 +77,18 @@ clicking the path copies it to clipboard.
 Read-only, git-aware file browser rooted at the **server process's working
 directory** (resolved to its realpath at startup). The conversation id in
 the API URL is used only for ownership/auth; every conversation in a given
-deployment browses the same workspace root. Surfaced as a **Files** tab on
-`/conversations/[id]` (sits next to **Chat**). Two-pane layout: a left rail
-that switches between **Files** (hierarchical tree with per-entry git
-status badges and roll-ups to ancestor directories, plus toggles for hidden
-/ ignored files) and **Commits** (branch / HEAD header with ahead/behind,
-plus the recent commit log with "Load more"). The right pane renders either
-the selected file (text content + binary placeholder, capped at 1 MiB) with
-a **Content** / **Diff** toggle, or a selected commit's detail with its
-file list and per-file diff. Mobile collapses both grids into stacked
-single-pane rows.
+deployment browses the same workspace root. Surfaced as three top-level
+tabs on `/conversations/[id]` — **Changes**, **Files**, **Commits** —
+sitting alongside **Chat**. The component is driven by a `pane` prop (one
+of those three values) and shares a two-pane layout: a left rail whose
+contents depend on the active tab (changed-file list, hierarchical file
+tree with per-entry git status badges and roll-ups plus hidden/ignored
+toggles, or recent commit log with branch / ahead-behind header and "Load
+more"), and a right pane that renders either the selected file (text
+content + binary placeholder, capped at 1 MiB) with a **Content** /
+**Diff** toggle, or a selected commit's detail with its file list and
+per-file diff. The shared `GitStatusHeader` sits above the left rail on
+all three tabs. Mobile collapses both grids into stacked single-pane rows.
 
 Backed by:
 

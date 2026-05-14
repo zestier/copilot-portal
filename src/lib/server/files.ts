@@ -18,6 +18,27 @@ import {
 import { readFile } from 'node:fs/promises';
 import { resolve, join, relative, sep, isAbsolute, normalize } from 'node:path';
 
+/**
+ * The root the file browser operates on. We use the server process's working
+ * directory at startup, resolved to its realpath. This is independent of any
+ * per-conversation workdir (which exists for the SDK's working set isolation).
+ */
+let cachedWorkspaceRoot: string | null = null;
+export function workspaceRoot(): string {
+	if (cachedWorkspaceRoot !== null) return cachedWorkspaceRoot;
+	try {
+		cachedWorkspaceRoot = realpathSync(process.cwd());
+	} catch {
+		cachedWorkspaceRoot = resolve(process.cwd());
+	}
+	return cachedWorkspaceRoot;
+}
+
+/** Test-only: reset the cached workspace root. */
+export function resetWorkspaceRootForTests() {
+	cachedWorkspaceRoot = null;
+}
+
 export interface DirEntry {
 	name: string;
 	relPath: string;

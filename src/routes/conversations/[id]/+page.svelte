@@ -4,7 +4,7 @@
 	import type { PageData } from './$types';
 	let { data }: { data: PageData } = $props();
 
-	type Tab = 'chat' | 'files';
+	type Tab = 'chat' | 'changes' | 'files' | 'commits';
 	let tab = $state<Tab>('chat');
 </script>
 
@@ -24,11 +24,27 @@
 		</button>
 		<button
 			role="tab"
+			aria-selected={tab === 'changes'}
+			class:active={tab === 'changes'}
+			onclick={() => (tab = 'changes')}
+		>
+			Changes
+		</button>
+		<button
+			role="tab"
 			aria-selected={tab === 'files'}
 			class:active={tab === 'files'}
 			onclick={() => (tab = 'files')}
 		>
 			Files
+		</button>
+		<button
+			role="tab"
+			aria-selected={tab === 'commits'}
+			class:active={tab === 'commits'}
+			onclick={() => (tab = 'commits')}
+		>
+			Commits
 		</button>
 	</div>
 	<div class="tab-body" class:hidden={tab !== 'chat'}>
@@ -40,9 +56,9 @@
 			initialActiveTurnId={data.activeTurnId}
 		/>
 	</div>
-	{#if tab === 'files'}
+	{#if tab !== 'chat'}
 		<div class="tab-body">
-			<FileBrowser conversationId={data.conversation.id} />
+			<FileBrowser conversationId={data.conversation.id} pane={tab} />
 		</div>
 	{/if}
 </div>

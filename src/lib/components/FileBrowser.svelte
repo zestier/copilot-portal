@@ -14,12 +14,11 @@
 	} from '$lib/client/file-browser';
 	import { STATUS_LABEL, STATUS_COLOR } from '$lib/client/file-browser';
 
-	let { conversationId }: { conversationId: string } = $props();
+	type Pane = 'changes' | 'files' | 'commits';
+	let { conversationId, pane = 'changes' }: { conversationId: string; pane?: Pane } = $props();
 
 	type ViewMode = 'content' | 'diff';
-	type Pane = 'changes' | 'files' | 'commits';
 
-	let pane = $state<Pane>('changes');
 	let viewMode = $state<ViewMode>('content');
 	let selectedPath = $state<string | null>(null);
 	let selectedStatus = $state<ChangeStatus | null>(null);
@@ -157,32 +156,6 @@
 <div class="browser">
 	<div class="left">
 		<GitStatusHeader {conversationId} refreshToken={gitRefreshToken} />
-		<div class="pane-tabs" role="tablist">
-			<button
-				role="tab"
-				aria-selected={pane === 'changes'}
-				class:active={pane === 'changes'}
-				onclick={() => (pane = 'changes')}
-			>
-				Changes
-			</button>
-			<button
-				role="tab"
-				aria-selected={pane === 'files'}
-				class:active={pane === 'files'}
-				onclick={() => (pane = 'files')}
-			>
-				All files
-			</button>
-			<button
-				role="tab"
-				aria-selected={pane === 'commits'}
-				class:active={pane === 'commits'}
-				onclick={() => (pane = 'commits')}
-			>
-				Commits
-			</button>
-		</div>
 		{#if pane === 'files'}
 			<div class="pane-body">
 				<FileTree
@@ -353,15 +326,12 @@
 		min-height: 0;
 		min-width: 0;
 	}
-	.pane-tabs,
 	.view-tabs {
 		display: flex;
 		border-bottom: 1px solid var(--border);
 		background: var(--surface);
 	}
-	.pane-tabs button,
 	.view-tabs button {
-		flex: 1;
 		background: transparent;
 		color: var(--text-muted);
 		border: 0;
@@ -369,16 +339,12 @@
 		padding: var(--space-2) var(--space-3);
 		cursor: pointer;
 		font: inherit;
-	}
-	.view-tabs button {
 		flex: 0 0 auto;
 	}
-	.pane-tabs button.active,
 	.view-tabs button.active {
 		color: var(--text);
 		border-bottom-color: var(--accent);
 	}
-	.pane-tabs button:disabled,
 	.view-tabs button:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
