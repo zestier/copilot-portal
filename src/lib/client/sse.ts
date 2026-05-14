@@ -1,10 +1,22 @@
 // Stream POST + SSE: yields parsed JSON events from a `data:` SSE response.
+//
+// Optional callbacks:
+//   onStatus   — invoked once with the HTTP status code after the response
+//                headers arrive (lets callers distinguish e.g. 200 vs 204).
+//   onActivity — invoked every time a chunk is read from the network,
+//                including heartbeat comments. Useful for stall detection
+//                since heartbeats are otherwise swallowed silently.
 
-export async function* streamSse<T>(
-	url: string,
-	init: RequestInit & { signal?: AbortSignal } = {}
-): AsyncIterable<T> {
-	const res = await fetch(url, init);
+export interface StreamSseInit extends RequestInit {
+	signal?: AbortSignal;
+	onStatus?: (status: number) => void;
+	onActivity?: () => void;
+}
+
+export async function* streamSse<T>(url: string, init: StreamSseInit = {}): AsyncIterable<T> {
+	const { onStatus, onActivity, ...fetchInit } = init;
+	const res = await fetch(url, fetchInit);
+	onStatus?.(res.status);
 	if (!res.ok) {
 		throw new Error(`SSE fetch failed: ${res.status}`);
 	}
@@ -17,6 +29,7 @@ export async function* streamSse<T>(
 		while (true) {
 			const { value, done } = await reader.read();
 			if (done) break;
+			onActivity?.();
 			buf += decoder.decode(value, { stream: true });
 			let idx: number;
 			while ((idx = buf.indexOf('\n\n')) !== -1) {

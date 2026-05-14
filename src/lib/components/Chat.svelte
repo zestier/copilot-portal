@@ -10,6 +10,7 @@
 		PermissionRequestView
 	} from '$lib/types';
 	import { streamSse } from '$lib/client/sse';
+	import { runResumableStream } from '$lib/client/resumable-stream';
 	import Message_ from './Message.svelte';
 	import PermissionPrompt from './PermissionPrompt.svelte';
 	import ContextMeter from './ContextMeter.svelte';
@@ -51,7 +52,12 @@
 	let composer = $state('');
 	let streaming = $state(false);
 	let pendingPermission = $state<PermissionRequestView | null>(null);
-	let abortCurrent: (() => void) | null = null;
+	// Distinguishes a user-initiated stop (don't auto-reconnect) from a
+	// network/proxy-induced abort triggered by the stall watchdog.
+	let userAborted = false;
+	// AbortController for the page-lifecycle (external) abort, used so that
+	// the visibilitychange handler can nudge a hung stream.
+	let externalAc: AbortController | null = null;
 	let scrollEl: HTMLDivElement | undefined;
 	let textareaEl: HTMLTextAreaElement | undefined;
 	// Sticky-scroll: only auto-scroll if the user is pinned to the bottom.
@@ -108,40 +114,68 @@
 		hasNewBelow = false;
 	}
 
-	async function consumeStream(
-		url: string,
-		init: { method: string; headers?: Record<string, string>; body?: string; signal: AbortSignal }
-	) {
-		try {
-			for await (const ev of streamSse<PortalEvent>(url, init)) {
-				applyEvent(ev);
-				if (ev.type === 'done') break;
-			}
-		} catch (e) {
-			if (init.signal.aborted) return;
-			applyEvent({
-				type: 'error',
-				code: 'network',
-				message: e instanceof Error ? e.message : String(e)
-			});
-		}
+	async function runStream(initial: {
+		method: string;
+		headers?: Record<string, string>;
+		body?: string;
+	}) {
+		externalAc?.abort();
+		externalAc = new AbortController();
+		const ac = externalAc;
+		await runResumableStream<PortalEvent>({
+			initial,
+			externalSignal: ac.signal,
+			isDone: (ev) => ev.type === 'done',
+			isUserAborted: () => userAborted,
+			onEvent: applyEvent,
+			onNetworkError: (e) => {
+				applyEvent({
+					type: 'error',
+					code: 'network',
+					message: e instanceof Error ? e.message : String(e)
+				});
+			},
+			connect: (req, args) =>
+				streamSse<PortalEvent>(`/api/conversations/${conversation.id}/messages`, {
+					method: req.method,
+					headers: req.headers,
+					body: req.body,
+					signal: args.signal,
+					onStatus: args.onStatus,
+					onActivity: args.onActivity
+				})
+		});
 	}
 
 	async function resumeIfActive() {
 		if (streaming) return;
-		const ac = new AbortController();
-		abortCurrent = () => ac.abort();
+		userAborted = false;
 		streaming = true;
 		try {
-			await consumeStream(`/api/conversations/${conversation.id}/messages`, {
-				method: 'GET',
-				signal: ac.signal
-			});
+			await runStream({ method: 'GET' });
 		} finally {
 			streaming = false;
-			abortCurrent = null;
 		}
 	}
+
+	// When the tab is hidden, browsers may freeze the SSE fetch reader; on
+	// return to visibility, kick the connection so we resume cleanly.
+	$effect(() => {
+		if (typeof document === 'undefined') return;
+		const onVisible = () => {
+			if (document.visibilityState !== 'visible') return;
+			if (streaming) {
+				// Force a reconnect by aborting the in-flight request; the
+				// resumable loop will reattach via GET on the next iteration.
+				externalAc?.abort();
+				externalAc = new AbortController();
+			} else {
+				void resumeIfActive();
+			}
+		};
+		document.addEventListener('visibilitychange', onVisible);
+		return () => document.removeEventListener('visibilitychange', onVisible);
+	});
 
 	function applyEvent(ev: PortalEvent) {
 		switch (ev.type) {
@@ -312,18 +346,15 @@
 			createdAt: Date.now()
 		});
 		scrollToBottom({ force: true });
-		const ac = new AbortController();
-		abortCurrent = () => ac.abort();
+		userAborted = false;
 		try {
-			await consumeStream(`/api/conversations/${conversation.id}/messages`, {
+			await runStream({
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ content: text }),
-				signal: ac.signal
+				body: JSON.stringify({ content: text })
 			});
 		} finally {
 			streaming = false;
-			abortCurrent = null;
 		}
 	}
 
@@ -345,6 +376,7 @@
 	async function stop() {
 		// Tell the server to actually cancel the turn (just aborting the
 		// SSE fetch would only detach this client; the turn would keep going).
+		userAborted = true;
 		try {
 			await fetch(`/api/conversations/${conversation.id}/messages`, {
 				method: 'DELETE'
@@ -352,7 +384,7 @@
 		} catch {
 			/* ignore */
 		}
-		abortCurrent?.();
+		externalAc?.abort();
 	}
 
 	$effect(() => {
