@@ -4,6 +4,7 @@ import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
 import * as pool from '$lib/server/copilot/pool';
+import { parseBody } from '$lib/server/validate';
 
 export const GET: RequestHandler = ({ params, locals }) => {
 	if (!locals.userId) throw error(401);
@@ -26,7 +27,7 @@ const PatchBody = z
 
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.userId) throw error(401);
-	const body = PatchBody.parse(await request.json());
+	const body = await parseBody(request, PatchBody);
 	const id = params.id!;
 	const conv = convs.get(id, locals.userId);
 	if (!conv) throw error(404);

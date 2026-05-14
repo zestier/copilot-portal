@@ -5,6 +5,7 @@ import * as convs from '$lib/server/db/repos/conversations';
 import * as settings from '$lib/server/db/repos/settings';
 import { loadConfig } from '$lib/server/config';
 import { defaultWorkdirFor, resolveAndValidate } from '$lib/server/workdir';
+import { parseBody } from '$lib/server/validate';
 
 export const GET: RequestHandler = ({ locals, url }) => {
 	if (!locals.userId) throw error(401);
@@ -20,7 +21,7 @@ const CreateBody = z.object({
 
 export const POST: RequestHandler = async ({ locals, request }) => {
 	if (!locals.userId) throw error(401);
-	const body = CreateBody.parse(await request.json().catch(() => ({})));
+	const body = await parseBody(request, CreateBody);
 	const cfg = loadConfig();
 	const userSettings = settings.getOrDefault(locals.userId);
 	const model = body.model ?? userSettings.defaultModel ?? cfg.DEFAULT_MODEL;

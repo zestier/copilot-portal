@@ -37,7 +37,7 @@ the suggested unified convention.
   - `src/routes/auth/callback/+server.ts` (plain-text 400/403/502)
   - `src/routes/login/+page.server.ts` vs `src/routes/settings/+page.server.ts`
 
-- [ ] **4. Convert Zod errors to 400s.** Replace `Body.parse(...)` with
+- [x] **4. Convert Zod errors to 400s.** Replace `Body.parse(...)` with
       `safeParse` (or a wrapper that throws `error(400, …)`) in every API
       route. Currently all bad payloads surface as 500 "Internal server error".
   - `src/routes/api/conversations/+server.ts`

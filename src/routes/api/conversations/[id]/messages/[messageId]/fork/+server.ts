@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { forkAtMessage, ForkRejected } from '$lib/server/fork';
+import { parseBody } from '$lib/server/validate';
 
 // `content` present => edit a user message with the new text.
 // `content` absent  => retry from an assistant message (uses post snapshot).
@@ -33,8 +34,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const sourceId = params.id!;
 	const messageId = params.messageId!;
 	// Accept an empty body for retry-from-assistant.
-	const raw = await request.text();
-	const parsed = raw ? Body.parse(JSON.parse(raw)) : {};
+	const parsed = await parseBody(request, Body, { allowEmpty: true });
 
 	try {
 		const { conversation } = await forkAtMessage({

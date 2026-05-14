@@ -10,6 +10,7 @@ import { loadConfig } from '$lib/server/config';
 import { startTurn, getTurn } from '$lib/server/copilot/turn-runner';
 import { snapshot as takeSnapshot } from '$lib/server/snapshots';
 import { log } from '$lib/server/log';
+import { parseBody } from '$lib/server/validate';
 
 const Body = z.object({ content: z.string().min(1).max(64_000) });
 
@@ -24,7 +25,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const conv = convs.get(params.id!, locals.userId);
 	if (!conv) throw error(404);
 
-	const { content } = Body.parse(await request.json());
+	const { content } = await parseBody(request, Body);
 
 	const existing = getTurn(conv.id);
 	if (existing && existing.status === 'running') {
