@@ -37,7 +37,7 @@
 {#if isLoginPage || !data.user}
 	{@render children()}
 {:else}
-	<div class="layout" class:collapsed={!sidebarOpen}>
+	<div class="layout" class:collapsed={!sidebarOpen} class:preload={!hydrated}>
 		<button
 			class="hamburger"
 			aria-label="Toggle sidebar"
@@ -86,6 +86,15 @@
 		flex-direction: column;
 		min-width: 0;
 	}
+	.layout.preload,
+	.layout.preload .sidebar {
+		transition: none;
+	}
+	/* Pre-hydration: force collapsed visuals if the inline script flagged the
+	   sidebar as closed, so the SSR markup (which assumes open) doesn't flash. */
+	:global(html[data-sidebar='closed']) .layout.preload {
+		grid-template-columns: 0 1fr;
+	}
 	.hamburger {
 		position: fixed;
 		top: 0.5rem;
@@ -116,6 +125,9 @@
 		}
 		.sidebar.open {
 			transform: translateX(0);
+		}
+		:global(html[data-sidebar='closed']) .layout.preload .sidebar {
+			transform: translateX(-100%);
 		}
 	}
 </style>
