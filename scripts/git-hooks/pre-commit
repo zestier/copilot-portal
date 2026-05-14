@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Run the full verification suite before allowing a commit. Mirrors what
+# the redeploy button executes, so anything that passes here is safe to
+# ship. If this becomes too slow, fix the tests — don't add skips.
+set -eu
+
+# Allow an explicit escape hatch for emergencies (e.g. mid-rebase fixups).
+if [ "${SKIP_VERIFY:-0}" = "1" ]; then
+	echo "[pre-commit] SKIP_VERIFY=1 — skipping pnpm run verify"
+	exit 0
+fi
+
+echo "[pre-commit] pnpm run verify"
+exec pnpm run verify

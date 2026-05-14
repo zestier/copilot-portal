@@ -36,18 +36,24 @@ See [docs/deployment.md](docs/deployment.md) for the OAuth + tunnel setup.
 
 ## Scripts
 
-| Script              | Purpose                                        |
-| ------------------- | ---------------------------------------------- |
-| `pnpm run dev`      | Vite dev server with HMR.                      |
-| `pnpm run build`    | Production build into `build/`.                |
-| `pnpm start`        | Run the production build (`node build`).       |
-| `pnpm run check`    | `svelte-check` + TS.                           |
-| `pnpm run lint`     | ESLint + Prettier check.                       |
-| `pnpm test`         | Vitest unit tests.                             |
-| `pnpm run test:e2e` | Build + Playwright e2e (uses stubbed Copilot). |
+| Script              | Purpose                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------- |
+| `pnpm run dev`      | Vite dev server with HMR.                                                             |
+| `pnpm run build`    | Production build into `build/`.                                                       |
+| `pnpm start`        | Run the production build (`node build`).                                              |
+| `pnpm run check`    | `svelte-check` + TS.                                                                  |
+| `pnpm run lint`     | ESLint + Prettier check.                                                              |
+| `pnpm test`         | Vitest unit tests.                                                                    |
+| `pnpm run test:e2e` | Build + Playwright e2e (uses stubbed Copilot).                                        |
+| `pnpm run verify`   | Lint + check + unit + e2e. Same gate the redeploy button and the pre-commit hook run. |
 
 This project uses **pnpm** (declared via `packageManager` in `package.json`).
 Use `corepack enable` once to make pnpm available without a global install.
+
+`pnpm install` runs `scripts/install-git-hooks.mjs`, which points `git`
+at `scripts/git-hooks/` (containing a `pre-commit` that runs
+`pnpm run verify`). To bypass it for an emergency commit:
+`SKIP_VERIFY=1 git commit ...`.
 
 ## Goals
 

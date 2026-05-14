@@ -7,22 +7,20 @@ import { log } from '$lib/server/log';
 
 type Step = { label: string; cmd: string };
 
-// `pnpm run build` is the last step. The supervisor (scripts/serve.mjs)
+// `pnpm run verify` (the last build step) ends with `pnpm run test:e2e`,
+// which in turn runs `pnpm run build`. The supervisor (scripts/serve.mjs)
 // runs the server out of its own `build.live/` copy and only refreshes it
-// between restarts, so this build can overwrite `build/` freely without
-// thrashing the chunks the live process is lazy-loading. On success we
-// exit and the supervisor relaunches on the refreshed code; on failure
-// the live tree is untouched.
+// between restarts, so the build inside verify can overwrite `build/`
+// freely without thrashing the chunks the live process is lazy-loading.
+// On success we exit and the supervisor relaunches on the refreshed code;
+// on failure (lint, type-check, unit tests, build, or e2e) the live tree
+// is untouched.
 const PULL_STEPS: Step[] = [
 	{ label: 'git fetch', cmd: 'git fetch --all --prune' },
 	{ label: 'git pull', cmd: 'git pull --ff-only' },
 	{ label: 'pnpm install', cmd: 'pnpm install --frozen-lockfile' }
 ];
-const BUILD_STEPS: Step[] = [
-	{ label: 'pnpm run check', cmd: 'pnpm run check' },
-	{ label: 'pnpm test', cmd: 'pnpm test -- --run' },
-	{ label: 'pnpm run build', cmd: 'pnpm run build' }
-];
+const BUILD_STEPS: Step[] = [{ label: 'pnpm run verify', cmd: 'pnpm run verify' }];
 
 const Body = z.object({ pull: z.boolean().optional().default(true) });
 

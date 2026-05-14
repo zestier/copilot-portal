@@ -17,7 +17,9 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:e2e": "pnpm run build && playwright test",
-		"test:e2e:ui": "pnpm run build && playwright test --ui"
+		"test:e2e:ui": "pnpm run build && playwright test --ui",
+		"verify": "pnpm run lint && pnpm run check && pnpm test -- --run && pnpm run test:e2e",
+		"prepare": "node scripts/install-git-hooks.mjs"
 	},
 	"dependencies": {
 		"@github/copilot-sdk": "^0.3.0",
