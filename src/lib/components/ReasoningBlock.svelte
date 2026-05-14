@@ -152,10 +152,7 @@
 	.body pre {
 		margin: 0;
 		padding: 0.4rem 0.5rem;
-		background: var(--surface-2);
-		border-radius: 6px;
-		font-family: var(--mono);
-		font-size: 0.92em;
+		font-size: var(--code-fs);
 		white-space: pre-wrap;
 		word-break: break-word;
 		color: var(--text-muted);

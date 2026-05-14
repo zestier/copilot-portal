@@ -1,18 +1,82 @@
-/* Global styles. CSS variables drive the palette; toggling [data-theme]
-   on <html> switches them. */
+/* Global styles. CSS variables drive the palette and design tokens;
+   toggling [data-theme] on <html> switches them.
+
+   Token groups:
+     - palette / surfaces: --bg, --surface, --surface-2, --border, --text*
+     - semantic colors:    --accent, --danger, --success, --warning (+ -text/-bg)
+     - spacing:            --space-1..6 (4px base)
+     - type:               --fs-xs..xl (rem-based)
+     - radii:              --radius-sm/md/lg/pill
+     - elevation:          --shadow-1/2
+     - focus:              --focus-ring
+     - code surface:       --code-bg, --code-border, --code-fs
+   Breakpoints (canonical, document only — CSS vars don't work in @media):
+     --bp-sm: 480px, --bp-md: 768px, --bp-lg: 1100px
+*/
 
 :root {
+	/* palette — dark (default) */
 	--bg: #0d1117;
 	--surface: #161b22;
 	--surface-2: #1c2128;
 	--border: #30363d;
 	--text: #e6edf3;
 	--text-muted: #9da7b3;
+
+	/* semantic */
 	--accent: #1f6feb;
 	--accent-text: #ffffff;
 	--danger: #f85149;
+	--danger-text: #ffffff;
 	--success: #3fb950;
+	--success-text: #04260f;
 	--warning: #d29922;
+	--warning-text: #1a1300;
+
+	/* derived semantic backgrounds (tinted surfaces for callouts/states) */
+	--accent-bg: color-mix(in srgb, var(--accent) 14%, var(--surface));
+	--danger-bg: color-mix(in srgb, var(--danger) 14%, var(--surface));
+	--success-bg: color-mix(in srgb, var(--success) 14%, var(--surface));
+	--warning-bg: color-mix(in srgb, var(--warning) 12%, var(--surface));
+
+	/* hover/active surface tints */
+	--surface-hover: color-mix(in srgb, var(--text) 6%, var(--surface));
+	--surface-active: color-mix(in srgb, var(--text) 10%, var(--surface));
+
+	/* spacing scale (4px base, geometric-ish) */
+	--space-1: 0.25rem;
+	--space-2: 0.5rem;
+	--space-3: 0.75rem;
+	--space-4: 1rem;
+	--space-5: 1.5rem;
+	--space-6: 2rem;
+
+	/* type scale (rem-based — root-relative, predictable) */
+	--fs-xs: 0.75rem;
+	--fs-sm: 0.8125rem;
+	--fs-md: 0.875rem;
+	--fs-lg: 1rem;
+	--fs-xl: 1.125rem;
+
+	/* radii */
+	--radius-sm: 4px;
+	--radius-md: 6px;
+	--radius-lg: 10px;
+	--radius-pill: 999px;
+
+	/* elevation */
+	--shadow-1: 0 1px 2px rgb(0 0 0 / 0.18);
+	--shadow-2: 0 4px 14px rgb(0 0 0 / 0.28);
+
+	/* focus ring (use as box-shadow on inputs / interactive surfaces) */
+	--focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+
+	/* code surface */
+	--code-bg: var(--surface-2);
+	--code-border: var(--border);
+	--code-fs: 0.8125rem;
+
+	/* fonts */
 	--font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 	--mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -24,6 +88,18 @@
 	--border: #d0d7de;
 	--text: #1f2328;
 	--text-muted: #57606a;
+
+	--accent: #0969da;
+	--accent-text: #ffffff;
+	--danger: #cf222e;
+	--danger-text: #ffffff;
+	--success: #1a7f37;
+	--success-text: #ffffff;
+	--warning: #9a6700;
+	--warning-text: #ffffff;
+
+	--shadow-1: 0 1px 2px rgb(31 35 40 / 0.08);
+	--shadow-2: 0 4px 14px rgb(31 35 40 / 0.12);
 }
 
 * {
@@ -61,24 +137,25 @@ code {
 }
 
 pre {
-	background: var(--surface-2);
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	padding: 0.75rem;
+	background: var(--code-bg);
+	border: 1px solid var(--code-border);
+	border-radius: var(--radius-md);
+	padding: var(--space-3);
 	overflow-x: auto;
-	font-size: 0.85em;
+	font-size: var(--code-fs);
 }
 
 code {
-	background: var(--surface-2);
+	background: var(--code-bg);
 	padding: 0.1rem 0.3rem;
-	border-radius: 4px;
-	font-size: 0.9em;
+	border-radius: var(--radius-sm);
+	font-size: 0.92em;
 }
 
 pre code {
 	background: transparent;
 	padding: 0;
+	font-size: inherit;
 }
 
 input,
@@ -88,33 +165,86 @@ select {
 	background: var(--surface);
 	color: var(--text);
 	border: 1px solid var(--border);
-	border-radius: 6px;
-	padding: 0.5rem 0.6rem;
+	border-radius: var(--radius-md);
+	padding: var(--space-2) 0.6rem;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+	outline: none;
+	border-color: var(--accent);
+	box-shadow: var(--focus-ring);
 }
 
 textarea {
 	resize: vertical;
 }
 
+/* Global focus ring for any interactive element that hasn't styled its own. */
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+	border-radius: var(--radius-sm);
+}
+
 .btn {
-	display: inline-block;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-1);
 	padding: 0.45rem 0.85rem;
-	border-radius: 6px;
+	border-radius: var(--radius-md);
 	border: 1px solid var(--border);
 	background: var(--surface);
 	color: var(--text);
 	cursor: pointer;
+	font-size: var(--fs-md);
+	line-height: 1.2;
+	transition:
+		background 0.12s ease,
+		border-color 0.12s ease,
+		color 0.12s ease,
+		filter 0.12s ease;
 }
-.btn:hover {
-	background: var(--surface-2);
+.btn:hover:not([disabled]) {
+	background: var(--surface-hover);
+}
+.btn:active:not([disabled]) {
+	background: var(--surface-active);
 }
 .btn.primary {
 	background: var(--accent);
 	color: var(--accent-text);
 	border-color: transparent;
 }
+.btn.primary:hover:not([disabled]) {
+	background: var(--accent);
+	filter: brightness(1.08);
+}
 .btn.danger {
 	color: var(--danger);
+}
+.btn.danger.primary {
+	background: var(--danger);
+	color: var(--danger-text);
+}
+.btn.ghost {
+	background: transparent;
+	border-color: transparent;
+}
+.btn.ghost:hover:not([disabled]) {
+	background: var(--surface-hover);
+}
+.btn.sm {
+	padding: 0.3rem 0.55rem;
+	font-size: var(--fs-sm);
+}
+.btn.icon {
+	padding: 0;
+	width: 2rem;
+	height: 2rem;
+	border-radius: var(--radius-md);
 }
 .btn[disabled] {
 	opacity: 0.5;
@@ -123,4 +253,7 @@ textarea {
 
 .muted {
 	color: var(--text-muted);
+}
+.error-text {
+	color: var(--danger);
 }

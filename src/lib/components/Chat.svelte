@@ -14,6 +14,7 @@
 	import Message_ from './Message.svelte';
 	import PermissionPrompt from './PermissionPrompt.svelte';
 	import ContextMeter from './ContextMeter.svelte';
+	import PanelHeader from '$lib/components/ui/PanelHeader.svelte';
 
 	let {
 		conversation,
@@ -535,39 +536,38 @@
 </script>
 
 <div class="chat">
-	<header class="head">
-		<div class="head-row">
-			<h2>{title}</h2>
+	<PanelHeader {title}>
+		{#snippet actions()}
 			<ContextMeter {usage} {recentCompaction} />
-		</div>
-		<div class="meta muted">
+		{/snippet}
+		{#snippet meta()}
 			<span title={conversation.workdir}>📁 {conversation.workdir}</span>
 			{#if conversation.model}<span>· {conversation.model}</span>{/if}
-		</div>
-		{#if parent}
-			<div class="parent-crumb muted">
-				<svg
-					width="11"
-					height="11"
-					viewBox="0 0 16 16"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="1.5"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					aria-hidden="true"
-				>
-					<path d="M6 3l-3 3 3 3" />
-					<path d="M3 6h7a3 3 0 013 3v4" />
-				</svg>
-				<span>Forked from</span>
-				<a href={`/conversations/${parent.id}`}>{parent.title}</a>
-				{#if parent.messageIndex != null}
-					<span>· at message {parent.messageIndex + 1}</span>
-				{/if}
-			</div>
-		{/if}
-	</header>
+			{#if parent}
+				<span class="parent-crumb">
+					<svg
+						width="11"
+						height="11"
+						viewBox="0 0 16 16"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+					>
+						<path d="M6 3l-3 3 3 3" />
+						<path d="M3 6h7a3 3 0 013 3v4" />
+					</svg>
+					<span>Forked from</span>
+					<a href={`/conversations/${parent.id}`}>{parent.title}</a>
+					{#if parent.messageIndex != null}
+						<span>· at message {parent.messageIndex + 1}</span>
+					{/if}
+				</span>
+			{/if}
+		{/snippet}
+	</PanelHeader>
 
 	<div class="messages-wrap">
 		<div class="messages" bind:this={scrollEl} onscroll={onMessagesScroll}>
@@ -682,34 +682,10 @@
 		height: 100%;
 		min-height: 0;
 	}
-	.head {
-		padding: 0.75rem 1.25rem;
-		border-bottom: 1px solid var(--border);
-		display: flex;
-		flex-direction: column;
-		gap: 0.1rem;
-	}
-	.head-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
-	}
-	.head h2 {
-		margin: 0;
-		font-size: 1.05rem;
-	}
-	.meta {
-		font-size: 0.78em;
-		display: flex;
-		gap: 0.5rem;
-	}
 	.parent-crumb {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
-		margin-top: 0.15rem;
-		font-size: 0.78em;
+		gap: var(--space-1);
 	}
 	.parent-crumb a {
 		color: inherit;
@@ -729,28 +705,28 @@
 	.messages {
 		flex: 1;
 		overflow-y: auto;
-		padding: 1rem 1.25rem;
+		padding: var(--space-4) var(--space-5);
 		display: flex;
 		flex-direction: column;
-		gap: 0.6rem;
+		gap: var(--space-3);
 		min-height: 0;
 	}
 	.jump-latest {
 		position: absolute;
 		left: 50%;
-		bottom: 0.75rem;
+		bottom: var(--space-3);
 		transform: translateX(-50%);
 		display: inline-flex;
 		align-items: center;
-		gap: 0.35rem;
+		gap: var(--space-1);
 		padding: 0.35rem 0.7rem;
-		font-size: 0.8rem;
-		border-radius: 999px;
+		font-size: var(--fs-sm);
+		border-radius: var(--radius-pill);
 		border: 1px solid var(--border);
 		background: var(--accent);
 		color: var(--accent-text);
 		cursor: pointer;
-		box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+		box-shadow: var(--shadow-2);
 		transition:
 			filter 0.12s ease,
 			transform 0.08s ease;
@@ -761,24 +737,20 @@
 	.jump-latest:active {
 		transform: translateX(-50%) scale(0.96);
 	}
-	.jump-latest:focus-visible {
-		outline: 2px solid var(--accent);
-		outline-offset: 2px;
-	}
 	.composer {
 		border-top: 1px solid var(--border);
-		padding: 0.75rem 1.25rem 1rem;
+		padding: var(--space-3) var(--space-5) var(--space-4);
 		display: flex;
 		flex-direction: column;
 	}
 	.composer-shell {
 		display: flex;
 		flex-direction: column;
-		gap: 0.25rem;
+		gap: var(--space-1);
 		background: var(--surface);
 		border: 1px solid var(--border);
-		border-radius: 12px;
-		padding: 0.5rem 0.6rem 0.45rem;
+		border-radius: var(--radius-lg);
+		padding: var(--space-2) 0.6rem 0.45rem;
 		transition:
 			border-color 0.15s ease,
 			box-shadow 0.15s ease,
@@ -786,7 +758,7 @@
 	}
 	.composer-shell:focus-within {
 		border-color: var(--accent);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+		box-shadow: var(--focus-ring);
 	}
 	.composer-shell.is-streaming {
 		background: var(--surface-2);
@@ -802,7 +774,7 @@
 		outline: none;
 		box-shadow: none;
 		line-height: 1.5;
-		font-size: 0.95rem;
+		font-size: var(--fs-md);
 		/* Browsers that support field-sizing auto-size the textarea to its
 		   content without help from JS, eliminating any first-paint flash
 		   where the native rows=1 height (which varies between browsers
@@ -819,14 +791,14 @@
 		display: flex;
 		align-items: center;
 		justify-content: flex-end;
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 	.kbd-hint {
 		margin-right: auto;
-		font-size: 0.72rem;
+		font-size: var(--fs-xs);
 		display: inline-flex;
 		align-items: center;
-		gap: 0.25rem;
+		gap: var(--space-1);
 		opacity: 0.75;
 		user-select: none;
 	}
@@ -836,7 +808,7 @@
 		padding: 0.05rem 0.32rem;
 		border: 1px solid var(--border);
 		border-bottom-width: 2px;
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 		background: var(--surface-2);
 		color: var(--text-muted);
 		line-height: 1.2;
@@ -848,7 +820,7 @@
 		width: 32px;
 		height: 32px;
 		padding: 0;
-		border-radius: 8px;
+		border-radius: var(--radius-md);
 		border: 1px solid transparent;
 		cursor: pointer;
 		transition:
@@ -880,10 +852,6 @@
 	}
 	.icon-btn.stop:hover {
 		background: color-mix(in srgb, var(--danger) 12%, transparent);
-	}
-	.icon-btn:focus-visible {
-		outline: 2px solid var(--accent);
-		outline-offset: 2px;
 	}
 	@media (max-width: 480px) {
 		.kbd-hint {

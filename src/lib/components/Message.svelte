@@ -4,6 +4,7 @@
 	import ToolCall from './ToolCall.svelte';
 	import DiffView from './DiffView.svelte';
 	import ReasoningBlock from './ReasoningBlock.svelte';
+	import Pill from '$lib/components/ui/Pill.svelte';
 	import { goto } from '$app/navigation';
 
 	let {
@@ -186,24 +187,26 @@
 			<span class="fork-badges" aria-label="Forks from this message">
 				{#each liveForks as f (f.id)}
 					<a class="fork-badge" href={`/conversations/${f.id}`} title={`Open fork: ${f.title}`}>
-						<svg
-							width="10"
-							height="10"
-							viewBox="0 0 16 16"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.6"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							aria-hidden="true"
-						>
-							<circle cx="5" cy="4" r="1.6" />
-							<circle cx="5" cy="12" r="1.6" />
-							<circle cx="11" cy="8" r="1.6" />
-							<path d="M5 5.6v4.8" />
-							<path d="M5 8h4.6" />
-						</svg>
-						<span class="fork-title">{f.title}</span>
+						<Pill>
+							<svg
+								width="10"
+								height="10"
+								viewBox="0 0 16 16"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.6"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<circle cx="5" cy="4" r="1.6" />
+								<circle cx="5" cy="12" r="1.6" />
+								<circle cx="11" cy="8" r="1.6" />
+								<path d="M5 5.6v4.8" />
+								<path d="M5 8h4.6" />
+							</svg>
+							<span class="fork-title">{f.title}</span>
+						</Pill>
 					</a>
 				{/each}
 			</span>
@@ -294,8 +297,10 @@
 					<span class="hint muted">
 						Re-running will create a new conversation with the workdir restored to this point.
 					</span>
-					<button type="button" onclick={cancelEdit} disabled={submitting}>Cancel</button>
-					<button type="submit" class="primary" disabled={submitting || !editText.trim()}>
+					<button type="button" class="btn sm" onclick={cancelEdit} disabled={submitting}
+						>Cancel</button
+					>
+					<button type="submit" class="btn primary sm" disabled={submitting || !editText.trim()}>
 						{submitting ? 'Forking…' : 'Save & re-run'}
 					</button>
 				</div>
@@ -311,8 +316,8 @@
 
 <style>
 	.msg {
-		padding: 0.75rem 1rem;
-		border-radius: 8px;
+		padding: var(--space-3) var(--space-4);
+		border-radius: var(--radius-lg);
 		border: 1px solid var(--border);
 		background: var(--surface);
 	}
@@ -325,32 +330,32 @@
 		opacity: 0.85;
 	}
 	header {
-		font-size: 0.75rem;
+		font-size: var(--fs-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
 		color: var(--text-muted);
-		margin-bottom: 0.4rem;
+		margin-bottom: var(--space-2);
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 	.role {
 		font-weight: 600;
 	}
 	.status {
-		margin-left: 0.5rem;
+		margin-left: var(--space-2);
 	}
 	.action-btn {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.25rem;
+		gap: var(--space-1);
 		padding: 0.15rem 0.45rem;
 		font: inherit;
-		font-size: 0.72rem;
+		font-size: var(--fs-xs);
 		text-transform: none;
 		letter-spacing: 0;
 		border: 1px solid var(--border);
-		border-radius: 5px;
+		border-radius: var(--radius-sm);
 		background: transparent;
 		color: var(--text-muted);
 		cursor: pointer;
@@ -368,8 +373,8 @@
 		opacity: 1;
 	}
 	.action-btn:hover:not(:disabled) {
-		background: var(--surface);
-		color: var(--fg);
+		background: var(--surface-hover);
+		color: var(--text);
 	}
 	.action-btn:disabled {
 		cursor: progress;
@@ -379,30 +384,22 @@
 		display: inline-flex;
 		align-items: center;
 		flex-wrap: wrap;
-		gap: 0.25rem;
-		margin-left: 0.25rem;
+		gap: var(--space-1);
+		margin-left: var(--space-1);
 	}
 	.fork-badge {
 		display: inline-flex;
-		align-items: center;
-		gap: 0.2rem;
-		max-width: 16em;
-		padding: 0.1rem 0.4rem;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		font-size: 0.7rem;
-		text-transform: none;
-		letter-spacing: 0;
-		color: var(--text-muted);
 		text-decoration: none;
-		background: var(--surface);
+		max-width: 16em;
+	}
+	.fork-badge :global(.pill) {
 		transition:
 			background 0.12s ease,
 			color 0.12s ease;
 	}
-	.fork-badge:hover {
-		color: var(--fg);
-		background: var(--surface-2);
+	.fork-badge:hover :global(.pill) {
+		color: var(--text);
+		background: var(--surface-hover);
 	}
 	.fork-title {
 		overflow: hidden;
@@ -412,7 +409,7 @@
 	.body {
 		display: flex;
 		flex-direction: column;
-		gap: 0.4rem;
+		gap: var(--space-2);
 	}
 	.body :global(p:first-child) {
 		margin-top: 0;
@@ -432,7 +429,7 @@
 	.edit-form {
 		display: flex;
 		flex-direction: column;
-		gap: 0.4rem;
+		gap: var(--space-2);
 	}
 	.edit-form textarea {
 		width: 100%;
@@ -440,47 +437,30 @@
 		font: inherit;
 		padding: 0.45rem 0.55rem;
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: var(--radius-md);
 		background: var(--surface);
 		color: inherit;
 		resize: vertical;
 	}
 	.edit-form textarea:focus {
-		outline: 2px solid var(--accent);
-		outline-offset: -1px;
+		outline: none;
+		border-color: var(--accent);
+		box-shadow: var(--focus-ring);
 	}
 	.edit-actions {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		flex-wrap: wrap;
 	}
 	.edit-actions .hint {
 		flex: 1;
-		font-size: 0.75rem;
+		font-size: var(--fs-xs);
 		min-width: 12em;
-	}
-	.edit-actions button {
-		padding: 0.3rem 0.7rem;
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		background: var(--surface);
-		color: inherit;
-		cursor: pointer;
-		font-size: 0.85rem;
-	}
-	.edit-actions button:disabled {
-		opacity: 0.6;
-		cursor: not-allowed;
-	}
-	.edit-actions .primary {
-		background: var(--accent);
-		color: var(--accent-text);
-		border-color: transparent;
 	}
 	.err {
 		margin: 0;
 		color: var(--danger);
-		font-size: 0.8rem;
+		font-size: var(--fs-sm);
 	}
 </style>

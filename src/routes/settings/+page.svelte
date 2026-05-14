@@ -236,10 +236,10 @@
 		margin-bottom: 1.5rem;
 	}
 	.copilot-status.ok {
-		border-color: var(--success, #2a7);
+		border-color: var(--success);
 	}
 	.copilot-status.bad {
-		border-color: var(--danger, #c33);
+		border-color: var(--danger);
 	}
 	.copilot-status .row {
 		display: flex;
@@ -250,9 +250,9 @@
 		font-size: 0.85em;
 	}
 	code {
-		background: var(--surface, #0002);
+		background: var(--code-bg);
 		padding: 0 0.25rem;
-		border-radius: 3px;
+		border-radius: var(--radius-sm);
 	}
 	.deploy {
 		margin-top: 2rem;
@@ -279,26 +279,26 @@
 		letter-spacing: 0.05em;
 	}
 	.status.restarting {
-		color: var(--accent, #4af);
+		color: var(--accent);
 	}
 	.status.running {
-		color: var(--accent, #4af);
+		color: var(--accent);
 	}
 	.status.ok {
-		color: var(--success, #2a7);
+		color: var(--success);
 	}
 	.status.failed {
-		color: var(--danger, #c33);
+		color: var(--danger);
 	}
 	pre.log {
 		margin-top: 0.75rem;
 		max-height: 360px;
 		overflow: auto;
 		padding: 0.75rem;
-		background: var(--surface, #0002);
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		font-size: 0.8em;
+		background: var(--code-bg);
+		border: 1px solid var(--code-border);
+		border-radius: var(--radius-sm);
+		font-size: var(--code-fs);
 		white-space: pre-wrap;
 		word-break: break-word;
 	}

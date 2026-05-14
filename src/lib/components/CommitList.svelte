@@ -103,15 +103,15 @@
 		flex-direction: column;
 		height: 100%;
 		min-height: 0;
-		font-size: 0.85em;
+		font-size: var(--fs-sm);
 	}
 	.sha {
 		font-family: var(--mono);
 		color: var(--text-muted);
-		font-size: 0.9em;
+		font-size: var(--fs-sm);
 	}
 	.small {
-		font-size: 0.85em;
+		font-size: var(--fs-xs);
 	}
 	.muted {
 		color: var(--text-muted);
@@ -120,7 +120,7 @@
 		overflow: auto;
 		flex: 1;
 		min-height: 0;
-		padding: 0.25rem 0;
+		padding: var(--space-1) 0;
 	}
 	.commit {
 		display: block;
@@ -131,11 +131,11 @@
 		border-bottom: 1px solid var(--border);
 		color: var(--text);
 		font: inherit;
-		padding: 0.4rem 0.6rem;
+		padding: var(--space-2) var(--space-3);
 		cursor: pointer;
 	}
 	.commit:hover {
-		background: var(--surface-2);
+		background: var(--surface-hover);
 	}
 	.commit.selected {
 		background: var(--surface-2);
@@ -145,7 +145,7 @@
 	.row1 {
 		display: flex;
 		align-items: baseline;
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 	.subject {
 		flex: 1;
@@ -157,23 +157,23 @@
 	.row2 {
 		margin-top: 0.15rem;
 		display: flex;
-		gap: 0.35rem;
+		gap: var(--space-1);
 	}
 	.load-more {
 		display: block;
-		margin: 0.5rem auto;
+		margin: var(--space-2) auto;
 		padding: 0.3rem 0.8rem;
 		background: var(--surface-2);
 		color: var(--text);
 		border: 1px solid var(--border);
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 		cursor: pointer;
 	}
 	.error {
 		color: var(--danger);
-		padding: 0.4rem 0.6rem;
+		padding: var(--space-2) var(--space-3);
 	}
 	.empty {
-		padding: 0.6rem;
+		padding: var(--space-3);
 	}
 </style>

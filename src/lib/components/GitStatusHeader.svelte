@@ -84,21 +84,21 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.15rem;
-		padding: 0.4rem 0.6rem;
+		padding: var(--space-2) var(--space-3);
 		background: var(--surface);
 		border-bottom: 1px solid var(--border);
-		font-size: 0.85em;
+		font-size: var(--fs-sm);
 	}
 	.row1 {
 		display: flex;
 		align-items: baseline;
-		gap: 0.4rem;
+		gap: var(--space-2);
 		min-width: 0;
 	}
 	.branch {
 		display: inline-flex;
 		align-items: baseline;
-		gap: 0.25rem;
+		gap: var(--space-1);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -109,17 +109,17 @@
 	.row2 {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		align-items: baseline;
 	}
 	.sha,
 	code {
 		font-family: var(--mono);
 		color: var(--text-muted);
-		font-size: 0.9em;
+		font-size: var(--fs-sm);
 	}
 	.small {
-		font-size: 0.85em;
+		font-size: var(--fs-xs);
 	}
 	.muted {
 		color: var(--text-muted);

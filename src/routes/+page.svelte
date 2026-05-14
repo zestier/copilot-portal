@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { invalidateAll } from '$app/navigation';
+	import EmptyState from '$lib/components/ui/EmptyState.svelte';
+	import Alert from '$lib/components/ui/Alert.svelte';
 
 	let creating = $state(false);
 	let error = $state<string | null>(null);
@@ -27,12 +29,22 @@
 </script>
 
 <div class="home">
-	<h1>Copilot Portal</h1>
-	<p class="muted">Start a new conversation, or pick one from the sidebar.</p>
-	<button class="btn primary" onclick={newChat} disabled={creating}>
-		{creating ? 'Creating…' : '+ New chat'}
-	</button>
-	{#if error}<p style="color: var(--danger)">{error}</p>{/if}
+	<EmptyState
+		title="Copilot Portal"
+		description="Start a new conversation, or pick one from the sidebar."
+		size="lg"
+	>
+		{#snippet actions()}
+			<button class="btn primary" onclick={newChat} disabled={creating}>
+				{creating ? 'Creating…' : '+ New chat'}
+			</button>
+		{/snippet}
+	</EmptyState>
+	{#if error}
+		<div class="error-wrap">
+			<Alert kind="error" dismissible ondismiss={() => (error = null)}>{error}</Alert>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -40,11 +52,12 @@
 		max-width: 540px;
 		margin: 10vh auto;
 		margin: 10dvh auto;
-		padding: 2rem;
-		text-align: center;
+		padding: var(--space-5);
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
-		align-items: center;
+		gap: var(--space-4);
+	}
+	.error-wrap {
+		width: 100%;
 	}
 </style>

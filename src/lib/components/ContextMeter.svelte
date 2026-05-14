@@ -78,8 +78,8 @@
 	.meter {
 		display: inline-flex;
 		flex-direction: column;
-		gap: 0.25rem;
-		font-size: 0.78em;
+		gap: var(--space-1);
+		font-size: var(--fs-xs);
 		min-width: 180px;
 	}
 	.bar {
@@ -89,7 +89,7 @@
 		height: 18px;
 		border-radius: 9px;
 		border: 1px solid var(--border);
-		background: var(--bg-elev, rgba(255, 255, 255, 0.04));
+		background: var(--surface-2);
 		overflow: hidden;
 		cursor: pointer;
 		padding: 0;
@@ -97,21 +97,21 @@
 		text-align: left;
 	}
 	.bar:focus-visible {
-		outline: 2px solid var(--accent, #58a6ff);
+		outline: 2px solid var(--accent);
 		outline-offset: 1px;
 	}
 	.fill {
 		position: absolute;
 		inset: 0 auto 0 0;
-		background: var(--meter-color, #2da44e);
+		background: var(--success);
 		opacity: 0.55;
 		transition: width 240ms ease-out;
 	}
 	.meter[data-level='mid'] .fill {
-		background: #d29922;
+		background: var(--warning);
 	}
 	.meter[data-level='high'] .fill {
-		background: #cf222e;
+		background: var(--danger);
 	}
 	.label {
 		position: relative;
@@ -132,8 +132,8 @@
 		margin: 0.2rem 0 0;
 		padding: 0.35rem 0.5rem;
 		border: 1px solid var(--border);
-		border-radius: 6px;
-		background: var(--bg-elev, rgba(255, 255, 255, 0.03));
+		border-radius: var(--radius-md);
+		background: var(--surface-2);
 	}
 	.breakdown dt {
 		opacity: 0.7;

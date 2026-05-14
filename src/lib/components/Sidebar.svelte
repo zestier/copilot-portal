@@ -2,6 +2,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import { tick } from 'svelte';
 	import type { Conversation, User } from '$lib/types';
+	import Alert from '$lib/components/ui/Alert.svelte';
 
 	let {
 		conversations,
@@ -235,9 +236,8 @@
 	</div>
 
 	{#if errorMsg}
-		<div class="error-banner" role="status" aria-live="polite">
-			{errorMsg}
-			<button class="banner-close" aria-label="Dismiss" onclick={() => (errorMsg = null)}>×</button>
+		<div class="error-wrap">
+			<Alert kind="error" dismissible ondismiss={() => (errorMsg = null)}>{errorMsg}</Alert>
 		</div>
 	{/if}
 
@@ -451,32 +451,15 @@
 		width: 100%;
 	}
 	.select-toggle {
-		font-size: 0.85em;
+		font-size: var(--fs-sm);
 		padding: 0.3rem 0.6rem;
 	}
 	.select-toggle.active {
 		border-color: var(--accent);
 		color: var(--accent);
 	}
-	.error-banner {
-		margin: 0 0.75rem 0.5rem;
-		padding: 0.5rem 0.7rem;
-		background: color-mix(in srgb, var(--danger) 18%, var(--surface));
-		border: 1px solid var(--danger);
-		border-radius: 6px;
-		font-size: 0.85em;
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-	}
-	.banner-close {
-		margin-left: auto;
-		background: transparent;
-		border: 0;
-		color: inherit;
-		cursor: pointer;
-		font-size: 1rem;
-		line-height: 1;
+	.error-wrap {
+		margin: 0 var(--space-3) var(--space-2);
 	}
 	.convs {
 		flex: 1;
@@ -487,7 +470,7 @@
 		gap: 0.15rem;
 	}
 	.section-label {
-		font-size: 0.75rem;
+		font-size: var(--fs-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
 		color: var(--text-muted);
@@ -610,21 +593,21 @@
 		z-index: 30;
 		background: var(--surface);
 		border: 1px solid var(--border);
-		border-radius: 6px;
-		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+		border-radius: var(--radius-md);
+		box-shadow: var(--shadow-2);
 		display: flex;
 		flex-direction: column;
 		min-width: 140px;
-		padding: 0.25rem;
+		padding: var(--space-1);
 	}
 	.menu button {
 		background: transparent;
 		border: 0;
 		color: var(--text);
 		text-align: left;
-		padding: 0.4rem 0.6rem;
-		border-radius: 4px;
-		font-size: 0.9em;
+		padding: var(--space-2) var(--space-3);
+		border-radius: var(--radius-sm);
+		font-size: var(--fs-md);
 		cursor: pointer;
 	}
 	.menu button:hover,
@@ -638,20 +621,20 @@
 	.menu button.danger:hover,
 	.menu button.danger:focus-visible {
 		background: var(--danger);
-		color: #fff;
+		color: var(--danger-text);
 	}
 	.bulk-bar {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.4rem;
+		gap: var(--space-2);
 		align-items: center;
-		padding: 0.5rem 0.75rem;
+		padding: var(--space-2) var(--space-3);
 		border-top: 1px solid var(--border);
 		background: var(--surface);
 	}
 	.bulk-bar .btn {
 		padding: 0.3rem 0.6rem;
-		font-size: 0.85em;
+		font-size: var(--fs-sm);
 	}
 	.bottom {
 		padding: 0.75rem 1rem;

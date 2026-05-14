@@ -36,29 +36,29 @@
 	.btn {
 		display: inline-block;
 		padding: 0.6rem 1rem;
-		border-radius: 6px;
-		border: 1px solid var(--border, #444);
-		background: var(--surface, #1c1f24);
+		border-radius: var(--radius-md);
+		border: 1px solid var(--border);
+		background: var(--surface);
 		color: inherit;
 		text-decoration: none;
 		cursor: pointer;
 	}
 	.btn.primary {
-		background: var(--accent, #1f6feb);
+		background: var(--accent);
 		border-color: transparent;
-		color: #fff;
+		color: var(--accent-text);
 	}
 	input {
 		width: 100%;
 		padding: 0.5rem 0.6rem;
-		border-radius: 6px;
-		border: 1px solid var(--border, #444);
-		background: var(--bg, #0d1117);
+		border-radius: var(--radius-md);
+		border: 1px solid var(--border);
+		background: var(--bg);
 		color: inherit;
 	}
 	.err {
-		color: #f85149;
-		font-size: 0.9em;
+		color: var(--danger);
+		font-size: var(--fs-sm);
 	}
 	form {
 		display: flex;

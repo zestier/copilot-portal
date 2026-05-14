@@ -39,7 +39,7 @@
 {:else}
 	<div class="layout" class:collapsed={!sidebarOpen} class:preload={!hydrated}>
 		<button
-			class="hamburger"
+			class="btn icon ghost hamburger"
 			aria-label="Toggle sidebar"
 			onclick={() => (sidebarOpen = !sidebarOpen)}
 		>
@@ -97,14 +97,9 @@
 	}
 	.hamburger {
 		position: fixed;
-		top: 0.5rem;
-		left: 0.5rem;
+		top: var(--space-2);
+		left: var(--space-2);
 		z-index: 20;
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		padding: 0.25rem 0.55rem;
-		cursor: pointer;
 	}
 
 	@media (max-width: 768px) {

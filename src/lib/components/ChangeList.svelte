@@ -126,12 +126,12 @@
 		flex-direction: column;
 		height: 100%;
 		min-height: 0;
-		font-size: 0.85em;
+		font-size: var(--fs-sm);
 	}
 	.toolbar {
 		display: flex;
-		gap: 0.4rem;
-		padding: 0.4rem;
+		gap: var(--space-2);
+		padding: var(--space-2);
 		border-bottom: 1px solid var(--border);
 		background: var(--surface);
 	}
@@ -142,13 +142,13 @@
 		background: var(--bg);
 		color: var(--text);
 		border: 1px solid var(--border);
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 		font: inherit;
 	}
 	.icon-btn {
 		background: transparent;
 		border: 1px solid var(--border);
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 		color: var(--text);
 		cursor: pointer;
 		padding: 0.15rem 0.45rem;
@@ -157,29 +157,29 @@
 		overflow: auto;
 		flex: 1;
 		min-height: 0;
-		padding: 0.25rem 0;
+		padding: var(--space-1) 0;
 	}
 	.summary {
 		display: flex;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		align-items: baseline;
-		padding: 0.25rem 0.6rem;
+		padding: var(--space-1) var(--space-3);
 	}
 	.row {
 		display: flex;
 		align-items: center;
-		gap: 0.4rem;
+		gap: var(--space-2);
 		width: 100%;
 		text-align: left;
 		background: transparent;
 		border: 0;
 		color: var(--text);
 		font: inherit;
-		padding: 0.25rem 0.6rem;
+		padding: var(--space-1) var(--space-3);
 		cursor: pointer;
 	}
 	.row:hover {
-		background: var(--surface-2);
+		background: var(--surface-hover);
 	}
 	.row.selected {
 		background: var(--surface-2);
@@ -190,7 +190,7 @@
 		flex: 1;
 		min-width: 0;
 		font-family: var(--mono);
-		font-size: 0.92em;
+		font-size: var(--fs-sm);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -206,17 +206,17 @@
 		flex: 0 0 auto;
 	}
 	.small {
-		font-size: 0.85em;
+		font-size: var(--fs-xs);
 	}
 	.muted {
 		color: var(--text-muted);
 	}
 	.empty {
-		padding: 0.6rem;
+		padding: var(--space-3);
 		font-style: italic;
 	}
 	.error {
 		color: var(--danger);
-		padding: 0.5rem 0.7rem;
+		padding: var(--space-2) var(--space-3);
 	}
 </style>

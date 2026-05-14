@@ -123,9 +123,9 @@
 	.tool {
 		background: var(--surface-2);
 		border: 1px solid var(--border);
-		border-radius: 6px;
-		padding: 0.4rem 0.6rem;
-		font-size: 0.9em;
+		border-radius: var(--radius-md);
+		padding: var(--space-2) var(--space-3);
+		font-size: var(--fs-md);
 	}
 	summary {
 		cursor: pointer;
@@ -140,10 +140,8 @@
 	.summary-text {
 		margin-left: 0.5rem;
 		color: var(--text-muted);
-		font-family:
-			ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
-			monospace;
-		font-size: 0.9em;
+		font-family: var(--mono);
+		font-size: var(--fs-sm);
 	}
 	.content {
 		margin-top: 0.4rem;

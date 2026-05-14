@@ -177,12 +177,12 @@
 		flex-direction: column;
 		height: 100%;
 		min-height: 0;
-		font-size: 0.85em;
+		font-size: var(--fs-sm);
 	}
 	.toolbar {
 		display: flex;
-		gap: 0.4rem;
-		padding: 0.4rem;
+		gap: var(--space-2);
+		padding: var(--space-2);
 		border-bottom: 1px solid var(--border);
 		background: var(--surface);
 	}
@@ -193,13 +193,13 @@
 		background: var(--bg);
 		color: var(--text);
 		border: 1px solid var(--border);
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 		font: inherit;
 	}
 	.icon-btn {
 		background: transparent;
 		border: 1px solid var(--border);
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 		color: var(--text);
 		cursor: pointer;
 		padding: 0.15rem 0.45rem;
@@ -208,12 +208,12 @@
 		overflow: auto;
 		flex: 1;
 		min-height: 0;
-		padding: 0.25rem 0;
+		padding: var(--space-1) 0;
 	}
 	.row {
 		display: flex;
 		align-items: center;
-		gap: 0.25rem;
+		gap: var(--space-1);
 		width: 100%;
 		padding: 0.15rem 0.5rem 0.15rem calc(0.5rem + var(--depth, 0) * 0.9rem);
 		background: transparent;
@@ -225,7 +225,7 @@
 		white-space: nowrap;
 	}
 	.row:hover {
-		background: var(--surface-2);
+		background: var(--surface-hover);
 	}
 	.row.selected {
 		background: var(--surface-2);
@@ -237,7 +237,7 @@
 		width: 0.75rem;
 		transition: transform 100ms;
 		color: var(--text-muted);
-		font-size: 0.7em;
+		font-size: var(--fs-xs);
 	}
 	.caret.open {
 		transform: rotate(90deg);
@@ -265,7 +265,7 @@
 	.status-pill {
 		font-family: var(--mono);
 		font-weight: 600;
-		font-size: 0.85em;
+		font-size: var(--fs-xs);
 		padding: 0 0.25rem;
 	}
 	.muted {

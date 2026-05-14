@@ -370,7 +370,7 @@
 		color: var(--text-muted);
 		border: 0;
 		border-bottom: 2px solid transparent;
-		padding: 0.4rem 0.6rem;
+		padding: var(--space-2) var(--space-3);
 		cursor: pointer;
 		font: inherit;
 	}
@@ -389,15 +389,15 @@
 	}
 	.filter-toggles {
 		display: flex;
-		gap: 0.8rem;
-		padding: 0.35rem 0.6rem;
-		font-size: 0.8em;
+		gap: var(--space-3);
+		padding: 0.35rem var(--space-3);
+		font-size: var(--fs-sm);
 		border-bottom: 1px solid var(--border);
 		color: var(--text-muted);
 	}
 	.filter-toggles label {
 		display: inline-flex;
-		gap: 0.25rem;
+		gap: var(--space-1);
 		align-items: center;
 		cursor: pointer;
 	}
@@ -408,26 +408,26 @@
 		flex-direction: column;
 	}
 	.header {
-		padding: 0.5rem 0.7rem;
+		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px solid var(--border);
 		background: var(--surface);
 		display: flex;
 		flex-direction: column;
-		gap: 0.3rem;
+		gap: var(--space-1);
 	}
 	.title {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		flex-wrap: wrap;
 	}
 	.title .path,
 	.title .sha {
 		font-family: var(--mono);
-		font-size: 0.95em;
+		font-size: var(--fs-md);
 	}
 	.view-tabs {
-		margin-top: 0.25rem;
+		margin-top: var(--space-1);
 	}
 	.content-body,
 	.commit-body {
@@ -437,16 +437,16 @@
 		flex-direction: column;
 	}
 	.content-body {
-		padding: 0.6rem;
-		gap: 0.4rem;
+		padding: var(--space-3);
+		gap: var(--space-2);
 	}
 	.commit-message {
 		margin: 0;
-		padding: 0.6rem 0.7rem;
+		padding: var(--space-3);
 		background: var(--surface-2);
 		border-bottom: 1px solid var(--border);
 		font-family: var(--mono);
-		font-size: 0.85em;
+		font-size: var(--fs-sm);
 		white-space: pre-wrap;
 	}
 	.files-grid {
@@ -466,18 +466,18 @@
 	.commit-file {
 		display: flex;
 		align-items: center;
-		gap: 0.4rem;
+		gap: var(--space-2);
 		width: 100%;
 		text-align: left;
 		background: transparent;
 		color: var(--text);
 		border: 0;
-		padding: 0.25rem 0.6rem;
+		padding: var(--space-1) var(--space-3);
 		font: inherit;
 		cursor: pointer;
 	}
 	.commit-file:hover {
-		background: var(--surface-2);
+		background: var(--surface-hover);
 	}
 	.commit-file.selected {
 		background: var(--surface-2);
@@ -486,7 +486,7 @@
 	}
 	.commit-file .path {
 		font-family: var(--mono);
-		font-size: 0.85em;
+		font-size: var(--fs-sm);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -494,35 +494,35 @@
 	.commit-diff {
 		overflow: auto;
 		min-height: 0;
-		padding: 0.5rem;
+		padding: var(--space-2);
 	}
 	.file-view {
 		margin: 0;
 		flex: 1;
 		min-height: 0;
 		font-family: var(--mono);
-		font-size: 0.82em;
+		font-size: var(--code-fs);
 		white-space: pre;
 		overflow: auto;
 		background: var(--bg);
-		padding: 0.5rem 0.7rem;
+		padding: var(--space-2) var(--space-3);
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: var(--radius-md);
 	}
 	.placeholder {
 		color: var(--text-muted);
 		font-style: italic;
-		padding: 1rem;
+		padding: var(--space-4);
 	}
 	.error {
 		color: var(--danger);
-		padding: 0.5rem 0.7rem;
+		padding: var(--space-2) var(--space-3);
 	}
 	.muted {
 		color: var(--text-muted);
 	}
 	.small {
-		font-size: 0.85em;
+		font-size: var(--fs-sm);
 	}
 	.truncated-note {
 		margin-top: 0.3rem;

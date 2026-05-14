@@ -18,13 +18,13 @@
 <style>
 	.diffstat {
 		display: inline-flex;
-		gap: 0.25rem;
+		gap: var(--space-1);
 		font-family: var(--mono);
-		font-size: 0.85em;
+		font-size: var(--fs-sm);
 		font-variant-numeric: tabular-nums;
 	}
 	.diffstat.compact {
-		font-size: 0.78em;
+		font-size: var(--fs-xs);
 	}
 	.added {
 		color: var(--success);

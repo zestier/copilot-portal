@@ -43,9 +43,9 @@
 <style>
 	.perm {
 		border: 1px solid var(--warning);
-		background: rgba(210, 153, 34, 0.08);
-		border-radius: 8px;
-		padding: 0.75rem 1rem;
+		background: var(--warning-bg);
+		border-radius: var(--radius-lg);
+		padding: var(--space-3) var(--space-4);
 	}
 	.head {
 		font-weight: 600;

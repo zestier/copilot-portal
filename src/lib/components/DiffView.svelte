@@ -122,25 +122,25 @@
 		white-space: pre;
 	}
 	.line.add {
-		background: rgba(63, 185, 80, 0.12);
+		background: color-mix(in srgb, var(--success) 12%, transparent);
 	}
 	.line.add .text,
 	.line.add .sign {
 		color: var(--success);
 	}
 	.line.add .gutter {
-		background: rgba(63, 185, 80, 0.18);
+		background: color-mix(in srgb, var(--success) 20%, transparent);
 		color: var(--success);
 	}
 	.line.del {
-		background: rgba(248, 81, 73, 0.12);
+		background: color-mix(in srgb, var(--danger) 12%, transparent);
 	}
 	.line.del .text,
 	.line.del .sign {
 		color: var(--danger);
 	}
 	.line.del .gutter {
-		background: rgba(248, 81, 73, 0.18);
+		background: color-mix(in srgb, var(--danger) 20%, transparent);
 		color: var(--danger);
 	}
 	.line.hunk {
