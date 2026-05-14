@@ -36,6 +36,7 @@
 			conversation={data.conversation}
 			initialMessages={data.messages}
 			initialUsage={data.contextUsage}
+			parent={data.parent}
 		/>
 	</div>
 	{#if tab === 'files'}

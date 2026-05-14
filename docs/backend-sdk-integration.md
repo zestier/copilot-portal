@@ -200,10 +200,34 @@ does it snapshot the workdir. Both layers are owned by the portal:
 - **Workdir snapshots**: see `docs/persistence.md` — every user turn gets
   a `pre` snapshot, every assistant turn a `post` snapshot, stored as git
   commits under `refs/portal/turns/*` in the conversation's own workdir.
-- **Conversation forking**: editing a user message creates a new
-  conversation (`src/lib/server/fork.ts`). We spin up a brand-new SDK
-  session keyed by the new conversation id rather than trying to mutate
-  the source's SDK event log (which we don't own).
+- **Conversation forking**: editing a user message — or retrying from
+  an assistant message — creates a new conversation
+  (`src/lib/server/fork.ts`). We spin up a brand-new SDK session keyed
+  by the new conversation id rather than trying to mutate the source's
+  SDK event log (which we don't own).
+
+### Two fork flavours
+
+The same endpoint (`POST /api/conversations/:id/messages/:msgId/fork`)
+covers both:
+
+| Body          | Target role | Snapshot used | Prefix cloned         | New user msg appended |
+| ------------- | ----------- | ------------- | --------------------- | --------------------- |
+| `{content}`   | `user`      | `pre`         | strictly before target | yes (edited content)  |
+| `{}`          | `assistant` | `post`        | up to and incl. target | no                    |
+
+"Edit-and-rerun" reproduces the file state from when the original user
+message was first sent and lets the user reword it. "Retry-from-here"
+reproduces the file state immediately after an assistant turn finished
+and lets the user pick the conversation up with a different follow-up.
+
+### Discovering forks
+
+A `GET /api/conversations/:id/forks` endpoint lists child forks keyed by
+source message id. The chat UI uses this to render a "Forked → …" badge
+on each message that has produced a fork. Forked conversations also
+expose a parent breadcrumb derived from `forked_from_conversation_id`
+on load.
 
 ### SDK history seeding
 

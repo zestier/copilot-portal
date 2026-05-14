@@ -11,10 +11,21 @@
 // non-destructive: the user can always navigate back to the source
 // thread.
 //
+// Two flavours:
+//  1. EDIT  — target is a user message, `newContent` is the replacement
+//             text. Uses the `pre` snapshot (workdir state before that
+//             user turn ran). The clone includes everything *strictly
+//             before* the edited message, and the edited message is
+//             appended as a fresh user row.
+//  2. RETRY — target is an assistant message, `newContent` is null.
+//             Uses the `post` snapshot (workdir state after that
+//             assistant turn finished). The clone includes everything
+//             *up to and including* the target assistant message, and
+//             no new user message is appended — the user types their
+//             next prompt themselves in the new conversation.
+//
 // Constraints:
-//  - Only user messages can be edited. Forking from an assistant message
-//    has no obvious "edit" semantics (you'd be putting words in the
-//    agent's mouth).
+//  - System messages can never be the fork target.
 //  - The source conversation's workdir must be portal-managed (under
 //    DATA_DIR/workspaces/). Forking a bring-your-own workdir is rejected
 //    in v1 — duplicating an arbitrary user-supplied directory is
@@ -42,6 +53,9 @@ export type ForkError =
 	| 'source_not_found'
 	| 'message_not_found'
 	| 'not_user_message'
+	| 'unsupported_role'
+	| 'content_required'
+	| 'content_not_allowed'
 	| 'source_busy'
 	| 'no_snapshot'
 	| 'unsupported_workdir';
@@ -60,7 +74,11 @@ export interface ForkInput {
 	userId: string;
 	sourceConversationId: string;
 	messageId: string;
-	newContent: string;
+	/**
+	 * The replacement text for a user-message edit. Must be null/undefined
+	 * for an assistant-message retry.
+	 */
+	newContent: string | null;
 }
 
 export interface ForkResult {
@@ -101,8 +119,36 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 	const targetIdx = all.findIndex((m) => m.id === input.messageId);
 	if (targetIdx < 0) throw new ForkRejected('message_not_found');
 	const target = all[targetIdx];
-	if (target.role !== 'user') {
-		throw new ForkRejected('not_user_message', 'Only user messages can be edited and re-run.');
+
+	// Decide flavour from the target's role; validate inputs against it.
+	let mode: 'edit' | 'retry';
+	if (target.role === 'user') {
+		if (input.newContent == null || input.newContent === '') {
+			throw new ForkRejected(
+				'content_required',
+				'newContent is required when editing a user message.'
+			);
+		}
+		mode = 'edit';
+	} else if (target.role === 'assistant') {
+		if (input.newContent != null) {
+			throw new ForkRejected(
+				'content_not_allowed',
+				'newContent must be omitted when retrying an assistant message.'
+			);
+		}
+		// Don't let the user retry from a half-finished assistant turn —
+		// the post-snapshot for that message won't exist yet anyway, but
+		// fail loudly instead of confusing the user with a no_snapshot.
+		if (target.status !== 'complete') {
+			throw new ForkRejected(
+				'unsupported_role',
+				'Can only retry from a completed assistant message.'
+			);
+		}
+		mode = 'retry';
+	} else {
+		throw new ForkRejected('unsupported_role', `Cannot fork from a ${target.role} message.`);
 	}
 
 	const active = getTurn(source.id);
@@ -110,11 +156,12 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 		throw new ForkRejected('source_busy', 'Source conversation has a running turn.');
 	}
 
-	const snap = getSnapshot(target.id, 'pre');
+	const snapKind = mode === 'edit' ? 'pre' : 'post';
+	const snap = getSnapshot(target.id, snapKind);
 	if (!snap) {
 		throw new ForkRejected(
 			'no_snapshot',
-			'No workdir snapshot was captured for this message; cannot fork.'
+			`No ${snapKind}-snapshot was captured for this message; cannot fork.`
 		);
 	}
 
@@ -163,19 +210,21 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 		.prepare('UPDATE conversations SET workdir = ?, updated_at = ? WHERE id = ?')
 		.run(newWorkdir, Date.now(), newConv.id);
 
-	// Clone the message prefix (everything strictly before the edited
-	// message), then append the edited content as a fresh user message in
-	// the new conversation. Cloned rows get new IDs but preserve role,
-	// content, and relative ordering (timestamps are reassigned monotonically
-	// based on now() so the new conversation has a sensible single-pass
-	// chronology).
-	const prefix = all.slice(0, targetIdx);
+	// Edit mode clones strictly before the target (so the new user message
+	// replaces it). Retry mode clones up to AND including the target
+	// assistant message (so its reply is preserved as context, and the
+	// user picks up by typing the next prompt).
+	const prefixEnd = mode === 'edit' ? targetIdx : targetIdx + 1;
+	const prefix = all.slice(0, prefixEnd);
 	cloneMessagePrefix(newConv.id, prefix);
-	messages.append(newConv.id, { role: 'user', content: input.newContent });
+	if (mode === 'edit') {
+		messages.append(newConv.id, { role: 'user', content: input.newContent! });
+	}
 
 	const refreshed = convs.get(newConv.id, input.userId);
 	if (!refreshed) throw new Error('fork: created conversation disappeared');
 	log.info('fork.created', {
+		mode,
 		source: source.id,
 		newId: newConv.id,
 		messageId: target.id,

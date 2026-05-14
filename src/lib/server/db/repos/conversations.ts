@@ -42,6 +42,22 @@ export interface ListOpts {
 	limit?: number;
 }
 
+/**
+ * List conversations that were forked from `sourceId` (i.e., child forks).
+ * Scoped to `userId` so users only ever see their own forks; the source
+ * conversation must also be theirs at the call site.
+ */
+export function listChildren(userId: string, sourceId: string): Conversation[] {
+	const rows = getDb()
+		.prepare(
+			`SELECT * FROM conversations
+			 WHERE user_id = ? AND forked_from_conversation_id = ?
+			 ORDER BY created_at ASC`
+		)
+		.all(userId, sourceId) as ConvRow[];
+	return rows.map(rowToConv);
+}
+
 export function list(userId: string, opts: ListOpts = {}): Conversation[] {
 	const limit = opts.limit ?? 200;
 	const sql = opts.includeArchived

@@ -18,11 +18,18 @@
 	let {
 		conversation,
 		initialMessages,
-		initialUsage = null
+		initialUsage = null,
+		parent = null
 	}: {
 		conversation: Conversation;
 		initialMessages: Message[];
 		initialUsage?: ConversationUsage | null;
+		parent?: {
+			id: string;
+			title: string;
+			messageId: string | null;
+			messageIndex: number | null;
+		} | null;
 	} = $props();
 
 	let messages = $state<Message[]>([]);
@@ -30,6 +37,33 @@
 	let usage = $state<ConversationUsage | null>(untrack(() => initialUsage));
 	let recentCompaction = $state<{ tokensRemoved?: number; messagesRemoved?: number } | null>(null);
 	let compactionTimer: ReturnType<typeof setTimeout> | null = null;
+
+	// Child forks of this conversation, keyed by the source message id so
+	// the corresponding <Message_> can render a "Forked → ..." badge.
+	type ForkInfo = {
+		id: string;
+		title: string;
+		sourceMessageId: string | null;
+		createdAt: number;
+		archivedAt: number | null;
+	};
+	let forksByMessage = $state<Record<string, ForkInfo[]>>({});
+
+	async function refreshForks() {
+		try {
+			const r = await fetch(`/api/conversations/${conversation.id}/forks`);
+			if (!r.ok) return;
+			const data = (await r.json()) as { forks: ForkInfo[] };
+			const map: Record<string, ForkInfo[]> = {};
+			for (const f of data.forks) {
+				if (!f.sourceMessageId) continue;
+				(map[f.sourceMessageId] ??= []).push(f);
+			}
+			forksByMessage = map;
+		} catch {
+			/* non-fatal */
+		}
+	}
 	$effect(() => {
 		// Reset local message list when the conversation prop changes.
 		void conversation.id;
@@ -40,12 +74,14 @@
 			recentCompaction = null;
 			pinnedToBottom = true;
 			hasNewBelow = false;
+			forksByMessage = {};
 			if (compactionTimer) {
 				clearTimeout(compactionTimer);
 				compactionTimer = null;
 			}
 			// Reattach to any in-progress turn so a refresh-mid-stream resumes.
 			void resumeIfActive();
+			void refreshForks();
 		});
 	});
 
@@ -443,12 +479,40 @@
 			<span title={conversation.workdir}>📁 {conversation.workdir}</span>
 			{#if conversation.model}<span>· {conversation.model}</span>{/if}
 		</div>
+		{#if parent}
+			<div class="parent-crumb muted">
+				<svg
+					width="11"
+					height="11"
+					viewBox="0 0 16 16"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.5"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
+				>
+					<path d="M6 3l-3 3 3 3" />
+					<path d="M3 6h7a3 3 0 013 3v4" />
+				</svg>
+				<span>Forked from</span>
+				<a href={`/conversations/${parent.id}`}>{parent.title}</a>
+				{#if parent.messageIndex != null}
+					<span>· at message {parent.messageIndex + 1}</span>
+				{/if}
+			</div>
+		{/if}
 	</header>
 
 	<div class="messages-wrap">
 		<div class="messages" bind:this={scrollEl} onscroll={onMessagesScroll}>
 			{#each messages as m (m.id)}
-				<Message_ message={m} conversationId={conversation.id} />
+				<Message_
+					message={m}
+					conversationId={conversation.id}
+					forks={forksByMessage[m.id] ?? []}
+					onForked={refreshForks}
+				/>
 			{/each}
 			{#if pendingPermission}
 				<PermissionPrompt request={pendingPermission} onDecide={decidePermission} />
@@ -574,6 +638,21 @@
 		font-size: 0.78em;
 		display: flex;
 		gap: 0.5rem;
+	}
+	.parent-crumb {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		margin-top: 0.15rem;
+		font-size: 0.78em;
+	}
+	.parent-crumb a {
+		color: inherit;
+		text-decoration: underline;
+		text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+	}
+	.parent-crumb a:hover {
+		text-decoration-color: currentColor;
 	}
 	.messages-wrap {
 		position: relative;

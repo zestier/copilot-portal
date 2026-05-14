@@ -102,7 +102,7 @@ describe('fork.forkAtMessage', () => {
 		expect(readFileSync(join(wd, 'state.txt'), 'utf8')).toBe('v3\n');
 	});
 
-	it('rejects forks from assistant messages', async () => {
+	it('rejects edits on assistant messages when newContent is provided', async () => {
 		const { users, convs, messages, fork } = await freshImports();
 		const u = users.ensureLocalUser();
 		const conv = convs.create(u.id, { title: 't', workdir: '/tmp', model: null });
@@ -114,7 +114,60 @@ describe('fork.forkAtMessage', () => {
 				messageId: a.id,
 				newContent: 'nope'
 			})
-		).rejects.toMatchObject({ reason: 'not_user_message' });
+		).rejects.toMatchObject({ reason: 'content_not_allowed' });
+	});
+
+	it('requires newContent when editing a user message', async () => {
+		const { users, convs, messages, fork } = await freshImports();
+		const u = users.ensureLocalUser();
+		const conv = convs.create(u.id, { title: 't', workdir: '/tmp', model: null });
+		const m = messages.append(conv.id, { role: 'user', content: 'hi' });
+		await expect(
+			fork.forkAtMessage({
+				userId: u.id,
+				sourceConversationId: conv.id,
+				messageId: m.id,
+				newContent: null
+			})
+		).rejects.toMatchObject({ reason: 'content_required' });
+	});
+
+	it('retries from an assistant message: clones up to and including it, no new user msg, post snapshot', async () => {
+		const { users, convs, messages, snapshots, fork } = await freshImports();
+		const u = users.ensureLocalUser();
+		const sourceConv = convs.create(u.id, { title: 'src', workdir: '', model: null });
+		const wd = managedWorkdirFor(sourceConv.id);
+		const { getDb } = await import('../src/lib/server/db');
+		getDb().prepare('UPDATE conversations SET workdir = ? WHERE id = ?').run(wd, sourceConv.id);
+
+		// Turn 1.
+		writeFileSync(join(wd, 'state.txt'), 'pre1\n');
+		const u1 = messages.append(sourceConv.id, { role: 'user', content: 'first' });
+		await snapshots.snapshot(wd, u1.id, 'pre');
+		writeFileSync(join(wd, 'state.txt'), 'post1\n');
+		const a1 = messages.append(sourceConv.id, { role: 'assistant', content: 'reply 1' });
+		await snapshots.snapshot(wd, a1.id, 'post');
+
+		// Turn 2 (the workdir changes but doesn't affect the test).
+		writeFileSync(join(wd, 'state.txt'), 'pre2\n');
+		messages.append(sourceConv.id, { role: 'user', content: 'second' });
+
+		const result = await fork.forkAtMessage({
+			userId: u.id,
+			sourceConversationId: sourceConv.id,
+			messageId: a1.id,
+			newContent: null
+		});
+
+		const newConv = result.conversation;
+		expect(newConv.forkedFromMessageId).toBe(a1.id);
+		// Workdir reflects the post-snapshot of a1.
+		expect(readFileSync(join(newConv.workdir, 'state.txt'), 'utf8')).toBe('post1\n');
+		// Cloned messages: u1, a1 — no new user prompt.
+		const cloned = messages.listByConversation(newConv.id);
+		expect(cloned).toHaveLength(2);
+		expect(cloned[0]).toMatchObject({ role: 'user', content: 'first' });
+		expect(cloned[1]).toMatchObject({ role: 'assistant', content: 'reply 1' });
 	});
 
 	it('rejects forks when no snapshot exists for the target message', async () => {

@@ -6,7 +6,17 @@
 	import ReasoningBlock from './ReasoningBlock.svelte';
 	import { goto } from '$app/navigation';
 
-	let { message, conversationId }: { message: Message; conversationId?: string } = $props();
+	let {
+		message,
+		conversationId,
+		forks = [],
+		onForked
+	}: {
+		message: Message;
+		conversationId?: string;
+		forks?: Array<{ id: string; title: string; archivedAt: number | null }>;
+		onForked?: () => void;
+	} = $props();
 
 	let editing = $state(false);
 	let editText = $state('');
@@ -23,6 +33,18 @@
 			!message.id.startsWith('local-') &&
 			!message.id.startsWith('err-')
 	);
+
+	// Retry-from-here on assistant messages: re-uses the post snapshot
+	// captured after that turn, starts a new conversation in that state
+	// with no pending user prompt.
+	const canRetry = $derived(
+		message.role === 'assistant' &&
+			message.status === 'complete' &&
+			!!conversationId &&
+			!message.id.startsWith('local-')
+	);
+
+	const liveForks = $derived(forks.filter((f) => f.archivedAt == null));
 
 	function beginEdit() {
 		editText = message.content;
@@ -52,6 +74,32 @@
 				return;
 			}
 			const data = (await r.json()) as { conversationId: string };
+			onForked?.();
+			await goto(`/conversations/${data.conversationId}`);
+		} catch (e) {
+			errorMsg = e instanceof Error ? e.message : String(e);
+		} finally {
+			submitting = false;
+		}
+	}
+
+	async function retryFromHere() {
+		if (!conversationId || submitting) return;
+		submitting = true;
+		errorMsg = null;
+		try {
+			const r = await fetch(`/api/conversations/${conversationId}/messages/${message.id}/fork`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: '{}'
+			});
+			if (!r.ok) {
+				const body = await r.text();
+				errorMsg = body || `Retry failed (${r.status})`;
+				return;
+			}
+			const data = (await r.json()) as { conversationId: string };
+			onForked?.();
 			await goto(`/conversations/${data.conversationId}`);
 		} catch (e) {
 			errorMsg = e instanceof Error ? e.message : String(e);
@@ -134,10 +182,36 @@
 		{#if message.status !== 'complete' && message.status !== 'streaming'}
 			<span class="status muted">({message.status})</span>
 		{/if}
+		{#if liveForks.length > 0}
+			<span class="fork-badges" aria-label="Forks from this message">
+				{#each liveForks as f (f.id)}
+					<a class="fork-badge" href={`/conversations/${f.id}`} title={`Open fork: ${f.title}`}>
+						<svg
+							width="10"
+							height="10"
+							viewBox="0 0 16 16"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.6"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							<circle cx="5" cy="4" r="1.6" />
+							<circle cx="5" cy="12" r="1.6" />
+							<circle cx="11" cy="8" r="1.6" />
+							<path d="M5 5.6v4.8" />
+							<path d="M5 8h4.6" />
+						</svg>
+						<span class="fork-title">{f.title}</span>
+					</a>
+				{/each}
+			</span>
+		{/if}
 		{#if canEdit && !editing}
 			<button
 				type="button"
-				class="edit-btn"
+				class="action-btn edit-btn"
 				onclick={beginEdit}
 				title="Edit this message and re-run from here in a new conversation"
 				aria-label="Edit message and fork"
@@ -156,6 +230,34 @@
 					<path d="M11.5 2.5l2 2L5 13H3v-2l8.5-8.5z" />
 				</svg>
 				Edit
+			</button>
+		{/if}
+		{#if canRetry}
+			<button
+				type="button"
+				class="action-btn retry-btn"
+				onclick={retryFromHere}
+				disabled={submitting}
+				title="Continue from here in a new conversation, with the workdir restored to this point"
+				aria-label="Retry from here in a new conversation"
+			>
+				<svg
+					width="12"
+					height="12"
+					viewBox="0 0 16 16"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.5"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
+				>
+					<path d="M3 8a5 5 0 018.5-3.5L13 6" />
+					<path d="M13 3v3h-3" />
+					<path d="M13 8a5 5 0 01-8.5 3.5L3 10" />
+					<path d="M3 13v-3h3" />
+				</svg>
+				Retry
 			</button>
 		{/if}
 	</header>
@@ -238,8 +340,7 @@
 	.status {
 		margin-left: 0.5rem;
 	}
-	.edit-btn {
-		margin-left: auto;
+	.action-btn {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.25rem;
@@ -259,13 +360,54 @@
 			background 0.12s ease,
 			color 0.12s ease;
 	}
-	.msg:hover .edit-btn,
-	.edit-btn:focus-visible {
+	.action-btn:first-of-type {
+		margin-left: auto;
+	}
+	.msg:hover .action-btn,
+	.action-btn:focus-visible {
 		opacity: 1;
 	}
-	.edit-btn:hover {
+	.action-btn:hover:not(:disabled) {
 		background: var(--surface);
 		color: var(--fg);
+	}
+	.action-btn:disabled {
+		cursor: progress;
+		opacity: 0.5;
+	}
+	.fork-badges {
+		display: inline-flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		margin-left: 0.25rem;
+	}
+	.fork-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.2rem;
+		max-width: 16em;
+		padding: 0.1rem 0.4rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		font-size: 0.7rem;
+		text-transform: none;
+		letter-spacing: 0;
+		color: var(--text-muted);
+		text-decoration: none;
+		background: var(--surface);
+		transition:
+			background 0.12s ease,
+			color 0.12s ease;
+	}
+	.fork-badge:hover {
+		color: var(--fg);
+		background: var(--surface-2);
+	}
+	.fork-title {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.body {
 		display: flex;
