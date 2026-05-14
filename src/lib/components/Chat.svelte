@@ -299,6 +299,17 @@
 				};
 				break;
 			}
+			case 'tool.permission.resolved': {
+				// Clear any prompt for this request id. Critical on replay:
+				// the original `tool.permission` event lives forever in the
+				// turn's event log, so without this signal a refresh or a
+				// visibility-driven reconnect would resurrect a dialog the
+				// user already answered.
+				if (pendingPermission?.requestId === ev.requestId) {
+					pendingPermission = null;
+				}
+				break;
+			}
 			case 'file.edit': {
 				const m = messages[messages.length - 1];
 				if (m && m.role === 'assistant') {

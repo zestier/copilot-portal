@@ -90,6 +90,11 @@ export type PortalEvent =
 			args: unknown;
 	  }
 	| {
+			type: 'tool.permission.resolved';
+			requestId: string;
+			decision: PermissionDecision;
+	  }
+	| {
 			type: 'tool.result';
 			toolCallId: string;
 			ok: boolean;

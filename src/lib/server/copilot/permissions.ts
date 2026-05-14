@@ -3,7 +3,7 @@
 
 import { ulid } from 'ulid';
 import * as settingsRepo from '../db/repos/settings';
-import type { PermissionDecision, PermissionPolicy } from '$lib/types';
+import type { PermissionDecision, PermissionPolicy, PortalEvent } from '$lib/types';
 
 export interface PendingPermission {
 	requestId: string;
@@ -15,6 +15,15 @@ export interface PendingPermission {
 	resolve: (decision: PermissionDecision) => void;
 	reject: (err: unknown) => void;
 	createdAt: number;
+	/**
+	 * Broadcasts an event into the active turn's stream. Used to publish a
+	 * `tool.permission.resolved` event so that any future re-subscriber (a
+	 * page refresh, a visibility-driven reconnect, etc.) which replays the
+	 * turn's event log learns that the request has already been decided and
+	 * can clear the prompt. Without this, the original `tool.permission`
+	 * event in the log would resurrect a dialog that was already answered.
+	 */
+	emit?: (ev: PortalEvent) => void;
 }
 
 // Per-process map. Acceptable for single-instance deployment.
@@ -43,6 +52,13 @@ export function resolve(requestId: string, userId: string, decision: PermissionD
 	if (decision === 'allow-always') {
 		settingsRepo.addGrant(userId, p.conversationId, p.tool);
 	}
+	// Broadcast resolution BEFORE unblocking the SDK so the event lands
+	// in the turn's event log before any subsequent tool.call/result.
+	try {
+		p.emit?.({ type: 'tool.permission.resolved', requestId: p.requestId, decision });
+	} catch {
+		/* non-fatal */
+	}
 	p.resolve(decision);
 	return true;
 }
@@ -51,6 +67,11 @@ export function cancel(requestId: string) {
 	const p = pending.get(requestId);
 	if (!p) return;
 	pending.delete(requestId);
+	try {
+		p.emit?.({ type: 'tool.permission.resolved', requestId: p.requestId, decision: 'deny' });
+	} catch {
+		/* non-fatal */
+	}
 	p.resolve('deny');
 }
 

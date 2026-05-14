@@ -423,7 +423,8 @@ async function handlePermission(
 			args: req.args ?? null,
 			resolve,
 			reject,
-			createdAt: Date.now()
+			createdAt: Date.now(),
+			emit
 		});
 		emit({
 			type: 'tool.permission',
