@@ -3,8 +3,15 @@
 	import { renderMarkdown } from '$lib/client/markdown';
 	import ToolCall from './ToolCall.svelte';
 	import DiffView from './DiffView.svelte';
+	import ReasoningBlock from './ReasoningBlock.svelte';
 
 	let { message }: { message: Message } = $props();
+
+	const reasoningStreaming = $derived(
+		message.role === 'assistant' &&
+			message.status === 'streaming' &&
+			(message.content?.length ?? 0) === 0
+	);
 
 	type Part =
 		| { kind: 'text'; html: string }
@@ -77,6 +84,13 @@
 	</header>
 	<div class="body">
 		{#if message.role === 'assistant'}
+			{#if message.reasoning}
+				<ReasoningBlock
+					text={message.reasoning}
+					streaming={reasoningStreaming}
+					durationMs={message.reasoningDurationMs ?? null}
+				/>
+			{/if}
 			{#each parts as p, i (i)}
 				{#if p.kind === 'text'}
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -->

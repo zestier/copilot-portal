@@ -10,6 +10,8 @@ interface MsgRow {
 	status: string;
 	error_code: string | null;
 	created_at: number;
+	reasoning: string | null;
+	reasoning_duration_ms: number | null;
 }
 
 interface ToolRow {
@@ -41,7 +43,9 @@ function rowToMessage(r: MsgRow): Message {
 		content: r.content,
 		status: r.status as MessageStatus,
 		errorCode: r.error_code,
-		createdAt: r.created_at
+		createdAt: r.created_at,
+		reasoning: r.reasoning ?? undefined,
+		reasoningDurationMs: r.reasoning_duration_ms
 	};
 }
 
@@ -103,6 +107,8 @@ export interface AppendInput {
 	content: string;
 	status?: MessageStatus;
 	errorCode?: string | null;
+	reasoning?: string | null;
+	reasoningDurationMs?: number | null;
 }
 
 export function append(conversationId: string, input: AppendInput): Message {
@@ -110,8 +116,8 @@ export function append(conversationId: string, input: AppendInput): Message {
 	const now = Date.now();
 	getDb()
 		.prepare(
-			`INSERT INTO messages(id, conversation_id, role, content, status, error_code, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`
+			`INSERT INTO messages(id, conversation_id, role, content, status, error_code, created_at, reasoning, reasoning_duration_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			id,
@@ -120,7 +126,9 @@ export function append(conversationId: string, input: AppendInput): Message {
 			input.content,
 			input.status ?? 'complete',
 			input.errorCode ?? null,
-			now
+			now,
+			input.reasoning ?? null,
+			input.reasoningDurationMs ?? null
 		);
 	return {
 		id,
@@ -129,7 +137,9 @@ export function append(conversationId: string, input: AppendInput): Message {
 		content: input.content,
 		status: input.status ?? 'complete',
 		errorCode: input.errorCode ?? null,
-		createdAt: now
+		createdAt: now,
+		reasoning: input.reasoning ?? undefined,
+		reasoningDurationMs: input.reasoningDurationMs ?? null
 	};
 }
 

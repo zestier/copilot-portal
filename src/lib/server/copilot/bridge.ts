@@ -188,9 +188,19 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	const onReasoningDelta = (e: unknown) => {
 		const ev = e as { data?: { deltaContent?: string } };
 		const text = ev?.data?.deltaContent ?? '';
-		if (text && activeQueue && currentMessageId) {
-			activeQueue.push({ type: 'message.reasoning', messageId: currentMessageId, text });
+		if (!text || !activeQueue) return;
+		// Reasoning can arrive before the first visible token. Open the
+		// assistant message early so we don't silently drop the opening
+		// thought tokens.
+		if (!currentMessageId) {
+			currentMessageId = ulid();
+			activeQueue.push({
+				type: 'message.start',
+				messageId: currentMessageId,
+				role: 'assistant'
+			});
 		}
+		activeQueue.push({ type: 'message.reasoning', messageId: currentMessageId, text });
 	};
 
 	const onAssistantMessage = (e: unknown) => {

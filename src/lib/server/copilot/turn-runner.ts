@@ -124,6 +124,9 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	// Accumulators for persistence.
 	let assistantBuf = '';
 	let assistantId: string | null = null;
+	let reasoningBuf = '';
+	let reasoningStartedAt: number | null = null;
+	let reasoningEndedAt: number | null = null;
 	const pendingTools = new Map<string, PendingTool>();
 	const pendingEdits: PendingEdit[] = [];
 
@@ -138,8 +141,16 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		for (const q of subscribers) q.push(ev);
 
 		if (ev.type === 'message.start') assistantId = ev.messageId;
-		else if (ev.type === 'message.delta') assistantBuf += ev.text;
-		else if (ev.type === 'tool.call') {
+		else if (ev.type === 'message.delta') {
+			assistantBuf += ev.text;
+			// First visible token closes out the reasoning timing window.
+			if (reasoningStartedAt !== null && reasoningEndedAt === null) {
+				reasoningEndedAt = Date.now();
+			}
+		} else if (ev.type === 'message.reasoning') {
+			if (reasoningStartedAt === null) reasoningStartedAt = Date.now();
+			reasoningBuf += ev.text;
+		} else if (ev.type === 'tool.call') {
 			pendingTools.set(ev.toolCallId, {
 				toolCallId: ev.toolCallId,
 				tool: ev.tool,
@@ -202,11 +213,23 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 
 			// Persist assistant message + tool calls + file edits.
 			try {
-				if (assistantBuf || assistantId || pendingTools.size || pendingEdits.length) {
+				if (
+					assistantBuf ||
+					assistantId ||
+					pendingTools.size ||
+					pendingEdits.length ||
+					reasoningBuf
+				) {
+					const durationMs =
+						reasoningStartedAt !== null
+							? (reasoningEndedAt ?? Date.now()) - reasoningStartedAt
+							: null;
 					const persisted = messages.append(opts.conversationId, {
 						role: 'assistant',
 						content: assistantBuf,
-						status
+						status,
+						reasoning: reasoningBuf || null,
+						reasoningDurationMs: durationMs
 					});
 					for (const t of pendingTools.values()) {
 						messages.insertToolCall(persisted.id, {

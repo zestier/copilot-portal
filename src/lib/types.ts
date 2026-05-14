@@ -31,6 +31,12 @@ export interface Message {
 	createdAt: number;
 	toolCalls?: ToolCallRecord[];
 	fileEdits?: FileEditRecord[];
+	// Optional assistant reasoning ("thinking") captured while the model was
+	// composing the visible body. Only present for models that emit it.
+	reasoning?: string;
+	// Wall-clock duration of the reasoning phase. Persisted so reloaded
+	// history can still show "Thought for Xs" on the collapsed block.
+	reasoningDurationMs?: number | null;
 }
 
 export interface ToolCallRecord {

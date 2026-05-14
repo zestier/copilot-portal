@@ -198,6 +198,29 @@
 				if (m) m.content += ev.text;
 				break;
 			}
+			case 'message.reasoning': {
+				let m = messages.find((x) => x.id === ev.messageId);
+				if (!m) {
+					// Reasoning can arrive before the first visible token. The
+					// bridge opens a message.start in that case, but be defensive
+					// in case events arrive out of order on resume/replay.
+					m = {
+						id: ev.messageId,
+						conversationId: conversation.id,
+						role: 'assistant',
+						content: '',
+						status: 'streaming',
+						errorCode: null,
+						createdAt: Date.now(),
+						toolCalls: [],
+						fileEdits: [],
+						reasoning: ''
+					};
+					messages.push(m);
+				}
+				m.reasoning = (m.reasoning ?? '') + ev.text;
+				break;
+			}
 			case 'message.end': {
 				const m = messages.find((x) => x.id === ev.messageId);
 				if (m) m.status = 'complete';
@@ -400,7 +423,8 @@
 		if (!last || last.role !== 'assistant') return true;
 		const hasContent = last.content.length > 0;
 		const hasTools = (last.toolCalls?.length ?? 0) > 0 || (last.fileEdits?.length ?? 0) > 0;
-		return !hasContent && !hasTools;
+		const hasReasoning = (last.reasoning?.length ?? 0) > 0;
+		return !hasContent && !hasTools && !hasReasoning;
 	});
 
 	$effect(() => {
