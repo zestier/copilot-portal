@@ -18,6 +18,7 @@ import * as usageRepo from '../db/repos/usage';
 import * as pool from './pool';
 import { deriveTitle, isDefaultTitle } from '../title';
 import { AsyncQueue } from './async-queue';
+import { snapshot as takeSnapshot } from '../snapshots';
 import type { BridgeOpenOptions } from './bridge';
 import type { PortalEvent } from '$lib/types';
 
@@ -212,6 +213,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 			const status: 'interrupted' | 'complete' = turnAc.signal.aborted ? 'interrupted' : 'complete';
 
 			// Persist assistant message + tool calls + file edits.
+			let persistedAssistantId: string | null = null;
 			try {
 				if (
 					assistantBuf ||
@@ -231,6 +233,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 						reasoning: reasoningBuf || null,
 						reasoningDurationMs: durationMs
 					});
+					persistedAssistantId = persisted.id;
 					for (const t of pendingTools.values()) {
 						messages.insertToolCall(persisted.id, {
 							id: t.toolCallId,
@@ -280,6 +283,21 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 					conversationId: opts.conversationId,
 					err: String(persistErr)
 				});
+			}
+
+			// Post-turn workdir snapshot, bound to the assistant message
+			// id. Used by "fork after this reply" affordances and for
+			// post-turn diff views. Non-fatal on failure.
+			if (persistedAssistantId) {
+				try {
+					await takeSnapshot(opts.bridge.workingDirectory, persistedAssistantId, 'post');
+				} catch (snapErr) {
+					log.warn('snapshot.post.failed', {
+						conversationId: opts.conversationId,
+						messageId: persistedAssistantId,
+						err: String(snapErr)
+					});
+				}
 			}
 
 			turn.status = status === 'interrupted' ? 'interrupted' : 'complete';

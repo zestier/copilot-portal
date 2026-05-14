@@ -11,6 +11,8 @@ interface ConvRow {
 	created_at: number;
 	updated_at: number;
 	archived_at: number | null;
+	forked_from_conversation_id: string | null;
+	forked_from_message_id: string | null;
 }
 
 function rowToConv(r: ConvRow): Conversation {
@@ -22,7 +24,9 @@ function rowToConv(r: ConvRow): Conversation {
 		model: r.model,
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
-		archivedAt: r.archived_at
+		archivedAt: r.archived_at,
+		forkedFromConversationId: r.forked_from_conversation_id,
+		forkedFromMessageId: r.forked_from_message_id
 	};
 }
 
@@ -51,17 +55,23 @@ export interface CreateInput {
 	title: string;
 	workdir: string;
 	model: string | null;
+	forkedFromConversationId?: string | null;
+	forkedFromMessageId?: string | null;
 }
 
 export function create(userId: string, input: CreateInput): Conversation {
 	const id = ulid();
 	const now = Date.now();
+	const forkConv = input.forkedFromConversationId ?? null;
+	const forkMsg = input.forkedFromMessageId ?? null;
 	getDb()
 		.prepare(
-			`INSERT INTO conversations(id, user_id, title, workdir, model, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`
+			`INSERT INTO conversations(
+			   id, user_id, title, workdir, model, created_at, updated_at,
+			   forked_from_conversation_id, forked_from_message_id
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
-		.run(id, userId, input.title, input.workdir, input.model, now, now);
+		.run(id, userId, input.title, input.workdir, input.model, now, now, forkConv, forkMsg);
 	return {
 		id,
 		userId,
@@ -70,7 +80,9 @@ export function create(userId: string, input: CreateInput): Conversation {
 		model: input.model,
 		createdAt: now,
 		updatedAt: now,
-		archivedAt: null
+		archivedAt: null,
+		forkedFromConversationId: forkConv,
+		forkedFromMessageId: forkMsg
 	};
 }
 

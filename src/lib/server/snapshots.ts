@@ -1,0 +1,323 @@
+// Per-message workdir snapshots, backed by a private git ref namespace
+// inside the workdir's own repository.
+//
+// Snapshots are commit objects under `refs/portal/turns/{messageId}` that
+// capture the entire working tree (including untracked files) at the
+// instant they're taken. They live alongside whatever real branches /
+// history exist in the workdir, but never touch any user-visible refs.
+//
+// We deliberately call git via spawn (not through the safe wrapper in
+// git.ts) for a couple of operations that need GIT_INDEX_FILE or finer-
+// grained timeouts than the helpers there expose. All paths still go
+// through validated workdirs and shell:false.
+
+import { spawn } from 'node:child_process';
+import { mkdirSync, existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { getDb } from './db';
+
+const SNAP_TIMEOUT_MS = 30_000;
+const SNAP_MAX_BYTES = 8 * 1024 * 1024;
+
+export type SnapshotKind = 'pre' | 'post';
+
+export interface SnapshotRow {
+	messageId: string;
+	kind: SnapshotKind;
+	gitRef: string;
+	commitSha: string;
+	treeSha: string;
+	createdAt: number;
+}
+
+interface RunResult {
+	stdout: string;
+	stderr: string;
+	code: number;
+	timedOut: boolean;
+}
+
+interface RunOpts {
+	cwd: string;
+	env?: Record<string, string>;
+	timeoutMs?: number;
+}
+
+function run(args: string[], opts: RunOpts): Promise<RunResult> {
+	const timeoutMs = opts.timeoutMs ?? SNAP_TIMEOUT_MS;
+	return new Promise((resolve) => {
+		const child = spawn('git', args, {
+			cwd: opts.cwd,
+			shell: false,
+			env: {
+				...process.env,
+				GIT_TERMINAL_PROMPT: '0',
+				GIT_PAGER: 'cat',
+				PAGER: 'cat',
+				GIT_OPTIONAL_LOCKS: '0',
+				LC_ALL: 'C',
+				...(opts.env ?? {})
+			}
+		});
+		let stdout = Buffer.alloc(0);
+		let stderr = Buffer.alloc(0);
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			child.kill('SIGKILL');
+		}, timeoutMs);
+		child.stdout.on('data', (c: Buffer) => {
+			if (stdout.length < SNAP_MAX_BYTES) {
+				stdout = Buffer.concat([stdout, c.subarray(0, SNAP_MAX_BYTES - stdout.length)]);
+			}
+		});
+		child.stderr.on('data', (c: Buffer) => {
+			if (stderr.length < 65_536) {
+				stderr = Buffer.concat([stderr, c.subarray(0, 65_536 - stderr.length)]);
+			}
+		});
+		child.on('error', (err) => {
+			clearTimeout(timer);
+			resolve({
+				stdout: stdout.toString('utf-8'),
+				stderr: (stderr.toString('utf-8') + '\n' + err.message).trim(),
+				code: -1,
+				timedOut
+			});
+		});
+		child.on('close', (code) => {
+			clearTimeout(timer);
+			resolve({
+				stdout: stdout.toString('utf-8'),
+				stderr: stderr.toString('utf-8'),
+				code: code ?? -1,
+				timedOut
+			});
+		});
+	});
+}
+
+async function runOk(args: string[], opts: RunOpts): Promise<string> {
+	const r = await run(args, opts);
+	if (r.timedOut) throw new Error(`git ${args[0]} timed out (${args.join(' ')})`);
+	if (r.code !== 0) {
+		throw new Error(`git ${args[0]} exited ${r.code}: ${r.stderr.trim()}`);
+	}
+	return r.stdout;
+}
+
+// ---------- Per-workdir lock ----------
+//
+// Snapshot/restore operations against the same workdir must not race. The
+// turn runner already coordinates by conversation id (one in-flight turn
+// per conversation), but we also serialise here as a defence in depth:
+// e.g., a fork operation that materialises into a *new* workdir while the
+// source's pre-snapshot is mid-flight on its existing workdir.
+const locks = new Map<string, Promise<void>>();
+async function withLock<T>(workdir: string, fn: () => Promise<T>): Promise<T> {
+	const prev = locks.get(workdir) ?? Promise.resolve();
+	let release!: () => void;
+	const next = new Promise<void>((r) => (release = r));
+	locks.set(
+		workdir,
+		prev.then(() => next)
+	);
+	try {
+		await prev;
+		return await fn();
+	} finally {
+		release();
+		if (locks.get(workdir) === next) locks.delete(workdir);
+	}
+}
+
+// ---------- Public API ----------
+
+const REF_PREFIX = 'refs/portal/turns';
+const MESSAGE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+function refFor(messageId: string, kind: SnapshotKind): string {
+	if (!MESSAGE_ID_RE.test(messageId)) {
+		throw new Error(`invalid message id for snapshot ref: ${messageId}`);
+	}
+	return `${REF_PREFIX}/${kind}/${messageId}`;
+}
+
+/**
+ * Ensure the given workdir is a git repository. Returns silently if it
+ * already is one. Created repos use a default branch of `portal` so we
+ * don't pollute the user's branch namespace and the choice survives any
+ * future change in git's `init.defaultBranch` default.
+ */
+export async function ensureRepo(workdir: string): Promise<void> {
+	mkdirSync(workdir, { recursive: true });
+	const probe = await run(['rev-parse', '--is-inside-work-tree'], { cwd: workdir });
+	if (probe.code === 0 && probe.stdout.trim() === 'true') return;
+	await runOk(['init', '-q', '-b', 'portal'], { cwd: workdir });
+	// Make sure commit-tree has an identity, even if the user has no
+	// git config set globally. These are local-only.
+	await runOk(['config', 'user.email', 'portal@localhost'], { cwd: workdir });
+	await runOk(['config', 'user.name', 'Copilot Portal'], { cwd: workdir });
+	await runOk(['config', 'commit.gpgsign', 'false'], { cwd: workdir });
+}
+
+/**
+ * Take a snapshot of `workdir` and bind it to `(messageId, kind)`.
+ *
+ * Uses a private index file so the user's staging area is never touched.
+ * If a snapshot for the same `(messageId, kind)` already exists, returns
+ * the existing row unchanged. If the tree is identical to an existing
+ * snapshot, the resulting commit reuses the same tree SHA (git dedups).
+ */
+export async function snapshot(
+	workdir: string,
+	messageId: string,
+	kind: SnapshotKind
+): Promise<SnapshotRow> {
+	const db = getDb();
+	const existing = db
+		.prepare('SELECT * FROM turn_snapshots WHERE message_id = ? AND kind = ?')
+		.get(messageId, kind) as
+		| {
+				message_id: string;
+				kind: SnapshotKind;
+				git_ref: string;
+				commit_sha: string;
+				tree_sha: string;
+				created_at: number;
+		  }
+		| undefined;
+	if (existing) {
+		return {
+			messageId: existing.message_id,
+			kind: existing.kind,
+			gitRef: existing.git_ref,
+			commitSha: existing.commit_sha,
+			treeSha: existing.tree_sha,
+			createdAt: existing.created_at
+		};
+	}
+
+	return withLock(workdir, async () => {
+		await ensureRepo(workdir);
+		const ref = refFor(messageId, kind);
+		// Use a private index file so the user's staging area (if any) is
+		// not disturbed. We pick a path inside .git so concurrent processes
+		// using a different convention don't conflict.
+		const indexFile = join(workdir, '.git', `portal-index-${messageId}-${kind}`);
+		try {
+			await runOk(['add', '-A'], { cwd: workdir, env: { GIT_INDEX_FILE: indexFile } });
+			const tree = (
+				await runOk(['write-tree'], { cwd: workdir, env: { GIT_INDEX_FILE: indexFile } })
+			).trim();
+			const commit = (
+				await runOk(['commit-tree', tree, '-m', `portal: ${kind} snapshot for ${messageId}`], {
+					cwd: workdir
+				})
+			).trim();
+			await runOk(['update-ref', ref, commit], { cwd: workdir });
+
+			const row: SnapshotRow = {
+				messageId,
+				kind,
+				gitRef: ref,
+				commitSha: commit,
+				treeSha: tree,
+				createdAt: Date.now()
+			};
+			db.prepare(
+				`INSERT INTO turn_snapshots(message_id, kind, git_ref, commit_sha, tree_sha, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?)`
+			).run(row.messageId, row.kind, row.gitRef, row.commitSha, row.treeSha, row.createdAt);
+			return row;
+		} finally {
+			try {
+				if (existsSync(indexFile)) rmSync(indexFile, { force: true });
+			} catch {
+				/* best-effort */
+			}
+		}
+	});
+}
+
+/**
+ * Look up a snapshot row.
+ */
+export function getSnapshot(messageId: string, kind: SnapshotKind): SnapshotRow | null {
+	const r = getDb()
+		.prepare('SELECT * FROM turn_snapshots WHERE message_id = ? AND kind = ?')
+		.get(messageId, kind) as
+		| {
+				message_id: string;
+				kind: SnapshotKind;
+				git_ref: string;
+				commit_sha: string;
+				tree_sha: string;
+				created_at: number;
+		  }
+		| undefined;
+	if (!r) return null;
+	return {
+		messageId: r.message_id,
+		kind: r.kind,
+		gitRef: r.git_ref,
+		commitSha: r.commit_sha,
+		treeSha: r.tree_sha,
+		createdAt: r.created_at
+	};
+}
+
+/**
+ * Materialise the working tree of `srcWorkdir`@`commitSha` into a brand
+ * new workdir at `dstWorkdir`. The destination must not already exist
+ * (or must be empty). This is how a forked conversation gets its own
+ * copy of the workdir at the state of the source's pre-snapshot.
+ *
+ * Implementation: init a fresh repo at dst, fetch the snapshot commit
+ * across as a single object, then check out its tree. We never copy
+ * across the source's other refs / objects, so the new workdir starts
+ * with a clean history rooted at this snapshot.
+ */
+export async function materializeFromCommit(
+	srcWorkdir: string,
+	commitSha: string,
+	dstWorkdir: string
+): Promise<void> {
+	if (!/^[0-9a-f]{4,64}$/.test(commitSha)) {
+		throw new Error(`invalid commit sha: ${commitSha}`);
+	}
+	if (existsSync(dstWorkdir)) {
+		// Allow an empty dir but reject anything pre-populated.
+		const { readdirSync } = await import('node:fs');
+		const entries = readdirSync(dstWorkdir);
+		if (entries.length > 0) {
+			throw new Error(`materializeFromCommit: dst not empty: ${dstWorkdir}`);
+		}
+	}
+	mkdirSync(dstWorkdir, { recursive: true });
+
+	await withLock(dstWorkdir, async () => {
+		await runOk(['init', '-q', '-b', 'portal'], { cwd: dstWorkdir });
+		await runOk(['config', 'user.email', 'portal@localhost'], { cwd: dstWorkdir });
+		await runOk(['config', 'user.name', 'Copilot Portal'], { cwd: dstWorkdir });
+		await runOk(['config', 'commit.gpgsign', 'false'], { cwd: dstWorkdir });
+		// Use `fetch` from a local path so we only transfer the snapshot
+		// commit and its tree, not the whole history graph. `--depth=1`
+		// keeps it tight.
+		await runOk(['fetch', '--no-tags', '--depth=1', srcWorkdir, `${commitSha}:refs/portal/seed`], {
+			cwd: dstWorkdir,
+			timeoutMs: 60_000
+		});
+		// Check out the snapshot tree into the worktree + index. We commit
+		// it locally so the new repo has a sensible HEAD.
+		await runOk(['read-tree', '-u', '--reset', 'refs/portal/seed'], { cwd: dstWorkdir });
+		const tree = (await runOk(['write-tree'], { cwd: dstWorkdir })).trim();
+		const newHead = (
+			await runOk(['commit-tree', tree, '-m', 'portal: fork seed'], { cwd: dstWorkdir })
+		).trim();
+		await runOk(['update-ref', 'refs/heads/portal', newHead], { cwd: dstWorkdir });
+		await runOk(['symbolic-ref', 'HEAD', 'refs/heads/portal'], { cwd: dstWorkdir });
+		// Tidy up the temporary seed ref.
+		await run(['update-ref', '-d', 'refs/portal/seed'], { cwd: dstWorkdir });
+	});
+}

@@ -55,9 +55,10 @@ describe('turn-runner', () => {
 	it('emits conversation.update before the terminal done so clients see the auto-title', async () => {
 		const { users, convs, turnRunner } = await freshImports();
 		const user = users.ensureLocalUser();
+		const wd = mkdtempSync(join(tmpdir(), 'portal-wd-'));
 		const conv = convs.create(user.id, {
 			title: 'New chat',
-			workdir: '/tmp',
+			workdir: wd,
 			model: 'gpt-4'
 		});
 
@@ -76,7 +77,7 @@ describe('turn-runner', () => {
 			bridge: {
 				conversationId: conv.id,
 				userId: user.id,
-				workingDirectory: '/tmp',
+				workingDirectory: wd,
 				model: 'gpt-4',
 				policy: 'prompt'
 			},
@@ -112,9 +113,10 @@ describe('turn-runner', () => {
 	it('does not emit conversation.update when the title is already set', async () => {
 		const { users, convs, turnRunner } = await freshImports();
 		const user = users.ensureLocalUser();
+		const wd = mkdtempSync(join(tmpdir(), 'portal-wd-'));
 		const conv = convs.create(user.id, {
 			title: 'Custom title',
-			workdir: '/tmp',
+			workdir: wd,
 			model: 'gpt-4'
 		});
 
@@ -130,7 +132,7 @@ describe('turn-runner', () => {
 			bridge: {
 				conversationId: conv.id,
 				userId: user.id,
-				workingDirectory: '/tmp',
+				workingDirectory: wd,
 				model: 'gpt-4',
 				policy: 'prompt'
 			},

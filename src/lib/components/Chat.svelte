@@ -448,7 +448,7 @@
 	<div class="messages-wrap">
 		<div class="messages" bind:this={scrollEl} onscroll={onMessagesScroll}>
 			{#each messages as m (m.id)}
-				<Message_ message={m} />
+				<Message_ message={m} conversationId={conversation.id} />
 			{/each}
 			{#if pendingPermission}
 				<PermissionPrompt request={pendingPermission} onDecide={decidePermission} />

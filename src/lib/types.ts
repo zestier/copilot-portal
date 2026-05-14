@@ -19,6 +19,10 @@ export interface Conversation {
 	createdAt: number;
 	updatedAt: number;
 	archivedAt: number | null;
+	/** Set when this conversation was created by forking another one. */
+	forkedFromConversationId: string | null;
+	/** The message in the source conversation whose edit produced this fork. */
+	forkedFromMessageId: string | null;
 }
 
 export interface Message {

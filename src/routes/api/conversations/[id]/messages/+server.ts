@@ -8,6 +8,8 @@ import * as tokens from '$lib/server/db/repos/tokens';
 import { sseResponse } from '$lib/server/sse';
 import { loadConfig } from '$lib/server/config';
 import { startTurn, getTurn } from '$lib/server/copilot/turn-runner';
+import { snapshot as takeSnapshot } from '$lib/server/snapshots';
+import { log } from '$lib/server/log';
 
 const Body = z.object({ content: z.string().min(1).max(64_000) });
 
@@ -30,8 +32,22 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	}
 
 	// Persist user message immediately.
-	messages.append(conv.id, { role: 'user', content });
+	const userMsg = messages.append(conv.id, { role: 'user', content });
 	convs.touch(conv.id);
+
+	// Capture a pre-turn snapshot of the workdir. Bound to this user
+	// message so a later "edit this message" can restore the workdir to
+	// exactly the state the agent was about to see. Failures here are
+	// non-fatal — we just lose the ability to fork at this turn.
+	try {
+		await takeSnapshot(conv.workdir, userMsg.id, 'pre');
+	} catch (e) {
+		log.warn('snapshot.pre.failed', {
+			conversationId: conv.id,
+			messageId: userMsg.id,
+			err: String(e)
+		});
+	}
 
 	const cfg = loadConfig();
 	const userSettings = settings.getOrDefault(locals.userId);

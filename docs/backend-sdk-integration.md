@@ -191,3 +191,35 @@ Three modes, in priority order:
   CI fast and offline.
 - **End-to-end tests** with Playwright, opt-in (env-gated), against a real
   Copilot subscription. Run nightly, not on every PR.
+
+## Edit-and-rerun (workdir checkpointing)
+
+The SDK does not expose an API to fork a session at an earlier turn, nor
+does it snapshot the workdir. Both layers are owned by the portal:
+
+- **Workdir snapshots**: see `docs/persistence.md` — every user turn gets
+  a `pre` snapshot, every assistant turn a `post` snapshot, stored as git
+  commits under `refs/portal/turns/*` in the conversation's own workdir.
+- **Conversation forking**: editing a user message creates a new
+  conversation (`src/lib/server/fork.ts`). We spin up a brand-new SDK
+  session keyed by the new conversation id rather than trying to mutate
+  the source's SDK event log (which we don't own).
+
+### SDK history seeding
+
+In v1 the forked SDK session starts with **no seeded history**. Prior
+messages are cloned into SQLite for UI continuity, but the agent itself
+has no memory of them — it picks up cold from the edited message.
+
+This is a deliberate trade-off:
+
+- It avoids writing into the SDK's `events.jsonl`, whose schema is
+  generated and not part of the SDK's public surface.
+- It avoids inflating the first prompt with a synthesized preamble that
+  would burn context tokens on every fork.
+- It matches the user's intent for the common case ("rewind the code and
+  let me re-ask"): the file state is what mattered, and the user is
+  about to re-establish whatever context they need anyway.
+
+If/when the SDK exposes a supported way to seed conversation history,
+the fork service can opt into it without changing the table schema.

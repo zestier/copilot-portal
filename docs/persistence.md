@@ -115,6 +115,59 @@ CREATE TABLE schema_migrations (
 );
 ```
 
+## Turn snapshots (edit-and-rerun)
+
+Added in migration `005_turn_snapshots.sql`. Backs the "edit an earlier
+message and rewind the workdir" feature.
+
+```sql
+CREATE TABLE turn_snapshots (
+  message_id   TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  kind         TEXT NOT NULL CHECK (kind IN ('pre', 'post')),
+  git_ref      TEXT NOT NULL,           -- refs/portal/turns/{kind}/{id}
+  commit_sha   TEXT NOT NULL,
+  tree_sha     TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  PRIMARY KEY (message_id, kind)
+);
+ALTER TABLE conversations ADD COLUMN forked_from_conversation_id TEXT;
+ALTER TABLE conversations ADD COLUMN forked_from_message_id TEXT;
+```
+
+The actual file state is **not** stored in SQLite. Each snapshot is a real
+git commit written under the conversation's workdir at
+`refs/portal/turns/{pre|post}/{messageId}`. `kind='pre'` is captured
+before running a user turn; `kind='post'` is captured after the
+assistant's reply persists. Trees are content-addressed so identical
+worktree states across messages dedup naturally.
+
+Snapshotting uses a per-snapshot `GIT_INDEX_FILE` so the workdir's normal
+staging area is never touched. The `refs/portal/turns/` namespace is
+private — it never overlaps `refs/heads/*` or `refs/tags/*`.
+
+When a user edits a previous message, the portal:
+
+1. Looks up the `pre` snapshot for that message.
+2. Creates a new conversation with `forked_from_conversation_id` /
+   `forked_from_message_id` set.
+3. Materialises a fresh managed workdir from that snapshot commit (via a
+   shallow local `git fetch` of just that commit, then check it out).
+4. Clones the message rows strictly before the edited one into the new
+   conversation, then appends the edited content as a fresh user message.
+5. Starts a brand-new SDK session under the new conversation id. No
+   prior conversation events are seeded into the SDK in v1 — the agent
+   starts fresh from the edited turn. The cloned message rows exist for
+   UI continuity only.
+
+Limitations (v1):
+
+- Only portal-managed workdirs (under `$DATA_DIR/workspaces/`) can be
+  forked. Bring-your-own workdirs are rejected with a clear 422.
+- Side effects outside the workdir (DB writes, network calls) are not
+  rolled back. Forks rewind files only.
+- Submodule/LFS state is out of scope.
+
+
 ## Conventions
 
 - IDs are ULIDs (lexically sortable; safe in URLs).
