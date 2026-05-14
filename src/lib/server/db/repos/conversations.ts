@@ -71,12 +71,22 @@ export interface CreateInput {
 	title: string;
 	workdir: string;
 	model: string | null;
+	id?: string;
 	forkedFromConversationId?: string | null;
 	forkedFromMessageId?: string | null;
 }
 
+/**
+ * Mint a fresh conversation id without touching the database. Useful when
+ * the caller needs the id to derive other state (e.g. workdir path) before
+ * inserting the row.
+ */
+export function newId(): string {
+	return ulid();
+}
+
 export function create(userId: string, input: CreateInput): Conversation {
-	const id = ulid();
+	const id = input.id ?? ulid();
 	const now = Date.now();
 	const forkConv = input.forkedFromConversationId ?? null;
 	const forkMsg = input.forkedFromMessageId ?? null;

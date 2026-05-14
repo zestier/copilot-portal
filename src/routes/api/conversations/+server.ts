@@ -27,30 +27,16 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const userSettings = settings.getOrDefault(userId);
 	const model = body.model ?? userSettings.defaultModel ?? cfg.DEFAULT_MODEL;
 
-	// First create the row so we can use its id for the default workdir.
-	const placeholderWorkdir = body.workdir ?? '';
-	const conv = convs.create(userId, {
-		title: body.title,
-		workdir: placeholderWorkdir,
-		model
-	});
-
+	const id = convs.newId();
 	let workdir: string;
 	if (body.workdir) {
 		const res = resolveAndValidate(body.workdir);
-		if (!res.ok) {
-			convs.remove(conv.id, userId);
-			throw error(400, res.reason);
-		}
+		if (!res.ok) throw error(400, res.reason);
 		workdir = res.path;
 	} else {
-		workdir = defaultWorkdirFor(conv.id);
+		workdir = defaultWorkdirFor(id);
 	}
-	// Update with real workdir.
-	conv.workdir = workdir;
-	// Direct write via repo's rename trick is overkill; do a raw update.
-	const { getDb } = await import('$lib/server/db');
-	getDb().prepare('UPDATE conversations SET workdir = ? WHERE id = ?').run(workdir, conv.id);
 
+	const conv = convs.create(userId, { id, title: body.title, workdir, model });
 	return json({ conversation: conv }, { status: 201 });
 };

@@ -16,6 +16,5 @@ export function authorizeConversation(
 	if (!convId) throw error(400, 'missing conversation id');
 	const conv = convs.get(convId, userId);
 	if (!conv) throw error(404);
-	if (!conv.workdir) throw error(400, 'conversation has no workdir');
 	return { conversationId: conv.id, workdir: conv.workdir };
 }

@@ -51,7 +51,7 @@ the suggested unified convention.
       route. Remove the hand-rolled `userId / convs.get / 404` blocks.
   - All routes under `src/routes/api/conversations/[id]/**/+server.ts`
 
-- [ ] **6. Single-shot conversation creation.** Compute the workdir before
+- [x] **6. Single-shot conversation creation.** Compute the workdir before
       `convs.create(...)` (or add `convs.setWorkdir`) so the route stops doing
       a placeholder INSERT + raw UPDATE with a dynamic db import.
   - `src/routes/api/conversations/+server.ts`

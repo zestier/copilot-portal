@@ -172,29 +172,15 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 		);
 	}
 
-	// Build the new conversation row + workdir path. We create the row
-	// first so we can derive the workdir path from its id, matching the
-	// convention used by defaultWorkdirFor().
+	// Mint the new conversation id up front so we can derive its workdir
+	// path before inserting the row (matches defaultWorkdirFor()'s layout).
 	const cfg = loadConfig();
-	const newConv = convs.create(input.userId, {
-		title: source.title,
-		workdir: '', // filled below
-		model: source.model,
-		forkedFromConversationId: source.id,
-		forkedFromMessageId: target.id
-	});
-	const newWorkdir = resolve(cfg.DATA_DIR, 'workspaces', newConv.id);
+	const newId = convs.newId();
+	const newWorkdir = resolve(cfg.DATA_DIR, 'workspaces', newId);
 
 	try {
 		await materializeFromCommit(source.workdir, snap.commitSha, newWorkdir);
 	} catch (e) {
-		// Roll back the conversation row so we don't leak a half-created
-		// fork on disk failure.
-		try {
-			convs.remove(newConv.id, input.userId);
-		} catch (rmErr) {
-			log.warn('fork.rollback.remove_failed', { newId: newConv.id, err: String(rmErr) });
-		}
 		log.warn('fork.materialize_failed', {
 			source: source.id,
 			messageId: target.id,
@@ -203,12 +189,14 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 		throw e;
 	}
 
-	// Patch the workdir column to the actual path now that the directory
-	// exists. We do this directly because the conversations repo has no
-	// dedicated setter for workdir (it's normally write-once at create).
-	getDb()
-		.prepare('UPDATE conversations SET workdir = ?, updated_at = ? WHERE id = ?')
-		.run(newWorkdir, Date.now(), newConv.id);
+	const newConv = convs.create(input.userId, {
+		id: newId,
+		title: source.title,
+		workdir: newWorkdir,
+		model: source.model,
+		forkedFromConversationId: source.id,
+		forkedFromMessageId: target.id
+	});
 
 	// Edit mode clones strictly before the target (so the new user message
 	// replaces it). Retry mode clones up to AND including the target
