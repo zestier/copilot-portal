@@ -1,20 +1,18 @@
-// Helpers shared by the conversation file-browser API routes.
+// Shared helper for conversation-scoped API routes: looks up the
+// conversation, asserts ownership, and returns the full row so handlers
+// don't each re-implement the same `userId / convs.get / 404` dance.
 
 import { error } from '@sveltejs/kit';
 import * as convs from '$lib/server/db/repos/conversations';
-
-export interface AuthorizedConv {
-	conversationId: string;
-	workdir: string;
-}
+import type { Conversation } from '$lib/types';
 
 export function authorizeConversation(
 	convId: string | undefined,
 	userId: string | null | undefined
-): AuthorizedConv {
+): Conversation {
 	if (!userId) throw error(401);
 	if (!convId) throw error(400, 'missing conversation id');
 	const conv = convs.get(convId, userId);
 	if (!conv) throw error(404);
-	return { conversationId: conv.id, workdir: conv.workdir };
+	return conv;
 }

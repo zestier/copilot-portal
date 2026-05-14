@@ -1,7 +1,7 @@
-import { error, json } from '@sveltejs/kit';
+import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
-import { requireUserId } from '$lib/server/auth/require';
+import { authorizeConversation } from '$lib/server/conversation-auth';
 
 /**
  * List forks (child conversations) that were created from this one.
@@ -11,10 +11,8 @@ import { requireUserId } from '$lib/server/auth/require';
  * fork.
  */
 export const GET: RequestHandler = ({ params, locals }) => {
-	const userId = requireUserId(locals);
-	const source = convs.get(params.id!, userId);
-	if (!source) throw error(404);
-	const children = convs.listChildren(userId, source.id);
+	const source = authorizeConversation(params.id, locals.userId);
+	const children = convs.listChildren(source.userId, source.id);
 	return json({
 		forks: children.map((c) => ({
 			id: c.id,

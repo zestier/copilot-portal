@@ -46,7 +46,7 @@ the suggested unified convention.
   - `src/routes/api/conversations/[id]/permissions/[requestId]/+server.ts`
   - `src/routes/api/conversations/[id]/messages/[messageId]/fork/+server.ts`
 
-- [ ] **5. One auth/ownership idiom.** Extend `authorizeConversation` to
+- [x] **5. One auth/ownership idiom.** Extend `authorizeConversation` to
       optionally return the full conversation row and use it from every
       route. Remove the hand-rolled `userId / convs.get / 404` blocks.
   - All routes under `src/routes/api/conversations/[id]/**/+server.ts`

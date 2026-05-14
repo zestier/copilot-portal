@@ -11,7 +11,7 @@ import { startTurn, getTurn } from '$lib/server/copilot/turn-runner';
 import { snapshot as takeSnapshot } from '$lib/server/snapshots';
 import { log } from '$lib/server/log';
 import { parseBody } from '$lib/server/validate';
-import { requireUserId } from '$lib/server/auth/require';
+import { authorizeConversation } from '$lib/server/conversation-auth';
 
 const Body = z.object({ content: z.string().min(1).max(64_000) });
 
@@ -22,9 +22,7 @@ const Body = z.object({ content: z.string().min(1).max(64_000) });
  * resume streaming.
  */
 export const POST: RequestHandler = async ({ params, locals, request }) => {
-	const userId = requireUserId(locals);
-	const conv = convs.get(params.id!, userId);
-	if (!conv) throw error(404);
+	const conv = authorizeConversation(params.id, locals.userId);
 
 	const { content } = await parseBody(request, Body);
 
@@ -52,15 +50,15 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	}
 
 	const cfg = loadConfig();
-	const userSettings = settings.getOrDefault(userId);
-	const authToken = tokens.getGithubToken(userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
+	const userSettings = settings.getOrDefault(conv.userId);
+	const authToken = tokens.getGithubToken(conv.userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
 
 	const turn = await startTurn({
 		conversationId: conv.id,
 		prompt: content,
 		bridge: {
 			conversationId: conv.id,
-			userId,
+			userId: conv.userId,
 			workingDirectory: conv.workdir,
 			model: conv.model ?? cfg.DEFAULT_MODEL,
 			policy: userSettings.defaultPolicy,
@@ -77,9 +75,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
  * after a page refresh. Returns 204 if no turn is active or recent.
  */
 export const GET: RequestHandler = async ({ params, locals, request }) => {
-	const userId = requireUserId(locals);
-	const conv = convs.get(params.id!, userId);
-	if (!conv) throw error(404);
+	const conv = authorizeConversation(params.id, locals.userId);
 
 	const turn = getTurn(conv.id);
 	if (!turn) return new Response(null, { status: 204 });
@@ -92,9 +88,7 @@ export const GET: RequestHandler = async ({ params, locals, request }) => {
  * dropping the SSE connection, this actually aborts the upstream SDK turn.
  */
 export const DELETE: RequestHandler = async ({ params, locals }) => {
-	const userId = requireUserId(locals);
-	const conv = convs.get(params.id!, userId);
-	if (!conv) throw error(404);
+	const conv = authorizeConversation(params.id, locals.userId);
 
 	const turn = getTurn(conv.id);
 	if (!turn || turn.status !== 'running') {
