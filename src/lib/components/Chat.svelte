@@ -211,6 +211,28 @@
 		}
 	}
 
+	// Pull the latest persisted messages for this conversation and replace
+	// local state. Used when the tab becomes visible / the device comes
+	// back online: if a turn completed while we were hidden the resumable
+	// stream has nothing left to replay, so without this refetch the UI
+	// would keep showing whatever partial state existed at lock time.
+	async function refreshMessages() {
+		if (streaming) return;
+		try {
+			const r = await fetch(`/api/conversations/${conversation.id}`);
+			if (!r.ok) return;
+			const data = (await r.json()) as { messages: Message[] };
+			if (streaming) return;
+			messages = data.messages;
+			// A completed turn means any outstanding permission prompt was
+			// resolved server-side; clear it so we don't strand a dialog.
+			pendingPermission = null;
+			await scrollToBottom();
+		} catch {
+			/* non-fatal: next visibility/online event will retry */
+		}
+	}
+
 	// When the tab becomes visible (or the device comes back online),
 	// kick a resume if we aren't already streaming. Note we deliberately
 	// do NOT abort an in-flight stream here: aborting the externalSignal
@@ -223,11 +245,19 @@
 		const kick = () => {
 			if (document.visibilityState !== 'visible') return;
 			if (streaming) return;
-			void resumeIfActive();
+			// Refetch first: if a turn finished while we were hidden, the
+			// resumable stream has nothing to replay and we'd otherwise be
+			// stuck on stale messages. resumeIfActive() then attaches to
+			// any still-running turn (e.g. one started from another tab).
+			void refreshMessages().then(() => {
+				if (!streaming) void resumeIfActive();
+			});
 		};
 		const onOnline = () => {
 			if (streaming) return;
-			void resumeIfActive();
+			void refreshMessages().then(() => {
+				if (!streaming) void resumeIfActive();
+			});
 		};
 		document.addEventListener('visibilitychange', kick);
 		window.addEventListener('online', onOnline);
