@@ -2,7 +2,13 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 import { listDir, workspaceRoot } from '$lib/server/files';
-import { status as gitStatus, isGitRepo, type StatusEntry } from '$lib/server/git';
+import {
+	status as gitStatus,
+	isGitRepo,
+	numstat,
+	type StatusEntry,
+	type NumstatEntry
+} from '$lib/server/git';
 
 export type AggregatedStatus =
 	| 'untracked'
@@ -37,6 +43,8 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 	let initialized = false;
 	const statusByPath = new Map<string, AggregatedStatus>();
 	const dirAgg = new Map<string, AggregatedStatus>();
+	const statsByPath = new Map<string, { added: number | null; removed: number | null }>();
+	const dirStats = new Map<string, { added: number; removed: number }>();
 	if (await isGitRepo(workdir)) {
 		initialized = true;
 		const entries = await gitStatus(workdir, { includeIgnored });
@@ -50,6 +58,25 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 				if (!dirAgg.has(ancestor)) dirAgg.set(ancestor, agg);
 			}
 		}
+		let stats: NumstatEntry[];
+		try {
+			stats = await numstat(workdir, { kind: 'worktree-vs-head' });
+		} catch {
+			// HEAD may not exist yet (empty repo); skip line stats.
+			stats = [];
+		}
+		for (const s of stats) {
+			statsByPath.set(s.path, { added: s.added, removed: s.removed });
+			if (s.added == null || s.removed == null) continue;
+			const parts = s.path.split('/');
+			for (let i = 1; i < parts.length; i++) {
+				const ancestor = parts.slice(0, i).join('/');
+				const cur = dirStats.get(ancestor) ?? { added: 0, removed: 0 };
+				cur.added += s.added;
+				cur.removed += s.removed;
+				dirStats.set(ancestor, cur);
+			}
+		}
 	}
 
 	const entries = dir.entries
@@ -57,10 +84,14 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 		.map((e) => {
 			const fileStatus = statusByPath.get(e.relPath) ?? null;
 			const folderStatus = e.type === 'directory' ? (dirAgg.get(e.relPath) ?? null) : null;
+			const fileStats = statsByPath.get(e.relPath) ?? null;
+			const folderStats = e.type === 'directory' ? (dirStats.get(e.relPath) ?? null) : null;
 			return {
 				...e,
 				status: fileStatus,
-				containsChanges: folderStatus
+				containsChanges: folderStatus,
+				added: fileStats?.added ?? folderStats?.added ?? null,
+				removed: fileStats?.removed ?? folderStats?.removed ?? null
 			};
 		});
 

@@ -36,6 +36,8 @@ test('Files tab lists workspace contents and reads a file', async ({ page, reque
 
 	await page.goto(`/conversations/${id}`);
 	await page.getByRole('tab', { name: 'Files' }).click();
+	// FileBrowser defaults to the Changes pane; switch to the file tree.
+	await page.getByRole('tab', { name: 'All files' }).click();
 	await expect(page.getByRole('button', { name: /hello\.txt/ })).toBeVisible();
 	await page.getByRole('button', { name: /hello\.txt/ }).click();
 	await expect(page.locator('pre.file-view')).toContainText('greetings');
@@ -66,4 +68,79 @@ test('Files tab reports git status when workspace is a repo', async ({ request }
 	const names = treeBody.entries.map((e: { name: string }) => e.name);
 	expect(names).toContain('a.txt');
 	expect(names).toContain('new.txt');
+});
+
+test('Changes tab lists modified files with +/- stats and a working diff', async ({
+	page,
+	request
+}) => {
+	const { id } = await createConversation(request);
+
+	// Initialise the workspace root itself as a repo so /git/changes
+	// (which runs against workspaceRoot) returns real data.
+	const g = (args: string[]) => execFileSync('git', args, { cwd: workspaceRoot, stdio: 'pipe' });
+	g(['init', '-q', '-b', 'main']);
+	g(['config', 'user.email', 'e2e@example.com']);
+	g(['config', 'user.name', 'E2E']);
+	g(['config', 'commit.gpgsign', 'false']);
+	writeFileSync(join(workspaceRoot, 'tracked.txt'), 'one\ntwo\nthree\n');
+	mkdirSync(join(workspaceRoot, 'pkg'), { recursive: true });
+	writeFileSync(join(workspaceRoot, 'pkg', 'mod.txt'), 'alpha\nbeta\n');
+	g(['add', 'tracked.txt', 'pkg/mod.txt']);
+	g(['commit', '-q', '-m', 'baseline']);
+	// Now make a working-tree change: 2 lines added, 1 removed in tracked.txt.
+	writeFileSync(join(workspaceRoot, 'tracked.txt'), 'one\nTWO\nthree\nfour\nfive\n');
+	// And an addition deep inside a directory so we can check folder aggregation.
+	writeFileSync(join(workspaceRoot, 'pkg', 'mod.txt'), 'alpha\nbeta\ngamma\n');
+
+	// --- API: /git/changes shape and line counts ------------------------
+	const changesRes = await request.get(`/api/conversations/${id}/git/changes`);
+	expect(changesRes.ok()).toBeTruthy();
+	const changes = await changesRes.json();
+	expect(changes.initialized).toBe(true);
+	const byPath = Object.fromEntries(
+		(changes.entries as Array<{ path: string; added: number | null; removed: number | null }>).map(
+			(e) => [e.path, e]
+		)
+	);
+	expect(byPath['tracked.txt']).toMatchObject({ status: 'modified', added: 3, removed: 1 });
+	expect(byPath['pkg/mod.txt']).toMatchObject({ status: 'modified', added: 1, removed: 0 });
+
+	// --- API: /fs/tree exposes per-file and per-directory stats ---------
+	const treeRoot = await (await request.get(`/api/conversations/${id}/fs/tree`)).json();
+	const rootByName = Object.fromEntries(
+		(
+			treeRoot.entries as Array<{
+				name: string;
+				type: string;
+				added: number | null;
+				removed: number | null;
+			}>
+		).map((e) => [e.name, e])
+	);
+	expect(rootByName['tracked.txt']).toMatchObject({ added: 3, removed: 1 });
+	// Directory aggregate rolls up its descendants' line counts.
+	expect(rootByName['pkg']).toMatchObject({ type: 'directory', added: 1, removed: 0 });
+
+	// --- UI: Changes tab is the default pane; shows entries with +/- and diff
+	await page.goto(`/conversations/${id}`);
+	await page.getByRole('tab', { name: 'Files' }).click();
+	const changesTab = page.getByRole('tab', { name: 'Changes' });
+	await expect(changesTab).toBeVisible();
+	await expect(changesTab).toHaveAttribute('aria-selected', 'true');
+	const row = page.getByRole('button', { name: /tracked\.txt/ });
+	await expect(row).toBeVisible();
+	await expect(row).toContainText('+3');
+	await expect(row).toContainText('−1');
+
+	await row.click();
+	const diff = page.locator('.diff');
+	await expect(diff).toBeVisible();
+	// Diff header shows aggregate stats.
+	await expect(diff.locator('.stats .added')).toHaveText('+3');
+	await expect(diff.locator('.stats .removed')).toHaveText('−1');
+	// At least one add and one del line are rendered with line numbers.
+	await expect(diff.locator('.line.add').first()).toBeVisible();
+	await expect(diff.locator('.line.del').first()).toBeVisible();
+	await expect(diff.locator('.line.add .gutter.new').first()).not.toHaveText('');
 });

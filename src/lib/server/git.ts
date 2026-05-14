@@ -431,6 +431,72 @@ export async function showFile(cwd: string, ref: string, relPath: string): Promi
 	return await runGitOk(['show', `${ref}:${r.rel}`], { cwd });
 }
 
+export interface NumstatEntry {
+	/** Current path. For renames, the new path. */
+	path: string;
+	/** Original path for renames, else null. */
+	origPath: string | null;
+	/** Lines added. `null` means binary. */
+	added: number | null;
+	/** Lines removed. `null` means binary. */
+	removed: number | null;
+}
+
+/**
+ * Returns per-file added/removed line counts. Uses `git diff --numstat -z`
+ * so paths are unambiguous. Binary files report `null` for both counts.
+ */
+export async function numstat(cwd: string, target: DiffTarget): Promise<NumstatEntry[]> {
+	const baseArgs = ['diff', '--no-color', '--no-ext-diff', '--numstat', '-z'];
+	let args: string[];
+	switch (target.kind) {
+		case 'worktree-vs-head':
+			args = [...baseArgs, 'HEAD'];
+			break;
+		case 'worktree-vs-index':
+			args = [...baseArgs];
+			break;
+		case 'index-vs-head':
+			args = [...baseArgs, '--cached'];
+			break;
+		case 'commit':
+			if (!SHA_RE.test(target.sha)) throw new GitError('invalid sha', emptyResult());
+			args = [...baseArgs, `${target.sha}^!`];
+			break;
+		case 'commit-vs-parent':
+			if (!SHA_RE.test(target.sha)) throw new GitError('invalid sha', emptyResult());
+			args = [...baseArgs, `${target.sha}^`, target.sha];
+			break;
+	}
+	const out = await runGitOk(args, { cwd });
+	// With -z, each record is "added\tremoved\tpath\0" except for renames,
+	// which are "added\tremoved\t\0origPath\0newPath\0".
+	const entries: NumstatEntry[] = [];
+	const parts = out.split('\0');
+	for (let i = 0; i < parts.length; i++) {
+		const rec = parts[i];
+		if (!rec) continue;
+		const tab1 = rec.indexOf('\t');
+		const tab2 = rec.indexOf('\t', tab1 + 1);
+		if (tab1 < 0 || tab2 < 0) continue;
+		const aStr = rec.slice(0, tab1);
+		const rStr = rec.slice(tab1 + 1, tab2);
+		const rest = rec.slice(tab2 + 1);
+		const added = aStr === '-' ? null : Number.parseInt(aStr, 10);
+		const removed = rStr === '-' ? null : Number.parseInt(rStr, 10);
+		if (rest === '') {
+			// Rename: next two parts are origPath and newPath.
+			const origPath = parts[i + 1] ?? '';
+			const newPath = parts[i + 2] ?? '';
+			i += 2;
+			entries.push({ path: newPath, origPath: origPath || null, added, removed });
+		} else {
+			entries.push({ path: rest, origPath: null, added, removed });
+		}
+	}
+	return entries;
+}
+
 function emptyResult(): GitRunResult {
 	return { stdout: '', stderr: '', code: -1, timedOut: false, truncated: false };
 }

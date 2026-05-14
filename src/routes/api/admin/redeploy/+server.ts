@@ -7,9 +7,12 @@ import { log } from '$lib/server/log';
 
 type Step = { label: string; cmd: string };
 
-// `pnpm run build` is the last step so the old process keeps serving until
-// the build succeeds; on success we exit and the supervisor (scripts/serve.mjs)
-// relaunches `node build` on the new code.
+// `pnpm run build` is the last step. The supervisor (scripts/serve.mjs)
+// runs the server out of its own `build.live/` copy and only refreshes it
+// between restarts, so this build can overwrite `build/` freely without
+// thrashing the chunks the live process is lazy-loading. On success we
+// exit and the supervisor relaunches on the refreshed code; on failure
+// the live tree is untouched.
 const PULL_STEPS: Step[] = [
 	{ label: 'git fetch', cmd: 'git fetch --all --prune' },
 	{ label: 'git pull', cmd: 'git pull --ff-only' },

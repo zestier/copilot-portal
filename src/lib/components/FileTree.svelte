@@ -2,19 +2,22 @@
 	import { untrack } from 'svelte';
 	import type { FsEntry, TreeResponse } from '$lib/client/file-browser';
 	import { STATUS_LABEL, STATUS_COLOR } from '$lib/client/file-browser';
+	import DiffStat from './DiffStat.svelte';
 
 	let {
 		conversationId,
 		selectedPath = null,
 		showIgnored = false,
 		showHidden = false,
-		onselect
+		onselect,
+		onrefresh
 	}: {
 		conversationId: string;
 		selectedPath?: string | null;
 		showIgnored?: boolean;
 		showHidden?: boolean;
 		onselect?: (entry: FsEntry) => void;
+		onrefresh?: () => void;
 	} = $props();
 
 	interface Loaded {
@@ -71,6 +74,7 @@
 
 	export function refresh() {
 		refreshToken++;
+		onrefresh?.();
 	}
 
 	async function toggleDir(entry: FsEntry) {
@@ -130,6 +134,7 @@
 						<span class="caret" class:open={expanded}>▶</span>
 						<span class="icon">📁</span>
 						<span class="name">{entry.name}</span>
+						<DiffStat added={entry.added} removed={entry.removed} compact />
 						{#if badge}
 							<span class="status-pill" style:color={badge.color}>{badge.label}</span>
 						{/if}
@@ -150,6 +155,7 @@
 						<span class="caret-spacer"></span>
 						<span class="icon">{entry.type === 'symlink' ? '🔗' : '📄'}</span>
 						<span class="name">{entry.name}</span>
+						<DiffStat added={entry.added} removed={entry.removed} compact />
 						{#if badge}
 							<span class="status-pill" style:color={badge.color}>{badge.label}</span>
 						{/if}

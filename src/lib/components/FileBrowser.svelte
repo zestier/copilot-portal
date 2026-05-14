@@ -2,11 +2,14 @@
 	import { untrack } from 'svelte';
 	import FileTree from './FileTree.svelte';
 	import CommitList from './CommitList.svelte';
+	import ChangeList from './ChangeList.svelte';
 	import DiffView from './DiffView.svelte';
+	import GitStatusHeader from './GitStatusHeader.svelte';
 	import type {
 		FsEntry,
 		FileResponse,
 		CommitDetail,
+		ChangeEntry,
 		FileBrowserStatus
 	} from '$lib/client/file-browser';
 	import { STATUS_LABEL, STATUS_COLOR } from '$lib/client/file-browser';
@@ -14,9 +17,9 @@
 	let { conversationId }: { conversationId: string } = $props();
 
 	type ViewMode = 'content' | 'diff';
-	type Pane = 'files' | 'commits';
+	type Pane = 'changes' | 'files' | 'commits';
 
-	let pane = $state<Pane>('files');
+	let pane = $state<Pane>('changes');
 	let viewMode = $state<ViewMode>('content');
 	let selectedPath = $state<string | null>(null);
 	let selectedStatus = $state<FileBrowserStatus | null>(null);
@@ -36,6 +39,11 @@
 
 	let showHidden = $state(false);
 	let showIgnored = $state(false);
+	let gitRefreshToken = $state(0);
+
+	function bumpGitRefresh() {
+		gitRefreshToken++;
+	}
 
 	async function loadFile(path: string) {
 		fileLoading = true;
@@ -81,6 +89,16 @@
 				: 'content';
 		loadFile(entry.relPath);
 		if (viewMode === 'diff') loadDiff(entry.relPath);
+	}
+
+	function pickChange(entry: ChangeEntry) {
+		selectedPath = entry.path;
+		selectedStatus = entry.status;
+		diffText = '';
+		diffError = null;
+		viewMode = entry.status === 'untracked' ? 'content' : 'diff';
+		loadFile(entry.path);
+		if (viewMode === 'diff') loadDiff(entry.path);
 	}
 
 	$effect(() => {
@@ -138,14 +156,23 @@
 
 <div class="browser">
 	<div class="left">
+		<GitStatusHeader {conversationId} refreshToken={gitRefreshToken} />
 		<div class="pane-tabs" role="tablist">
+			<button
+				role="tab"
+				aria-selected={pane === 'changes'}
+				class:active={pane === 'changes'}
+				onclick={() => (pane = 'changes')}
+			>
+				Changes
+			</button>
 			<button
 				role="tab"
 				aria-selected={pane === 'files'}
 				class:active={pane === 'files'}
 				onclick={() => (pane = 'files')}
 			>
-				Files
+				All files
 			</button>
 			<button
 				role="tab"
@@ -162,7 +189,24 @@
 				<label><input type="checkbox" bind:checked={showIgnored} /> Ignored</label>
 			</div>
 			<div class="pane-body">
-				<FileTree {conversationId} {selectedPath} {showHidden} {showIgnored} onselect={pickFile} />
+				<FileTree
+					{conversationId}
+					{selectedPath}
+					{showHidden}
+					{showIgnored}
+					onselect={pickFile}
+					onrefresh={bumpGitRefresh}
+				/>
+			</div>
+		{:else if pane === 'changes'}
+			<div class="pane-body">
+				<ChangeList
+					{conversationId}
+					{selectedPath}
+					refreshToken={gitRefreshToken}
+					onselect={pickChange}
+					onrefresh={bumpGitRefresh}
+				/>
 			</div>
 		{:else}
 			<div class="pane-body">
@@ -389,14 +433,12 @@
 	.commit-body {
 		flex: 1;
 		min-height: 0;
-		overflow: auto;
-		padding: 0.6rem;
-	}
-	.commit-body {
 		display: flex;
 		flex-direction: column;
-		gap: 0.6rem;
-		padding: 0;
+	}
+	.content-body {
+		padding: 0.6rem;
+		gap: 0.4rem;
 	}
 	.commit-message {
 		margin: 0;
@@ -456,6 +498,8 @@
 	}
 	.file-view {
 		margin: 0;
+		flex: 1;
+		min-height: 0;
 		font-family: var(--mono);
 		font-size: 0.82em;
 		white-space: pre;

@@ -107,3 +107,62 @@ describe('showCommit / showFile', () => {
 		await expect(git.showCommit(repo, 'not-a-sha!!')).rejects.toThrow();
 	});
 });
+
+describe('numstat', () => {
+	it('reports added/removed lines per tracked file vs HEAD', async () => {
+		const stats = await git.numstat(repo, { kind: 'worktree-vs-head' });
+		const byPath = Object.fromEntries(stats.map((s) => [s.path, s]));
+		// a.txt: one line added ("changed\n"), zero removed.
+		expect(byPath['a.txt']).toBeDefined();
+		expect(byPath['a.txt']?.added).toBe(1);
+		expect(byPath['a.txt']?.removed).toBe(0);
+		// new.txt is untracked so it does not appear in diff vs HEAD.
+		expect(byPath['new.txt']).toBeUndefined();
+	});
+
+	it('handles renames as a single entry with origPath', async () => {
+		const tmp = mkdtempSync(join(tmpdir(), 'gitwrap-rename-'));
+		try {
+			const run = (args: string[]) => execFileSync('git', args, { cwd: tmp, stdio: 'pipe' });
+			run(['init', '-q', '-b', 'main']);
+			run(['config', 'user.email', 't@example.com']);
+			run(['config', 'user.name', 'T']);
+			run(['config', 'commit.gpgsign', 'false']);
+			writeFileSync(join(tmp, 'old.txt'), 'one\ntwo\nthree\n');
+			run(['add', '.']);
+			run(['commit', '-q', '-m', 'init']);
+			run(['mv', 'old.txt', 'new.txt']);
+			writeFileSync(join(tmp, 'new.txt'), 'one\ntwo\nthree\nfour\n');
+			const stats = await git.numstat(tmp, { kind: 'worktree-vs-head' });
+			const rename = stats.find((s) => s.path === 'new.txt');
+			expect(rename).toBeDefined();
+			expect(rename?.origPath).toBe('old.txt');
+			expect(rename?.added).toBe(1);
+			expect(rename?.removed).toBe(0);
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('reports null counts for binary files', async () => {
+		const tmp = mkdtempSync(join(tmpdir(), 'gitwrap-bin-'));
+		try {
+			const run = (args: string[]) => execFileSync('git', args, { cwd: tmp, stdio: 'pipe' });
+			run(['init', '-q', '-b', 'main']);
+			run(['config', 'user.email', 't@example.com']);
+			run(['config', 'user.name', 'T']);
+			run(['config', 'commit.gpgsign', 'false']);
+			writeFileSync(join(tmp, 'data.bin'), Buffer.from([0, 1, 2, 0, 0, 3]));
+			run(['add', '.']);
+			run(['commit', '-q', '-m', 'init']);
+			writeFileSync(join(tmp, 'data.bin'), Buffer.from([0, 0, 0, 0, 0, 4, 5]));
+			const stats = await git.numstat(tmp, { kind: 'worktree-vs-head' });
+			const bin = stats.find((s) => s.path === 'data.bin');
+			expect(bin).toBeDefined();
+			expect(bin?.added).toBeNull();
+			expect(bin?.removed).toBeNull();
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+});

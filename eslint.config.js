@@ -24,6 +24,8 @@ export default ts.config(
 	{
 		ignores: [
 			'build/',
+			'build.live/',
+			'build.prev/',
 			'.svelte-kit/',
 			'dist/',
 			'data/',

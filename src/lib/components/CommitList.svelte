@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import type { LogEntry, HeadStatus } from '$lib/client/file-browser';
+	import type { LogEntry } from '$lib/client/file-browser';
 
 	let {
 		conversationId,
@@ -12,21 +12,11 @@
 		onselect?: (sha: string) => void;
 	} = $props();
 
-	let head = $state<HeadStatus | null>(null);
 	let commits = $state<LogEntry[]>([]);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let canLoadMore = $state(true);
-
-	async function loadHead() {
-		try {
-			const res = await fetch(`/api/conversations/${conversationId}/git/status`);
-			if (!res.ok) throw new Error(await res.text());
-			head = await res.json();
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		}
-	}
+	let initialized = $state(true);
 
 	async function loadMore() {
 		if (loading || !canLoadMore) return;
@@ -41,8 +31,10 @@
 			const data = (await res.json()) as { initialized: boolean; commits: LogEntry[] };
 			if (!data.initialized) {
 				canLoadMore = false;
+				initialized = false;
 				return;
 			}
+			initialized = true;
 			commits = [...commits, ...data.commits];
 			if (data.commits.length < 20) canLoadMore = false;
 		} catch (e) {
@@ -55,11 +47,10 @@
 	$effect(() => {
 		void conversationId;
 		untrack(() => {
-			head = null;
 			commits = [];
 			canLoadMore = true;
 			error = null;
-			loadHead();
+			initialized = true;
 			loadMore();
 		});
 	});
@@ -70,30 +61,6 @@
 </script>
 
 <div class="commit-list">
-	<div class="head-info">
-		{#if head === null}
-			<span class="muted">Loading…</span>
-		{:else if head.initialized === false}
-			<span class="muted">Not a git repository.</span>
-		{:else}
-			<div class="branch">
-				<strong>{head.branch ?? '(detached)'}</strong>
-				{#if head.shortSha}<code class="sha">@ {head.shortSha}</code>{/if}
-			</div>
-			{#if head.upstream}
-				<div class="muted small">
-					tracking <code>{head.upstream}</code>
-					{#if head.ahead}<span class="ahead">↑{head.ahead}</span>{/if}
-					{#if head.behind}<span class="behind">↓{head.behind}</span>{/if}
-				</div>
-			{/if}
-			{#if head.dirtyCount > 0}
-				<div class="dirty small">
-					{head.dirtyCount} uncommitted change{head.dirtyCount === 1 ? '' : 's'}
-				</div>
-			{/if}
-		{/if}
-	</div>
 	{#if error}
 		<div class="error">{error}</div>
 	{/if}
@@ -116,8 +83,11 @@
 				</div>
 			</button>
 		{/each}
-		{#if commits.length === 0 && head?.initialized}
+		{#if commits.length === 0 && initialized && !loading}
 			<div class="muted small empty">No commits yet.</div>
+		{/if}
+		{#if !initialized}
+			<div class="muted small empty">Not a git repository.</div>
 		{/if}
 		{#if canLoadMore && commits.length > 0}
 			<button class="load-more" onclick={loadMore} disabled={loading}>
@@ -135,16 +105,6 @@
 		min-height: 0;
 		font-size: 0.85em;
 	}
-	.head-info {
-		padding: 0.5rem 0.6rem;
-		background: var(--surface);
-		border-bottom: 1px solid var(--border);
-	}
-	.branch {
-		display: flex;
-		align-items: baseline;
-		gap: 0.4rem;
-	}
 	.sha {
 		font-family: var(--mono);
 		color: var(--text-muted);
@@ -155,18 +115,6 @@
 	}
 	.muted {
 		color: var(--text-muted);
-	}
-	.ahead {
-		color: var(--success);
-		margin-left: 0.3rem;
-	}
-	.behind {
-		color: var(--warning);
-		margin-left: 0.3rem;
-	}
-	.dirty {
-		color: var(--warning);
-		margin-top: 0.15rem;
 	}
 	.commits {
 		overflow: auto;

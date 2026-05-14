@@ -52,7 +52,12 @@ export default defineConfig({
 			ENCRYPTION_KEY: randomBytes(32).toString('base64'),
 			COPILOT_STUB: '1',
 			LOG_LEVEL: 'warn',
-			DB_MIGRATIONS_DIR: resolve(__dirname, 'src/lib/server/db/migrations')
+			DB_MIGRATIONS_DIR: resolve(__dirname, 'src/lib/server/db/migrations'),
+			// dataDir lives inside the copilot-portal source tree, which is itself a
+			// git repo. Without this, the server's workspaceRoot (=dataDir) would
+			// inherit the outer repo when running `git` commands. Tell git to stop
+			// walking at dataDir so each test sees an isolated workspace.
+			GIT_CEILING_DIRECTORIES: dataDir
 		}
 	}
 });

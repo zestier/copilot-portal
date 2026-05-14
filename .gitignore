@@ -2,6 +2,9 @@ node_modules/
 .pnpm-store/
 .svelte-kit/
 build/
+build.live/
+build.live.tmp/
+build.prev/
 dist/
 # We use pnpm; reject stray npm/yarn lockfiles.
 package-lock.json
@@ -18,4 +21,5 @@ data/
 .DS_Store
 playwright-report/
 test-results/
+e2e/.tmp-data/
 coverage/

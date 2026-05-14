@@ -44,7 +44,7 @@ function log(...args) {
 // `build.live/`, so the swap is safe.
 function refreshLiveFromBuild() {
 	if (!existsSync(buildDir)) return;
-	let srcMtime = 0;
+	let srcMtime;
 	try {
 		srcMtime = statSync(resolve(buildDir, 'index.js')).mtimeMs;
 	} catch {

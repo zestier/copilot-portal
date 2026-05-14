@@ -17,6 +17,8 @@ export interface FsEntry {
 	mtimeMs: number | null;
 	status: FileBrowserStatus | null;
 	containsChanges: FileBrowserStatus | null;
+	added: number | null;
+	removed: number | null;
 }
 
 export interface TreeResponse {
@@ -51,6 +53,21 @@ export interface CommitFile {
 	status: FileBrowserStatus;
 	path: string;
 	origPath: string | null;
+}
+
+export interface ChangeEntry {
+	path: string;
+	origPath: string | null;
+	status: FileBrowserStatus;
+	staged: boolean;
+	unstaged: boolean;
+	added: number | null;
+	removed: number | null;
+}
+
+export interface ChangesResponse {
+	initialized: boolean;
+	entries: ChangeEntry[];
 }
 
 export interface CommitDetail {
