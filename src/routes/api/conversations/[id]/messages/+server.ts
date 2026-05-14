@@ -50,7 +50,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	}
 
 	const cfg = loadConfig();
-	const userSettings = settings.getOrDefault(conv.userId);
+	const userSettings = settings.get(conv.userId) ?? settings.defaults();
 	const authToken = tokens.getGithubToken(conv.userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
 
 	const turn = await startTurn({

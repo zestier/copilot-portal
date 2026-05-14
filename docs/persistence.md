@@ -230,3 +230,23 @@ No automatic deletion. The UI offers per-conversation delete (cascades).
 Archived conversations are collapsed under an "Archived" group in the sidebar
 but preserved; users can unarchive them or include them in API listings via
 `GET /api/conversations?archived=1`.
+
+## Repo-module conventions
+
+The modules under `src/lib/server/db/repos/*.ts` are the only callers of
+`better-sqlite3` outside migrations. They follow a small, uniform contract:
+
+- **`getX(...) → X | null`** — a missing row returns `null`. No
+  synthetic-default variants (use a sibling `defaults()` helper if the
+  caller wants a fallback, e.g. `settings.get(uid) ?? settings.defaults()`).
+- **`getOrCreateX(...) → X`** — idempotent get-or-insert. Always returns
+  a real, persisted row (e.g. `users.ensureLocalUser`,
+  `users.upsertGithub`).
+- **Inserts that mint an entity** — return the inserted row
+  (e.g. `convs.create`, `msgs.append`).
+- **Scoped mutators** (UPDATE/DELETE with `AND user_id = ?` enforcing
+  ownership) return `boolean` indicating whether the row was changed —
+  callers use this to distinguish "applied" from "not yours / 404".
+- **Unscoped mutators** (UPDATE/UPSERT on a known-trusted id, no
+  authorization check) return `void`. Caller is expected to have
+  authorized the entity beforehand.

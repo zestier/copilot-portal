@@ -24,7 +24,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const userId = requireUserId(locals);
 	const body = await parseBody(request, CreateBody);
 	const cfg = loadConfig();
-	const userSettings = settings.getOrDefault(userId);
+	const userSettings = settings.get(userId) ?? settings.defaults();
 	const model = body.model ?? userSettings.defaultModel ?? cfg.DEFAULT_MODEL;
 
 	const id = convs.newId();

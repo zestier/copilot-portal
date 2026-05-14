@@ -73,7 +73,7 @@ the suggested unified convention.
   - `src/lib/server/sse.ts`
   - `src/routes/api/admin/redeploy/+server.ts`
 
-- [ ] **9. Standardize repo semantics.** Decide on `getX → X | null`,
+- [x] **9. Standardize repo semantics.** Decide on `getX → X | null`,
       `getOrCreateX → X` (no synthetic-default variants), and a uniform
       return shape for mutators (boolean "changed?" vs void).
   - `src/lib/server/db/repos/{conversations,messages,settings,tokens,usage,users}.ts`

@@ -39,7 +39,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 
 	return {
-		settings: settings.getOrDefault(locals.userId),
+		settings: settings.get(locals.userId) ?? settings.defaults(),
 		copilot,
 		enableRedeploy: cfg.ENABLE_REDEPLOY
 	};

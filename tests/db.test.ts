@@ -121,7 +121,8 @@ describe('db migrations + repos', () => {
 
 	it('saves and loads settings with defaults', () => {
 		const u = users.ensureLocalUser();
-		const s = settings.getOrDefault(u.id);
+		expect(settings.get(u.id)).toBeNull();
+		const s = settings.defaults();
 		expect(s.defaultPolicy).toBe('prompt');
 		settings.save(u.id, {
 			defaultModel: 'claude',
@@ -129,7 +130,7 @@ describe('db migrations + repos', () => {
 			defaultPolicy: 'allow-readonly',
 			theme: 'light'
 		});
-		expect(settings.getOrDefault(u.id)).toEqual({
+		expect(settings.get(u.id)).toEqual({
 			defaultModel: 'claude',
 			defaultWorkdir: null,
 			defaultPolicy: 'allow-readonly',

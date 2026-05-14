@@ -20,11 +20,19 @@ function rowToSettings(r: SettingsRow): UserSettings {
 	};
 }
 
-export function getOrDefault(userId: string): UserSettings {
+export function get(userId: string): UserSettings | null {
 	const r = getDb().prepare('SELECT * FROM user_settings WHERE user_id = ?').get(userId) as
 		| SettingsRow
 		| undefined;
-	if (r) return rowToSettings(r);
+	return r ? rowToSettings(r) : null;
+}
+
+/**
+ * Default settings for users who have never saved a preference. Callers
+ * typically use `settings.get(userId) ?? settings.defaults()` rather than
+ * a synthetic-default `getOrDefault` (per the repo convention: `getX → X | null`).
+ */
+export function defaults(): UserSettings {
 	return {
 		defaultModel: null,
 		defaultWorkdir: null,
