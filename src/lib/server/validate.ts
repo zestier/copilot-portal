@@ -1,5 +1,5 @@
-import { error } from '@sveltejs/kit';
 import { z } from 'zod';
+import { apiError } from '$lib/server/http';
 
 /**
  * Parse a request body against a Zod schema, turning validation failures
@@ -24,7 +24,7 @@ export async function parseBody<T extends z.ZodTypeAny>(
 			try {
 				raw = JSON.parse(text);
 			} catch {
-				throw error(400, 'Invalid JSON body');
+				apiError(400, 'bad_request', 'Invalid JSON body');
 			}
 		}
 	} else {
@@ -32,7 +32,7 @@ export async function parseBody<T extends z.ZodTypeAny>(
 	}
 	const result = schema.safeParse(raw);
 	if (!result.success) {
-		throw error(400, formatZodError(result.error));
+		apiError(400, 'bad_request', formatZodError(result.error));
 	}
 	return result.data;
 }

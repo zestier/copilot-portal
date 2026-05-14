@@ -54,19 +54,22 @@ const SaveSchema = z.object({
 
 export const actions: Actions = {
 	save: async ({ request, locals }) => {
-		if (!locals.userId) return { ok: false };
+		if (!locals.userId) return { ok: false, error: 'Not authenticated' };
 		const data = await request.formData();
-		const parsed = SaveSchema.parse({
+		const parsed = SaveSchema.safeParse({
 			defaultModel: (data.get('defaultModel') as string) || undefined,
 			defaultWorkdir: (data.get('defaultWorkdir') as string) || undefined,
 			defaultPolicy: data.get('defaultPolicy'),
 			theme: data.get('theme')
 		});
+		if (!parsed.success) {
+			return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid settings' };
+		}
 		const next: UserSettings = {
-			defaultModel: parsed.defaultModel ?? null,
-			defaultWorkdir: parsed.defaultWorkdir ?? null,
-			defaultPolicy: parsed.defaultPolicy as PermissionPolicy,
-			theme: parsed.theme
+			defaultModel: parsed.data.defaultModel ?? null,
+			defaultWorkdir: parsed.data.defaultWorkdir ?? null,
+			defaultPolicy: parsed.data.defaultPolicy as PermissionPolicy,
+			theme: parsed.data.theme
 		};
 		settings.save(locals.userId, next);
 		return { ok: true };

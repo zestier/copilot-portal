@@ -1,4 +1,4 @@
-import { redirect } from '@sveltejs/kit';
+import { error, redirect } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { exchangeCode, fetchProfile, isAllowed } from '$lib/server/auth/github';
 import { upsertGithub } from '$lib/server/db/repos/users';
@@ -14,7 +14,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 
 	if (!code || !state || !expectedState || state !== expectedState) {
 		log.warn('oauth.state_mismatch');
-		return new Response('Bad request', { status: 400 });
+		throw error(400, { message: 'OAuth state mismatch', code: 'oauth_state_mismatch' });
 	}
 	const redirectUri = `${url.origin}/auth/callback`;
 	let token: string;
@@ -24,11 +24,11 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		profile = await fetchProfile(token);
 	} catch (e) {
 		log.warn('oauth.failed', { err: String(e) });
-		return new Response('Auth failed', { status: 502 });
+		throw error(502, { message: 'OAuth exchange failed', code: 'oauth_failed' });
 	}
 	if (!isAllowed(profile.login)) {
 		log.warn('oauth.not_allowed', { login: profile.login });
-		return new Response('Forbidden', { status: 403 });
+		throw error(403, { message: 'GitHub login is not on the allow-list', code: 'forbidden' });
 	}
 	const user = upsertGithub({
 		githubLogin: profile.login,

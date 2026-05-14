@@ -29,7 +29,9 @@ export const load: PageServerLoad = ({ locals, cookies, url }) => {
 export const actions: Actions = {
 	default: async ({ request, cookies, url, locals }) => {
 		const cfg = loadConfig();
-		if (cfg.AUTH_MODE !== 'shared-secret') return { ok: false };
+		if (cfg.AUTH_MODE !== 'shared-secret') {
+			return { ok: false, error: 'Shared-secret login is disabled' };
+		}
 		const data = await request.formData();
 		const secret = String(data.get('secret') ?? '');
 		if (!secret || secret !== cfg.SHARED_SECRET) {

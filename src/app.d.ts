@@ -9,6 +9,10 @@ declare global {
 		interface PageData {
 			user: import('$lib/types').User | null;
 		}
+		interface Error {
+			message: string;
+			code?: string;
+		}
 		// interface PageState {}
 		// interface Platform {}
 	}

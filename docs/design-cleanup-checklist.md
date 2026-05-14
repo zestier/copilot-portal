@@ -29,7 +29,7 @@ the suggested unified convention.
     `…/permissions/[requestId]/+server.ts`, `…/messages/+server.ts`,
     `…/messages/[messageId]/fork/+server.ts`, `…/health/+server.ts`
 
-- [ ] **3. Unify error body shapes.** Funnel auth/origin/rate-limit
+- [x] **3. Unify error body shapes.** Funnel auth/origin/rate-limit
       rejections through `error(...)` (or a small `apiError(status, code)`
       helper) so every `/api/*` response is JSON `{message, code}`.
       Standardize form-action results on `{ok, error?}`.

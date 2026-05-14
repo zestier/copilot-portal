@@ -5,6 +5,7 @@ import { getDb } from '$lib/server/db';
 import * as users from '$lib/server/db/repos/users';
 import { read as readSession, generateCsrfToken } from '$lib/server/auth/session';
 import { perWindow } from '$lib/server/rate-limit';
+import { apiErrorResponse } from '$lib/server/http';
 import { startIdleReaper } from '$lib/server/copilot/pool';
 
 // One-time bootstrap.
@@ -65,7 +66,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	const path = event.url.pathname;
 	if (!isPublic(path) && !event.locals.userId) {
 		if (path.startsWith('/api/')) {
-			return new Response('Unauthorized', { status: 401 });
+			return apiErrorResponse(401, 'unauthorized');
 		}
 		return new Response(null, {
 			status: 302,
@@ -84,7 +85,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 			(origin && origin === expectedOrigin) ||
 			(referer && referer.startsWith(expectedOrigin + '/'));
 		if (!ok) {
-			return new Response('Bad origin', { status: 403 });
+			return apiErrorResponse(403, 'bad_origin');
 		}
 	}
 
@@ -96,7 +97,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	}
 	if (path.startsWith('/api/') && event.locals.userId) {
 		if (!apiLimiter.tryAcquire(`api:${event.locals.userId}`)) {
-			return new Response('Too many requests', { status: 429 });
+			return apiErrorResponse(429, 'rate_limited');
 		}
 	}
 
