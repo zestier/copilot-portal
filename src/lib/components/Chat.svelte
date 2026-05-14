@@ -124,9 +124,14 @@
 	}
 
 	$effect(() => {
-		// Re-run autoGrow whenever the composer text changes.
+		// Re-run autoGrow whenever the composer text changes. `tick()` waits
+		// for the DOM (including `bind:this`) to settle so the very first
+		// run after mount actually has `textareaEl` to measure — without
+		// this guard the textarea could fall back to its native rows=1
+		// rendering, which differs across browsers and occasionally paints
+		// unusually tall.
 		void composer;
-		autoGrow();
+		tick().then(autoGrow);
 	});
 
 	async function scrollToBottom(opts: { force?: boolean } = {}) {
@@ -749,6 +754,13 @@
 		box-shadow: none;
 		line-height: 1.5;
 		font-size: 0.95rem;
+		/* Browsers that support field-sizing auto-size the textarea to its
+		   content without help from JS, eliminating any first-paint flash
+		   where the native rows=1 height (which varies between browsers
+		   and inherits body line-height before our local rules apply)
+		   could render unusually tall. The JS autoGrow below remains the
+		   fallback for browsers without support. */
+		field-sizing: content;
 	}
 	.composer-shell textarea:disabled {
 		opacity: 0.7;
