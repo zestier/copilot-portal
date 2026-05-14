@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import SidebarRail from '$lib/components/SidebarRail.svelte';
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 	import {
@@ -18,6 +19,12 @@
 	let hydrated = $state(false);
 
 	const isLoginPage = $derived($page.url.pathname === '/login');
+
+	function closeOnMobileNavigate() {
+		if (window.matchMedia(`(max-width: ${SIDEBAR_MOBILE_MAX_WIDTH}px)`).matches) {
+			sidebarOpen = false;
+		}
+	}
 
 	onMount(() => {
 		sidebarOpen = resolveInitialSidebarOpen({
@@ -38,22 +45,51 @@
 	{@render children()}
 {:else}
 	<div class="layout" class:collapsed={!sidebarOpen} class:preload={!hydrated}>
+		<div class="rail-wrap">
+			<SidebarRail
+				user={data.user}
+				expanded={sidebarOpen}
+				ontoggle={() => (sidebarOpen = !sidebarOpen)}
+				onnavigate={closeOnMobileNavigate}
+			/>
+		</div>
 		<button
-			class="btn icon ghost hamburger"
-			aria-label="Toggle sidebar"
-			onclick={() => (sidebarOpen = !sidebarOpen)}
+			type="button"
+			class="mobile-menu btn icon ghost"
+			class:hidden={sidebarOpen}
+			aria-label="Open menu"
+			title="Open menu"
+			onclick={() => (sidebarOpen = true)}
 		>
-			☰
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 16 16"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.6"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+			>
+				<path d="M2 4h12" />
+				<path d="M2 8h12" />
+				<path d="M2 12h12" />
+			</svg>
 		</button>
-		<aside class="sidebar" class:open={sidebarOpen}>
+		{#if sidebarOpen}
+			<button
+				type="button"
+				class="scrim"
+				aria-label="Close sidebar"
+				onclick={() => (sidebarOpen = false)}
+			></button>
+		{/if}
+		<aside class="sidebar" class:open={sidebarOpen} aria-hidden={!sidebarOpen}>
 			<Sidebar
 				conversations={data.conversations}
 				user={data.user}
-				onnavigate={() => {
-					if (window.matchMedia(`(max-width: ${SIDEBAR_MOBILE_MAX_WIDTH}px)`).matches) {
-						sidebarOpen = false;
-					}
-				}}
+				onnavigate={closeOnMobileNavigate}
 			/>
 		</aside>
 		<main class="main">
@@ -65,20 +101,24 @@
 <style>
 	.layout {
 		display: grid;
-		grid-template-columns: 280px 1fr;
+		grid-template-columns: 44px 280px 1fr;
 		height: 100vh;
 		height: 100dvh;
 		overflow: hidden;
 		transition: grid-template-columns 150ms ease-out;
 	}
 	.layout.collapsed {
-		grid-template-columns: 0 1fr;
+		grid-template-columns: 44px 0 1fr;
+	}
+	.rail-wrap {
+		display: contents;
 	}
 	.sidebar {
 		background: var(--surface);
 		border-right: 1px solid var(--border);
 		overflow-y: auto;
 		overflow-x: hidden;
+		min-width: 0;
 	}
 	.main {
 		overflow: hidden;
@@ -86,26 +126,39 @@
 		flex-direction: column;
 		min-width: 0;
 	}
+	.scrim {
+		display: none;
+	}
+	.mobile-menu {
+		display: none;
+	}
 	.layout.preload,
 	.layout.preload .sidebar {
 		transition: none;
 	}
-	/* Pre-hydration: force collapsed visuals if the inline script flagged the
-	   sidebar as closed, so the SSR markup (which assumes open) doesn't flash. */
+	/* Pre-hydration: resolve the collapsed visuals from the inline script so
+	   the first paint matches the persisted preference without a flash. */
 	:global(html[data-sidebar='closed']) .layout.preload {
-		grid-template-columns: 0 1fr;
-	}
-	.hamburger {
-		position: fixed;
-		top: var(--space-2);
-		left: var(--space-2);
-		z-index: 20;
+		grid-template-columns: 44px 0 1fr;
 	}
 
 	@media (max-width: 768px) {
 		.layout,
 		.layout.collapsed {
 			grid-template-columns: 1fr;
+		}
+		.rail-wrap {
+			display: none;
+		}
+		.mobile-menu {
+			display: inline-flex;
+			position: fixed;
+			top: var(--space-2);
+			left: var(--space-2);
+			z-index: 20;
+		}
+		.mobile-menu.hidden {
+			display: none;
 		}
 		.sidebar {
 			position: fixed;
@@ -116,10 +169,20 @@
 			max-width: 320px;
 			transform: translateX(-100%);
 			transition: transform 150ms ease-out;
-			z-index: 15;
+			z-index: 16;
 		}
 		.sidebar.open {
 			transform: translateX(0);
+		}
+		.scrim {
+			display: block;
+			position: fixed;
+			inset: 0;
+			background: rgb(0 0 0 / 0.4);
+			border: 0;
+			padding: 0;
+			cursor: pointer;
+			z-index: 15;
 		}
 		:global(html[data-sidebar='closed']) .layout.preload .sidebar {
 			transform: translateX(-100%);

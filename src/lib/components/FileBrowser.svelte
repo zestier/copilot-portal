@@ -184,16 +184,12 @@
 			</button>
 		</div>
 		{#if pane === 'files'}
-			<div class="filter-toggles">
-				<label><input type="checkbox" bind:checked={showHidden} /> Hidden</label>
-				<label><input type="checkbox" bind:checked={showIgnored} /> Ignored</label>
-			</div>
 			<div class="pane-body">
 				<FileTree
 					{conversationId}
 					{selectedPath}
-					{showHidden}
-					{showIgnored}
+					bind:showHidden
+					bind:showIgnored
 					onselect={pickFile}
 					onrefresh={bumpGitRefresh}
 				/>
@@ -387,20 +383,6 @@
 		opacity: 0.5;
 		cursor: not-allowed;
 	}
-	.filter-toggles {
-		display: flex;
-		gap: var(--space-3);
-		padding: 0.35rem var(--space-3);
-		font-size: var(--fs-sm);
-		border-bottom: 1px solid var(--border);
-		color: var(--text-muted);
-	}
-	.filter-toggles label {
-		display: inline-flex;
-		gap: var(--space-1);
-		align-items: center;
-		cursor: pointer;
-	}
 	.pane-body {
 		flex: 1;
 		min-height: 0;
@@ -427,7 +409,7 @@
 		font-size: var(--fs-md);
 	}
 	.view-tabs {
-		margin-top: var(--space-1);
+		margin-top: 0;
 	}
 	.content-body,
 	.commit-body {

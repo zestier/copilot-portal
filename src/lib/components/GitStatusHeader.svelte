@@ -83,7 +83,7 @@
 	.git-status {
 		display: flex;
 		flex-direction: column;
-		gap: 0.15rem;
+		gap: var(--space-1);
 		padding: var(--space-2) var(--space-3);
 		background: var(--surface);
 		border-bottom: 1px solid var(--border);

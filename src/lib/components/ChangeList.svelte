@@ -70,14 +70,64 @@
 </script>
 
 <div class="change-list">
-	<div class="toolbar">
-		<input
-			type="search"
-			placeholder="Filter changed files…"
-			bind:value={filter}
-			aria-label="Filter changed files"
-		/>
-		<button class="icon-btn" title="Refresh" onclick={refresh} aria-label="Refresh">↻</button>
+	<div class="panel-toolbar">
+		<div class="search-wrap">
+			<svg
+				class="search-icon"
+				width="14"
+				height="14"
+				viewBox="0 0 16 16"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.6"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+			>
+				<circle cx="7" cy="7" r="4.5" />
+				<path d="M10.5 10.5L14 14" />
+			</svg>
+			<input
+				type="search"
+				placeholder="Filter changed files…"
+				bind:value={filter}
+				aria-label="Filter changed files"
+			/>
+			{#if filter}
+				<button
+					type="button"
+					class="clear-btn"
+					title="Clear filter"
+					aria-label="Clear filter"
+					onclick={() => (filter = '')}
+				>
+					×
+				</button>
+			{/if}
+		</div>
+		<button
+			type="button"
+			class="btn icon sm"
+			class:is-loading={loading}
+			title="Refresh"
+			onclick={refresh}
+			aria-label="Refresh"
+		>
+			<svg
+				width="14"
+				height="14"
+				viewBox="0 0 16 16"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.6"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+			>
+				<path d="M13.5 3.5v3.5h-3.5" />
+				<path d="M13 7A5.5 5.5 0 1 0 11.7 11.7" />
+			</svg>
+		</button>
 	</div>
 	{#if error}
 		<div class="error">{error}</div>
@@ -128,30 +178,76 @@
 		min-height: 0;
 		font-size: var(--fs-sm);
 	}
-	.toolbar {
+	.panel-toolbar {
 		display: flex;
 		gap: var(--space-2);
-		padding: var(--space-2);
+		align-items: center;
+		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px solid var(--border);
 		background: var(--surface);
 	}
-	.toolbar input[type='search'] {
+	.search-wrap {
+		position: relative;
 		flex: 1;
 		min-width: 0;
-		padding: 0.25rem 0.5rem;
+		display: flex;
+		align-items: center;
+	}
+	.search-icon {
+		position: absolute;
+		left: 0.5rem;
+		color: var(--text-muted);
+		pointer-events: none;
+	}
+	.search-wrap input[type='search'] {
+		width: 100%;
+		min-width: 0;
+		height: 28px;
+		padding: 0 1.6rem 0 1.9rem;
 		background: var(--bg);
 		color: var(--text);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		font: inherit;
 	}
-	.icon-btn {
+	.search-wrap input[type='search']::-webkit-search-cancel-button {
+		appearance: none;
+	}
+	.clear-btn {
+		position: absolute;
+		right: 0.25rem;
+		top: 50%;
+		transform: translateY(-50%);
+		width: 1.25rem;
+		height: 1.25rem;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 		background: transparent;
-		border: 1px solid var(--border);
+		border: 0;
+		color: var(--text-muted);
 		border-radius: var(--radius-sm);
-		color: var(--text);
 		cursor: pointer;
-		padding: 0.15rem 0.45rem;
+		font-size: 1rem;
+		line-height: 1;
+		padding: 0;
+	}
+	.clear-btn:hover {
+		background: var(--surface-hover);
+		color: var(--text);
+	}
+	.panel-toolbar :global(.btn.icon.sm) {
+		width: 28px;
+		height: 28px;
+		flex-shrink: 0;
+	}
+	.is-loading :global(svg) {
+		animation: spin 0.8s linear infinite;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
 	}
 	.rows {
 		overflow: auto;

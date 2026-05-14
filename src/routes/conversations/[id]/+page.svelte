@@ -60,11 +60,8 @@
 		background: var(--surface);
 		flex: 0 0 auto;
 	}
-	/* Inset past the fixed-position hamburger toggle in +layout.svelte when the
-	   sidebar is collapsed (desktop or mobile) so it doesn't cover the Chat tab. */
-	:global(.layout.collapsed) .tabs {
-		padding-left: 2.75rem;
-	}
+	/* On mobile the sidebar toggle is a fixed-position hamburger at top-left;
+	   inset the tab strip so it doesn't sit underneath. */
 	@media (max-width: 768px) {
 		.tabs {
 			padding-left: 2.75rem;
@@ -75,7 +72,7 @@
 		color: var(--text-muted);
 		border: 0;
 		border-bottom: 2px solid transparent;
-		padding: 0.5rem 1rem;
+		padding: var(--space-2) var(--space-4);
 		cursor: pointer;
 		font: inherit;
 	}

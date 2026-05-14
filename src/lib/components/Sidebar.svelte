@@ -225,14 +225,19 @@
 <div class="sidebar-inner">
 	<div class="top">
 		<button class="btn primary block" onclick={newChat}>+ New chat</button>
-		<button
-			class="btn block select-toggle"
-			class:active={selectMode}
-			onclick={toggleSelectMode}
-			disabled={conversations.length === 0}
-		>
-			{selectMode ? 'Cancel selection' : 'Select'}
-		</button>
+		<div class="top-meta">
+			<span class="count muted">
+				{active.length} chat{active.length === 1 ? '' : 's'}
+			</span>
+			<button
+				class="btn sm ghost select-toggle"
+				class:active={selectMode}
+				onclick={toggleSelectMode}
+				disabled={conversations.length === 0}
+			>
+				{selectMode ? 'Done' : 'Select'}
+			</button>
+		</div>
 	</div>
 
 	{#if errorMsg}
@@ -242,7 +247,6 @@
 	{/if}
 
 	<nav class="convs" aria-label="Conversations">
-		<div class="section-label">Conversations</div>
 		{#if active.length === 0}
 			<p class="muted empty">No conversations yet.</p>
 		{/if}
@@ -303,8 +307,14 @@
 						aria-label={`Actions for ${c.title}`}
 						aria-haspopup="true"
 						aria-expanded={isMenu}
-						onclick={(e) => toggleMenu(c.id, e)}>⋯</button
+						onclick={(e) => toggleMenu(c.id, e)}
 					>
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+							<circle cx="3" cy="8" r="1.4" />
+							<circle cx="8" cy="8" r="1.4" />
+							<circle cx="13" cy="8" r="1.4" />
+						</svg>
+					</button>
 				{/if}
 				{#if isMenu}
 					<div class="menu" onclick={stop} onkeydown={stop} role="presentation">
@@ -383,8 +393,20 @@
 								aria-label={`Actions for ${c.title}`}
 								aria-haspopup="true"
 								aria-expanded={isMenu}
-								onclick={(e) => toggleMenu(c.id, e)}>⋯</button
+								onclick={(e) => toggleMenu(c.id, e)}
 							>
+								<svg
+									width="14"
+									height="14"
+									viewBox="0 0 16 16"
+									fill="currentColor"
+									aria-hidden="true"
+								>
+									<circle cx="3" cy="8" r="1.4" />
+									<circle cx="8" cy="8" r="1.4" />
+									<circle cx="13" cy="8" r="1.4" />
+								</svg>
+							</button>
 						{/if}
 						{#if isMenu}
 							<div class="menu" onclick={stop} onkeydown={stop} role="presentation">
@@ -401,26 +423,28 @@
 
 	{#if selectMode}
 		<div class="bulk-bar" role="toolbar" aria-label="Bulk actions">
-			<span class="muted">{selected.size} selected</span>
-			<button
-				class="btn"
-				disabled={bulkBusy ||
-					selected.size === 0 ||
-					[...selected].every((id) => active.find((c) => c.id === id) == null)}
-				onclick={() => bulk('archive')}>Archive</button
-			>
-			<button
-				class="btn"
-				disabled={bulkBusy ||
-					selected.size === 0 ||
-					[...selected].every((id) => archived.find((c) => c.id === id) == null)}
-				onclick={() => bulk('unarchive')}>Unarchive</button
-			>
-			<button
-				class="btn danger"
-				disabled={bulkBusy || selected.size === 0}
-				onclick={() => bulk('delete')}>Delete</button
-			>
+			<span class="bulk-count muted">{selected.size} selected</span>
+			<div class="bulk-actions">
+				<button
+					class="btn sm"
+					disabled={bulkBusy ||
+						selected.size === 0 ||
+						[...selected].every((id) => active.find((c) => c.id === id) == null)}
+					onclick={() => bulk('archive')}>Archive</button
+				>
+				<button
+					class="btn sm"
+					disabled={bulkBusy ||
+						selected.size === 0 ||
+						[...selected].every((id) => archived.find((c) => c.id === id) == null)}
+					onclick={() => bulk('unarchive')}>Unarchive</button
+				>
+				<button
+					class="btn sm ghost danger"
+					disabled={bulkBusy || selected.size === 0}
+					onclick={() => bulk('delete')}>Delete</button
+				>
+			</div>
 		</div>
 	{/if}
 
@@ -441,21 +465,27 @@
 		height: 100%;
 	}
 	.top {
-		padding: 1rem;
+		padding: var(--space-3) var(--space-4);
 		display: flex;
 		flex-direction: column;
-		gap: 0.4rem;
+		gap: var(--space-2);
+	}
+	.top-meta {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+	}
+	.count {
+		font-size: var(--fs-xs);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
 	}
 	.block {
 		display: block;
 		width: 100%;
 	}
-	.select-toggle {
-		font-size: var(--fs-sm);
-		padding: 0.3rem 0.6rem;
-	}
 	.select-toggle.active {
-		border-color: var(--accent);
 		color: var(--accent);
 	}
 	.error-wrap {
@@ -468,13 +498,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.15rem;
-	}
-	.section-label {
-		font-size: var(--fs-xs);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		color: var(--text-muted);
-		padding: 0.5rem 0.5rem 0.25rem;
 	}
 	.section-toggle {
 		display: flex;
@@ -556,16 +579,23 @@
 	}
 	.menu-btn {
 		align-self: center;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
 		background: transparent;
 		border: 0;
 		color: var(--text-muted);
-		font-size: 1.1rem;
-		line-height: 1;
-		padding: 0.2rem 0.4rem;
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 		cursor: pointer;
+		padding: 0;
 		opacity: 0;
 		flex-shrink: 0;
+		transition:
+			background 0.12s ease,
+			color 0.12s ease,
+			opacity 0.12s ease;
 	}
 	.conv:hover .menu-btn,
 	.conv:focus-within .menu-btn,
@@ -579,7 +609,7 @@
 		}
 	}
 	.menu-btn:hover {
-		background: var(--surface);
+		background: var(--surface-hover);
 		color: var(--text);
 	}
 	.menu-btn:focus-visible {
@@ -628,13 +658,18 @@
 		flex-wrap: wrap;
 		gap: var(--space-2);
 		align-items: center;
+		justify-content: space-between;
 		padding: var(--space-2) var(--space-3);
 		border-top: 1px solid var(--border);
 		background: var(--surface);
 	}
-	.bulk-bar .btn {
-		padding: 0.3rem 0.6rem;
+	.bulk-count {
 		font-size: var(--fs-sm);
+	}
+	.bulk-actions {
+		display: inline-flex;
+		gap: var(--space-1);
+		flex-wrap: wrap;
 	}
 	.bottom {
 		padding: 0.75rem 1rem;
