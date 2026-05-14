@@ -1,4 +1,4 @@
-import { error, json } from '@sveltejs/kit';
+import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { sseResponse } from '$lib/server/sse';
 import { getTurnById } from '$lib/server/copilot/turn-runner';
@@ -36,19 +36,4 @@ export const GET: RequestHandler = ({ params, locals, request }) => {
 		extractId: (item) => item.id,
 		extractData: (item) => item.event
 	});
-};
-
-/**
- * Explicit user-initiated cancel. Unlike merely closing the
- * `EventSource`, this actually aborts the upstream SDK turn.
- */
-export const DELETE: RequestHandler = async ({ params, locals }) => {
-	const conv = authorizeConversation(params.id, locals.userId);
-
-	const turn = getTurnById(conv.id, params.turnId);
-	if (!turn || turn.status !== 'running') {
-		return json({ ok: true, aborted: false });
-	}
-	await turn.abort();
-	return json({ ok: true, aborted: true });
 };
