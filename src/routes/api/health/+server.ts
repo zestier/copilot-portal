@@ -6,8 +6,8 @@ export const GET: RequestHandler = () => {
 	try {
 		const r = getDb().prepare('SELECT 1 as ok').get() as { ok: number };
 		if (r.ok !== 1) throw new Error('db check failed');
-		return json({ status: 'ok' });
+		return json({ ok: true });
 	} catch (e) {
-		return json({ status: 'error', message: String(e) }, { status: 503 });
+		return json({ ok: false, error: String(e) }, { status: 503 });
 	}
 };

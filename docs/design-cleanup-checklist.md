@@ -17,7 +17,7 @@ the suggested unified convention.
   - `src/routes/api/conversations/[id]/{fs,git}/**/+server.ts`
   - `docs/architecture.md` (claims workdir-scoped sessions)
 
-- [ ] **2. Standardize JSON response envelopes.** Pick one convention for
+- [x] **2. Standardize JSON response envelopes.** Pick one convention for
       collections (`{items}` vs bare array vs `{data}`) and one for mutation
       results (`{ok:true,…}`), apply across all `/api/*` routes.
   - Wrapped: `…/conversations/+server.ts`, `…/forks/+server.ts`,

@@ -27,7 +27,7 @@ test('Files tab lists workspace contents and reads a file', async ({ page, reque
 	const file = await request.get(`/api/conversations/${id}/fs/file?path=hello.txt`);
 	expect(file.ok()).toBeTruthy();
 	const fileBody = await file.json();
-	expect(fileBody.content).toBe('greetings\n');
+	expect(fileBody.file.content).toBe('greetings\n');
 
 	await page.goto(`/conversations/${id}`);
 	await page.getByRole('tab', { name: 'Files' }).click();

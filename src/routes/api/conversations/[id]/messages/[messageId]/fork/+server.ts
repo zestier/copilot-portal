@@ -44,7 +44,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			messageId,
 			newContent: parsed.content ?? null
 		});
-		return json({ conversationId: conversation.id });
+		return json({ ok: true, conversationId: conversation.id });
 	} catch (e) {
 		if (e instanceof ForkRejected) {
 			throw error(REJECT_STATUS[e.reason] ?? 400, e.message);

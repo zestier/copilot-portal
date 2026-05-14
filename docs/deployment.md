@@ -134,8 +134,9 @@ faster iteration.
 
 ## Health and observability
 
-- `GET /api/health` → `200 {"status":"ok"}` if DB reachable and migrations
-  current. Used by compose healthcheck and CF Tunnel.
+- `GET /api/health` → `200 {"ok":true}` if DB reachable and migrations
+  current (`{"ok":false,"error":"…"}` with status 503 on failure). Used by
+  compose healthcheck and CF Tunnel.
 - Logs to stdout as structured JSON. `docker logs -f portal` is sufficient
   for personal use; pipe to Loki/Vector if you have one.
 - Metrics out of scope for v1.

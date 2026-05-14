@@ -15,5 +15,5 @@ test('home page renders and creates a new conversation', async ({ page }) => {
 test('health endpoint is public', async ({ request }) => {
 	const res = await request.get('/api/health');
 	expect(res.status()).toBe(200);
-	expect(await res.json()).toMatchObject({ status: 'ok' });
+	expect(await res.json()).toMatchObject({ ok: true });
 });

@@ -21,14 +21,16 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 					break;
 				}
 			}
-			if (binary) return json({ binary: true, ref, path: relPath });
+			if (binary) return json({ file: { binary: true, ref, path: relPath } });
 			return json({
-				binary: false,
-				ref,
-				path: relPath,
-				content,
-				size: Buffer.byteLength(content, 'utf-8'),
-				truncated: false
+				file: {
+					binary: false,
+					ref,
+					path: relPath,
+					content,
+					size: Buffer.byteLength(content, 'utf-8'),
+					truncated: false
+				}
 			});
 		} catch (e) {
 			if (e instanceof GitError) throw error(404, e.message);
@@ -38,12 +40,14 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 
 	const r = await readFileSafe(workdir, relPath);
 	if (!r.ok) throw error(r.status ?? 400, r.reason);
-	if (r.binary) return json({ binary: true, path: relPath, size: r.size });
+	if (r.binary) return json({ file: { binary: true, path: relPath, size: r.size } });
 	return json({
-		binary: false,
-		path: relPath,
-		content: r.content,
-		size: r.size,
-		truncated: r.truncated
+		file: {
+			binary: false,
+			path: relPath,
+			content: r.content,
+			size: r.size,
+			truncated: r.truncated
+		}
 	});
 };

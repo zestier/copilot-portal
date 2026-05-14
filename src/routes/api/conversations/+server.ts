@@ -38,5 +38,5 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	}
 
 	const conv = convs.create(userId, { id, title: body.title, workdir, model });
-	return json({ conversation: conv }, { status: 201 });
+	return json({ ok: true, conversation: conv }, { status: 201 });
 };

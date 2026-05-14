@@ -5,6 +5,6 @@ import { headInfo } from '$lib/server/git';
 
 export const GET: RequestHandler = async ({ params, locals }) => {
 	const conv = authorizeConversation(params.id, locals.userId);
-	const info = await headInfo(conv.workdir);
-	return json(info);
+	const status = await headInfo(conv.workdir);
+	return json({ status });
 };

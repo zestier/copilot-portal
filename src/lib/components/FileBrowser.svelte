@@ -53,7 +53,7 @@
 			const params = new URLSearchParams({ path });
 			const res = await fetch(`/api/conversations/${conversationId}/fs/file?${params}`);
 			if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-			fileData = await res.json();
+			fileData = (await res.json()).file;
 		} catch (e) {
 			fileError = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -121,7 +121,7 @@
 		try {
 			const res = await fetch(`/api/conversations/${conversationId}/git/commit/${sha}`);
 			if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-			commitDetail = await res.json();
+			commitDetail = (await res.json()).commit;
 		} catch (e) {
 			commitDetailError = e instanceof Error ? e.message : String(e);
 		}

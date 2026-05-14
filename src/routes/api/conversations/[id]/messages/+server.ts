@@ -92,8 +92,8 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 
 	const turn = getTurn(conv.id);
 	if (!turn || turn.status !== 'running') {
-		return json({ aborted: false });
+		return json({ ok: true, aborted: false });
 	}
 	await turn.abort();
-	return json({ aborted: true });
+	return json({ ok: true, aborted: true });
 };

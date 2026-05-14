@@ -20,7 +20,7 @@
 		try {
 			const res = await fetch(`/api/conversations/${conversationId}/git/status`);
 			if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-			head = await res.json();
+			head = (await res.json()).status;
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {

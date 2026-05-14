@@ -9,8 +9,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	const sha = params.commitSha;
 	if (!sha) throw error(400, 'commitSha required');
 	try {
-		const detail = await showCommit(workdir, sha);
-		return json(detail);
+		const commit = await showCommit(workdir, sha);
+		return json({ commit });
 	} catch (e) {
 		if (e instanceof GitError) throw error(404, e.message);
 		throw e;
