@@ -98,7 +98,7 @@ copilot-portal/
 │        │  └─ [id]/
 │        │     ├─ +server.ts                # GET, DELETE
 │        │     ├─ messages/+server.ts       # POST send, SSE stream
-│        │     └─ permissions/[reqId]/+server.ts
+│        │     └─ permissions/[requestId]/+server.ts
 │        └─ health/+server.ts
 ├─ static/
 ├─ Dockerfile

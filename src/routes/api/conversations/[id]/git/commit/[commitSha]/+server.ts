@@ -7,8 +7,8 @@ import { showCommit, GitError } from '$lib/server/git';
 export const GET: RequestHandler = async ({ params, locals }) => {
 	authorizeConversation(params.id, locals.userId);
 	const workdir = workspaceRoot();
-	const sha = params.sha;
-	if (!sha) throw error(400, 'sha required');
+	const sha = params.commitSha;
+	if (!sha) throw error(400, 'commitSha required');
 	try {
 		const detail = await showCommit(workdir, sha);
 		return json(detail);

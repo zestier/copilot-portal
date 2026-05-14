@@ -97,7 +97,7 @@ Backed by:
 | `GET /api/conversations/[id]/fs/diff?target=&sha=&path=` | Unified diff (working tree vs HEAD/index, or commit). |
 | `GET /api/conversations/[id]/git/status`             | Branch, HEAD sha, upstream, ahead/behind, dirty count. |
 | `GET /api/conversations/[id]/git/log?limit=&skip=`   | Recent commits.               |
-| `GET /api/conversations/[id]/git/commit/[sha]`       | Commit metadata + changed files. |
+| `GET /api/conversations/[id]/git/commit/[commitSha]`       | Commit metadata + changed files. |
 
 All paths are constrained to the workspace root realpath; symlinks that
 escape are rejected. `git` is spawned with `shell: false`, hard timeouts,

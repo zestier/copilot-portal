@@ -22,11 +22,11 @@ the suggested unified convention.
       results (`{ok:true,…}`), apply across all `/api/*` routes.
   - Wrapped: `…/conversations/+server.ts`, `…/forks/+server.ts`,
     `…/git/log/+server.ts`, `…/git/changes/+server.ts`
-  - Bare: `…/git/status/+server.ts`, `…/git/commit/[sha]/+server.ts`,
+  - Bare: `…/git/status/+server.ts`, `…/git/commit/[commitSha]/+server.ts`,
     `…/copilot/status/+server.ts`, `…/fs/file/+server.ts`,
     `…/fs/tree/+server.ts`
   - Mutations: `…/conversations/[id]/+server.ts`,
-    `…/permissions/[reqId]/+server.ts`, `…/messages/+server.ts`,
+    `…/permissions/[requestId]/+server.ts`, `…/messages/+server.ts`,
     `…/messages/[messageId]/fork/+server.ts`, `…/health/+server.ts`
 
 - [ ] **3. Unify error body shapes.** Funnel auth/origin/rate-limit
@@ -43,7 +43,7 @@ the suggested unified convention.
   - `src/routes/api/conversations/+server.ts`
   - `src/routes/api/conversations/[id]/+server.ts`
   - `src/routes/api/conversations/[id]/messages/+server.ts`
-  - `src/routes/api/conversations/[id]/permissions/[reqId]/+server.ts`
+  - `src/routes/api/conversations/[id]/permissions/[requestId]/+server.ts`
   - `src/routes/api/conversations/[id]/messages/[messageId]/fork/+server.ts`
 
 - [ ] **5. One auth/ownership idiom.** Extend `authorizeConversation` to
@@ -104,19 +104,19 @@ the suggested unified convention.
       `allow-once | allow-always | deny`; update `docs/architecture.md` and
       `docs/backend-sdk-integration.md` (or change the code — code is right).
   - `src/lib/types.ts`
-  - `src/routes/api/conversations/[id]/permissions/[reqId]/+server.ts`
+  - `src/routes/api/conversations/[id]/permissions/[requestId]/+server.ts`
   - `docs/architecture.md`, `docs/backend-sdk-integration.md`
 
 ## Low impact
 
-- [ ] **14. Spell out route param names.** `[reqId]` → `[requestId]`,
+- [x] **14. Spell out route param names.** `[reqId]` → `[requestId]`,
       `[sha]` → `[commitSha]`; align with `[messageId]`.
-  - `src/routes/api/conversations/[id]/permissions/[reqId]/+server.ts`
-  - `src/routes/api/conversations/[id]/git/commit/[sha]/+server.ts`
+  - `src/routes/api/conversations/[id]/permissions/[requestId]/+server.ts`
+  - `src/routes/api/conversations/[id]/git/commit/[commitSha]/+server.ts`
 
 - [ ] **15. Fix docs drift.** Either implement `GET /api/export` or mark it
       roadmap-only in `docs/persistence.md`. Add a short "admin" section
-      describing the `redeploy` and `permissions/[reqId]` endpoints.
+      describing the `redeploy` and `permissions/[requestId]` endpoints.
   - `docs/persistence.md`
 
 ## Cleanup

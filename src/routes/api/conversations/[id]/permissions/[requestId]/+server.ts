@@ -13,10 +13,10 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!conv) throw error(404);
 
 	const { decision } = Body.parse(await request.json());
-	const pending = permissions.get(params.reqId!);
+	const pending = permissions.get(params.requestId!);
 	if (!pending || pending.conversationId !== conv.id) throw error(404);
 
-	const ok = permissions.resolve(params.reqId!, locals.userId, decision);
+	const ok = permissions.resolve(params.requestId!, locals.userId, decision);
 	if (!ok) throw error(404);
 	return json({ ok: true });
 };
