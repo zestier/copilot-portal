@@ -208,4 +208,67 @@ describe('turn-runner', () => {
 		expect(turnRunner.getTurnById(conv.id, 'nonexistent')).toBeNull();
 		expect(turnRunner.getTurnById('other-conversation', turn.id)).toBeNull();
 	});
+
+	it('persists interleaved reasoning segments anchored to their text offsets', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'reasoning',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+
+		// Two reasoning bursts: one before any visible text, one after the
+		// first chunk of text. The bridge would emit message.reasoning.end
+		// when the segment transitions to non-reasoning, so we mirror that
+		// here.
+		acquireMock.mockResolvedValue(
+			makeFakeSession([
+				{ type: 'message.start', messageId: 'm1', role: 'assistant' },
+				{ type: 'message.reasoning', messageId: 'm1', segmentId: 's1', text: 'plan ' },
+				{ type: 'message.reasoning', messageId: 'm1', segmentId: 's1', text: 'first' },
+				{ type: 'message.reasoning.end', messageId: 'm1', segmentId: 's1', durationMs: 100 },
+				{ type: 'message.delta', messageId: 'm1', text: 'hello' },
+				{ type: 'message.reasoning', messageId: 'm1', segmentId: 's2', text: 'second ' },
+				{ type: 'message.reasoning', messageId: 'm1', segmentId: 's2', text: 'thought' },
+				{ type: 'message.reasoning.end', messageId: 'm1', segmentId: 's2', durationMs: 200 },
+				{ type: 'message.delta', messageId: 'm1', text: ' world' },
+				{ type: 'done' }
+			])
+		);
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+
+		for await (const { event } of turn.subscribe()) {
+			if (event.type === 'done') break;
+		}
+
+		const persisted = messages.listByConversation(conv.id);
+		const assistant = persisted.find((m) => m.role === 'assistant');
+		expect(assistant?.content).toBe('hello world');
+		const blocks = assistant?.reasoningBlocks ?? [];
+		expect(blocks.length).toBe(2);
+		// Segment indexes monotonic, in stream order.
+		expect(blocks.map((b) => b.segmentIndex)).toEqual([0, 1]);
+		// First segment opened at offset 0 (before any text); second opened
+		// after "hello" was already buffered.
+		expect(blocks[0].textOffset).toBe(0);
+		expect(blocks[0].text).toBe('plan first');
+		expect(blocks[0].durationMs).toBe(100);
+		expect(blocks[1].textOffset).toBe('hello'.length);
+		expect(blocks[1].text).toBe('second thought');
+		expect(blocks[1].durationMs).toBe(200);
+	});
 });

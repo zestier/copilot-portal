@@ -35,12 +35,23 @@ export interface Message {
 	createdAt: number;
 	toolCalls?: ToolCallRecord[];
 	fileEdits?: FileEditRecord[];
-	// Optional assistant reasoning ("thinking") captured while the model was
-	// composing the visible body. Only present for models that emit it.
-	reasoning?: string;
-	// Wall-clock duration of the reasoning phase. Persisted so reloaded
-	// history can still show "Thought for Xs" on the collapsed block.
-	reasoningDurationMs?: number | null;
+	// Ordered assistant reasoning segments ("thinking") interleaved with
+	// content. Each segment is one contiguous burst of reasoning deltas
+	// anchored to a text offset, with its own elapsed-time window. Only
+	// populated for models that emit reasoning.
+	reasoningBlocks?: ReasoningBlockRecord[];
+}
+
+export interface ReasoningBlockRecord {
+	id: string;
+	messageId: string;
+	segmentIndex: number;
+	text: string;
+	// Where this segment appeared within the assistant's accumulated content
+	// (mirrors ToolCallRecord.textOffset). NULL = legacy / unknown.
+	textOffset: number | null;
+	startedAt: number;
+	durationMs: number | null;
 }
 
 export interface ToolCallRecord {
@@ -78,7 +89,13 @@ export type PermissionPolicy = 'prompt' | 'allow-readonly' | 'allow-all' | 'deny
 export type PortalEvent =
 	| { type: 'message.start'; messageId: string; role: 'assistant' }
 	| { type: 'message.delta'; messageId: string; text: string }
-	| { type: 'message.reasoning'; messageId: string; text: string }
+	| { type: 'message.reasoning'; messageId: string; segmentId: string; text: string }
+	| {
+			type: 'message.reasoning.end';
+			messageId: string;
+			segmentId: string;
+			durationMs: number;
+	  }
 	| { type: 'message.end'; messageId: string }
 	| { type: 'tool.call'; toolCallId: string; tool: string; args: unknown }
 	| {

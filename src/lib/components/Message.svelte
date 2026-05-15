@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Message, ToolCallRecord, FileEditRecord } from '$lib/types';
+	import type { Message, ToolCallRecord, FileEditRecord, ReasoningBlockRecord } from '$lib/types';
 	import { renderMarkdown } from '$lib/client/markdown';
 	import ToolCall from './ToolCall.svelte';
 	import DiffView from './DiffView.svelte';
@@ -110,32 +110,66 @@
 	}
 
 	const reasoningStreaming = $derived(
-		message.role === 'assistant' &&
-			message.status === 'streaming' &&
-			(message.content?.length ?? 0) === 0
+		message.role === 'assistant' && message.status === 'streaming'
 	);
 
 	type Part =
 		| { kind: 'text'; html: string }
 		| { kind: 'tool'; tool: ToolCallRecord }
-		| { kind: 'edit'; edit: FileEditRecord };
+		| { kind: 'edit'; edit: FileEditRecord }
+		| { kind: 'reasoning'; block: ReasoningBlockRecord; streaming: boolean };
 
 	const parts = $derived.by<Part[]>(() => {
 		if (message.role !== 'assistant') return [];
 		const content = message.content ?? '';
 		const tools = message.toolCalls ?? [];
 		const edits = message.fileEdits ?? [];
+		const reasoning = message.reasoningBlocks ?? [];
+
+		// Only the latest still-open block on a streaming message ticks the
+		// "Thinking… Xs" header. A reasoning block is "open" until its
+		// durationMs is set (by message.reasoning.end at the bridge boundary).
+		// Anything earlier shows its final "Thought for Xs".
+		let latestOpenSegmentIdx = -1;
+		if (reasoningStreaming) {
+			for (const r of reasoning) {
+				if (r.durationMs == null && r.segmentIndex > latestOpenSegmentIdx) {
+					latestOpenSegmentIdx = r.segmentIndex;
+				}
+			}
+		}
 
 		// Anything without an explicit offset is rendered after all text
 		// (legacy rows persisted before interleaving was tracked).
 		const trailingTools: ToolCallRecord[] = [];
 		const trailingEdits: FileEditRecord[] = [];
+		const trailingReasoning: ReasoningBlockRecord[] = [];
 
 		type Anchor =
 			| { offset: number; order: number; kind: 'tool'; tool: ToolCallRecord }
-			| { offset: number; order: number; kind: 'edit'; edit: FileEditRecord };
+			| { offset: number; order: number; kind: 'edit'; edit: FileEditRecord }
+			| {
+					offset: number;
+					order: number;
+					kind: 'reasoning';
+					block: ReasoningBlockRecord;
+			  };
 		const anchors: Anchor[] = [];
 		let order = 0;
+		// Reasoning anchors come first so that when a thinking burst and a
+		// tool call share the same offset (which they always do — the tool
+		// fires right after the reasoning closes), the thinking box renders
+		// above the tool call. Earlier `order` wins ties in the sort below.
+		for (const r of reasoning) {
+			if (r.textOffset == null) trailingReasoning.push(r);
+			else
+				anchors.push({
+					offset: Math.min(r.textOffset, content.length),
+					order: order++,
+					kind: 'reasoning',
+					block: r
+				});
+		}
 		for (const t of tools) {
 			if (t.textOffset == null) trailingTools.push(t);
 			else
@@ -166,10 +200,23 @@
 				cursor = a.offset;
 			}
 			if (a.kind === 'tool') out.push({ kind: 'tool', tool: a.tool });
-			else out.push({ kind: 'edit', edit: a.edit });
+			else if (a.kind === 'edit') out.push({ kind: 'edit', edit: a.edit });
+			else
+				out.push({
+					kind: 'reasoning',
+					block: a.block,
+					streaming: a.block.segmentIndex === latestOpenSegmentIdx
+				});
 		}
 		if (cursor < content.length) {
 			out.push({ kind: 'text', html: renderMarkdown(content.slice(cursor)) });
+		}
+		for (const r of trailingReasoning) {
+			out.push({
+				kind: 'reasoning',
+				block: r,
+				streaming: r.segmentIndex === latestOpenSegmentIdx
+			});
 		}
 		for (const t of trailingTools) out.push({ kind: 'tool', tool: t });
 		for (const e of trailingEdits) out.push({ kind: 'edit', edit: e });
@@ -266,19 +313,18 @@
 	</header>
 	<div class="body">
 		{#if message.role === 'assistant'}
-			{#if message.reasoning}
-				<ReasoningBlock
-					text={message.reasoning}
-					streaming={reasoningStreaming}
-					durationMs={message.reasoningDurationMs ?? null}
-				/>
-			{/if}
 			{#each parts as p, i (i)}
 				{#if p.kind === 'text'}
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 					<div class="text-part">{@html p.html}</div>
 				{:else if p.kind === 'tool'}
 					<ToolCall toolCall={p.tool} />
+				{:else if p.kind === 'reasoning'}
+					<ReasoningBlock
+						text={p.block.text}
+						streaming={p.streaming}
+						durationMs={p.block.durationMs}
+					/>
 				{:else}
 					<DiffView path={p.edit.path} diff={p.edit.diff} />
 				{/if}

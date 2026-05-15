@@ -1,6 +1,13 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
-import type { Message, MessageStatus, Role, ToolCallRecord, FileEditRecord } from '$lib/types';
+import type {
+	Message,
+	MessageStatus,
+	Role,
+	ToolCallRecord,
+	FileEditRecord,
+	ReasoningBlockRecord
+} from '$lib/types';
 
 interface MsgRow {
 	id: string;
@@ -35,6 +42,16 @@ interface EditRow {
 	text_offset: number | null;
 }
 
+interface ReasoningRow {
+	id: string;
+	message_id: string;
+	segment_index: number;
+	text: string;
+	text_offset: number | null;
+	started_at: number;
+	duration_ms: number | null;
+}
+
 function rowToMessage(r: MsgRow): Message {
 	return {
 		id: r.id,
@@ -43,9 +60,7 @@ function rowToMessage(r: MsgRow): Message {
 		content: r.content,
 		status: r.status as MessageStatus,
 		errorCode: r.error_code,
-		createdAt: r.created_at,
-		reasoning: r.reasoning ?? undefined,
-		reasoningDurationMs: r.reasoning_duration_ms
+		createdAt: r.created_at
 	};
 }
 
@@ -69,6 +84,11 @@ export function listByConversation(conversationId: string): Message[] {
 			`SELECT * FROM file_edits WHERE message_id IN (${placeholders}) ORDER BY created_at ASC`
 		)
 		.all(...ids) as EditRow[];
+	const reasoningRows = db
+		.prepare(
+			`SELECT * FROM reasoning_blocks WHERE message_id IN (${placeholders}) ORDER BY segment_index ASC`
+		)
+		.all(...ids) as ReasoningRow[];
 
 	const byMsgT: Record<string, ToolCallRecord[]> = {};
 	for (const t of toolRows) {
@@ -95,9 +115,22 @@ export function listByConversation(conversationId: string): Message[] {
 			textOffset: e.text_offset
 		});
 	}
+	const byMsgR: Record<string, ReasoningBlockRecord[]> = {};
+	for (const r of reasoningRows) {
+		(byMsgR[r.message_id] ??= []).push({
+			id: r.id,
+			messageId: r.message_id,
+			segmentIndex: r.segment_index,
+			text: r.text,
+			textOffset: r.text_offset,
+			startedAt: r.started_at,
+			durationMs: r.duration_ms
+		});
+	}
 	for (const m of msgs) {
 		m.toolCalls = byMsgT[m.id] ?? [];
 		m.fileEdits = byMsgE[m.id] ?? [];
+		m.reasoningBlocks = byMsgR[m.id] ?? [];
 	}
 	return msgs;
 }
@@ -107,8 +140,6 @@ export interface AppendInput {
 	content: string;
 	status?: MessageStatus;
 	errorCode?: string | null;
-	reasoning?: string | null;
-	reasoningDurationMs?: number | null;
 }
 
 export function append(conversationId: string, input: AppendInput): Message {
@@ -117,7 +148,7 @@ export function append(conversationId: string, input: AppendInput): Message {
 	getDb()
 		.prepare(
 			`INSERT INTO messages(id, conversation_id, role, content, status, error_code, created_at, reasoning, reasoning_duration_ms)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			 VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`
 		)
 		.run(
 			id,
@@ -126,9 +157,7 @@ export function append(conversationId: string, input: AppendInput): Message {
 			input.content,
 			input.status ?? 'complete',
 			input.errorCode ?? null,
-			now,
-			input.reasoning ?? null,
-			input.reasoningDurationMs ?? null
+			now
 		);
 	return {
 		id,
@@ -137,9 +166,7 @@ export function append(conversationId: string, input: AppendInput): Message {
 		content: input.content,
 		status: input.status ?? 'complete',
 		errorCode: input.errorCode ?? null,
-		createdAt: now,
-		reasoning: input.reasoning ?? undefined,
-		reasoningDurationMs: input.reasoningDurationMs ?? null
+		createdAt: now
 	};
 }
 
@@ -212,4 +239,16 @@ export function insertFileEdit(
 			 VALUES (?, ?, ?, ?, ?, ?)`
 		)
 		.run(id, messageId, path, diff, Date.now(), textOffset);
+}
+
+export function insertReasoningBlock(
+	messageId: string,
+	r: Omit<ReasoningBlockRecord, 'messageId'>
+) {
+	getDb()
+		.prepare(
+			`INSERT INTO reasoning_blocks(id, message_id, segment_index, text, text_offset, started_at, duration_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`
+		)
+		.run(r.id, messageId, r.segmentIndex, r.text, r.textOffset, r.startedAt, r.durationMs ?? null);
 }

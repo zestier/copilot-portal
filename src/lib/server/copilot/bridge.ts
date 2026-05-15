@@ -118,6 +118,24 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 
 	let currentMessageId: string | null = null;
 	let activeQueue: AsyncQueue<PortalEvent> | null = null;
+	// Track an in-flight reasoning segment so we can mint a new id whenever
+	// reasoning resumes after a visible token or a tool boundary. Closed by
+	// closeReasoning() which emits message.reasoning.end with the elapsed
+	// duration.
+	let currentReasoningSegmentId: string | null = null;
+	let currentReasoningStartedAt = 0;
+
+	function closeReasoning() {
+		if (!activeQueue || !currentReasoningSegmentId || !currentMessageId) return;
+		activeQueue.push({
+			type: 'message.reasoning.end',
+			messageId: currentMessageId,
+			segmentId: currentReasoningSegmentId,
+			durationMs: Date.now() - currentReasoningStartedAt
+		});
+		currentReasoningSegmentId = null;
+		currentReasoningStartedAt = 0;
+	}
 
 	const onPermissionRequest = async (req: unknown) => {
 		return await handlePermission(req as PermissionRequestLike, opts, (ev) => {
@@ -182,6 +200,8 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 				role: 'assistant'
 			});
 		}
+		// First visible token after a reasoning burst closes that segment.
+		closeReasoning();
 		activeQueue.push({ type: 'message.delta', messageId: currentMessageId, text });
 	};
 
@@ -200,7 +220,16 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 				role: 'assistant'
 			});
 		}
-		activeQueue.push({ type: 'message.reasoning', messageId: currentMessageId, text });
+		if (!currentReasoningSegmentId) {
+			currentReasoningSegmentId = ulid();
+			currentReasoningStartedAt = Date.now();
+		}
+		activeQueue.push({
+			type: 'message.reasoning',
+			messageId: currentMessageId,
+			segmentId: currentReasoningSegmentId,
+			text
+		});
 	};
 
 	const onAssistantMessage = (e: unknown) => {
@@ -215,7 +244,10 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 				role: 'assistant'
 			});
 			const text = ev?.data?.content ?? '';
-			if (text) activeQueue.push({ type: 'message.delta', messageId: currentMessageId, text });
+			if (text) {
+				closeReasoning();
+				activeQueue.push({ type: 'message.delta', messageId: currentMessageId, text });
+			}
 		}
 	};
 
@@ -228,6 +260,10 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			};
 		};
 		if (!activeQueue) return;
+		// Reasoning that preceded a tool call belongs to *that* tool call's
+		// position in the transcript; close the segment now so the runner can
+		// anchor it to the current text offset.
+		closeReasoning();
 		activeQueue.push({
 			type: 'tool.call',
 			toolCallId: ev?.data?.toolCallId ?? ulid(),
@@ -263,6 +299,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 
 	const onSessionIdle = () => {
 		if (!activeQueue) return;
+		closeReasoning();
 		if (currentMessageId) {
 			activeQueue.push({ type: 'message.end', messageId: currentMessageId });
 			currentMessageId = null;

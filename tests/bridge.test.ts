@@ -181,3 +181,64 @@ describe('bridge.open() context-usage event translation', () => {
 		expect(usage!.isInitial).toBe(true);
 	});
 });
+
+describe('bridge.open() reasoning segmentation', () => {
+	it('opens a new reasoning segment after a visible delta or tool call, and emits .end on close', async () => {
+		clientStub.getSessionMetadata.mockResolvedValue(undefined);
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			const handlers = new Map<string, (e: unknown) => void>(
+				sdkSessionStub.on.mock.calls.map((c) => [c[0] as string, c[1] as (e: unknown) => void])
+			);
+			// Reasoning -> tool -> reasoning -> delta -> reasoning -> idle.
+			// Three distinct segments expected, each closed by .end.
+			handlers.get('assistant.reasoning_delta')?.({ data: { deltaContent: 'think A' } });
+			handlers.get('tool.execution_start')?.({
+				data: { toolCallId: 't1', toolName: 'noop', arguments: {} }
+			});
+			handlers.get('tool.execution_complete')?.({
+				data: { toolCallId: 't1', success: true, result: null }
+			});
+			handlers.get('assistant.reasoning_delta')?.({ data: { deltaContent: 'think B' } });
+			handlers.get('assistant.message_delta')?.({ data: { deltaContent: 'hello' } });
+			handlers.get('assistant.reasoning_delta')?.({ data: { deltaContent: 'think C' } });
+			handlers.get('session.idle')?.({});
+			return 'msg-id';
+		});
+
+		const { open } = await importBridge();
+		const session = await open(baseOpts);
+		const ac = new AbortController();
+		const events: { type: string; segmentId?: string; text?: string; durationMs?: number }[] = [];
+		for await (const ev of session.send('hi', ac.signal)) {
+			events.push(ev as { type: string; segmentId?: string; text?: string; durationMs?: number });
+			if (ev.type === 'done') break;
+		}
+
+		const reasonings = events.filter((e) => e.type === 'message.reasoning');
+		const ends = events.filter((e) => e.type === 'message.reasoning.end');
+		// Three contiguous reasoning bursts -> three unique segment ids.
+		const segIds = Array.from(new Set(reasonings.map((r) => r.segmentId!)));
+		expect(segIds.length).toBe(3);
+		expect(reasonings.map((r) => r.text)).toEqual(['think A', 'think B', 'think C']);
+		// Each closed segment emits a .end with a numeric duration.
+		expect(ends.map((e) => e.segmentId)).toEqual(segIds);
+		for (const e of ends) expect(typeof e.durationMs).toBe('number');
+
+		// .end for segment 1 must precede tool.call; .end for segment 2 must
+		// precede the first message.delta. Ordering is what powers the
+		// interleaved render.
+		const idx = (predicate: (e: { type: string; segmentId?: string }) => boolean) =>
+			events.findIndex(predicate);
+		const firstEndIdx = idx((e) => e.type === 'message.reasoning.end' && e.segmentId === segIds[0]);
+		const toolCallIdx = idx((e) => e.type === 'tool.call');
+		const secondEndIdx = idx(
+			(e) => e.type === 'message.reasoning.end' && e.segmentId === segIds[1]
+		);
+		const firstDeltaIdx = idx((e) => e.type === 'message.delta');
+		expect(firstEndIdx).toBeGreaterThanOrEqual(0);
+		expect(firstEndIdx).toBeLessThan(toolCallIdx);
+		expect(secondEndIdx).toBeGreaterThanOrEqual(0);
+		expect(secondEndIdx).toBeLessThan(firstDeltaIdx);
+	});
+});

@@ -243,7 +243,8 @@
 					errorCode: null,
 					createdAt: Date.now(),
 					toolCalls: [],
-					fileEdits: []
+					fileEdits: [],
+					reasoningBlocks: []
 				});
 				break;
 			}
@@ -268,11 +269,31 @@
 						createdAt: Date.now(),
 						toolCalls: [],
 						fileEdits: [],
-						reasoning: ''
+						reasoningBlocks: []
 					};
 					messages.push(m);
 				}
-				m.reasoning = (m.reasoning ?? '') + ev.text;
+				const blocks = (m.reasoningBlocks ??= []);
+				let seg = blocks.find((b) => b.id === ev.segmentId);
+				if (!seg) {
+					seg = {
+						id: ev.segmentId,
+						messageId: m.id,
+						segmentIndex: blocks.length,
+						text: '',
+						textOffset: m.content.length,
+						startedAt: Date.now(),
+						durationMs: null
+					};
+					blocks.push(seg);
+				}
+				seg.text += ev.text;
+				break;
+			}
+			case 'message.reasoning.end': {
+				const m = messages.find((x) => x.id === ev.messageId);
+				const seg = m?.reasoningBlocks?.find((b) => b.id === ev.segmentId);
+				if (seg) seg.durationMs = ev.durationMs;
 				break;
 			}
 			case 'message.end': {
@@ -494,7 +515,7 @@
 		if (!last || last.role !== 'assistant') return true;
 		const hasContent = last.content.length > 0;
 		const hasTools = (last.toolCalls?.length ?? 0) > 0 || (last.fileEdits?.length ?? 0) > 0;
-		const hasReasoning = (last.reasoning?.length ?? 0) > 0;
+		const hasReasoning = (last.reasoningBlocks?.length ?? 0) > 0;
 		return !hasContent && !hasTools && !hasReasoning;
 	});
 

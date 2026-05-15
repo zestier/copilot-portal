@@ -39,6 +39,15 @@ interface PendingEdit {
 	textOffset: number;
 }
 
+interface PendingReasoning {
+	id: string;
+	segmentIndex: number;
+	text: string;
+	textOffset: number;
+	startedAt: number;
+	durationMs: number | null;
+}
+
 // A single event in the turn's transcript, paired with its monotonic id.
 // `id` corresponds to the event's index in `eventLog`, which is what the
 // SSE layer writes as `id:` and what clients send back as `Last-Event-ID`
@@ -161,11 +170,12 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	// Accumulators for persistence.
 	let assistantBuf = '';
 	let assistantId: string | null = null;
-	let reasoningBuf = '';
-	let reasoningStartedAt: number | null = null;
-	let reasoningEndedAt: number | null = null;
 	const pendingTools = new Map<string, PendingTool>();
 	const pendingEdits: PendingEdit[] = [];
+	// Reasoning segments keyed by the segmentId minted in the bridge. Order
+	// of insertion matches stream order, which is what we persist.
+	const pendingReasoning = new Map<string, PendingReasoning>();
+	let nextReasoningIndex = 0;
 
 	function dispatch(ev: PortalEvent) {
 		// Suppress the SDK's `done` event: we always emit our own terminal
@@ -179,13 +189,23 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		if (ev.type === 'message.start') assistantId = ev.messageId;
 		else if (ev.type === 'message.delta') {
 			assistantBuf += ev.text;
-			// First visible token closes out the reasoning timing window.
-			if (reasoningStartedAt !== null && reasoningEndedAt === null) {
-				reasoningEndedAt = Date.now();
-			}
 		} else if (ev.type === 'message.reasoning') {
-			if (reasoningStartedAt === null) reasoningStartedAt = Date.now();
-			reasoningBuf += ev.text;
+			let seg = pendingReasoning.get(ev.segmentId);
+			if (!seg) {
+				seg = {
+					id: ulid(),
+					segmentIndex: nextReasoningIndex++,
+					text: '',
+					textOffset: assistantBuf.length,
+					startedAt: Date.now(),
+					durationMs: null
+				};
+				pendingReasoning.set(ev.segmentId, seg);
+			}
+			seg.text += ev.text;
+		} else if (ev.type === 'message.reasoning.end') {
+			const seg = pendingReasoning.get(ev.segmentId);
+			if (seg) seg.durationMs = ev.durationMs;
 		} else if (ev.type === 'tool.call') {
 			pendingTools.set(ev.toolCallId, {
 				toolCallId: ev.toolCallId,
@@ -255,18 +275,12 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 					assistantId ||
 					pendingTools.size ||
 					pendingEdits.length ||
-					reasoningBuf
+					pendingReasoning.size
 				) {
-					const durationMs =
-						reasoningStartedAt !== null
-							? (reasoningEndedAt ?? Date.now()) - reasoningStartedAt
-							: null;
 					const persisted = messages.append(opts.conversationId, {
 						role: 'assistant',
 						content: assistantBuf,
-						status,
-						reasoning: reasoningBuf || null,
-						reasoningDurationMs: durationMs
+						status
 					});
 					persistedAssistantId = persisted.id;
 					for (const t of pendingTools.values()) {
@@ -283,6 +297,18 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 					}
 					for (const e of pendingEdits) {
 						messages.insertFileEdit(persisted.id, e.path, e.diff, e.textOffset);
+					}
+					// Preserve insertion order so segment_index stays monotonic
+					// with the stream.
+					for (const seg of pendingReasoning.values()) {
+						messages.insertReasoningBlock(persisted.id, {
+							id: seg.id,
+							segmentIndex: seg.segmentIndex,
+							text: seg.text,
+							textOffset: seg.textOffset,
+							startedAt: seg.startedAt,
+							durationMs: seg.durationMs
+						});
 					}
 				}
 				convs.touch(opts.conversationId);

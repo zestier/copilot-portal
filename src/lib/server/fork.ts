@@ -226,7 +226,7 @@ function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {
 	const baseTs = Date.now() - prefix.length - 1;
 	const insertMsg = db.prepare(
 		`INSERT INTO messages(id, conversation_id, role, content, status, error_code, created_at, reasoning, reasoning_duration_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`
 	);
 	const insertTool = db.prepare(
 		`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at, text_offset)
@@ -236,21 +236,15 @@ function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {
 		`INSERT INTO file_edits(id, message_id, path, diff, created_at, text_offset)
 		 VALUES (?, ?, ?, ?, ?, ?)`
 	);
+	const insertReasoning = db.prepare(
+		`INSERT INTO reasoning_blocks(id, message_id, segment_index, text, text_offset, started_at, duration_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`
+	);
 	const tx = db.transaction(() => {
 		prefix.forEach((m, i) => {
 			const newId = ulid();
 			const ts = baseTs + i;
-			insertMsg.run(
-				newId,
-				targetConvId,
-				m.role,
-				m.content,
-				m.status,
-				m.errorCode,
-				ts,
-				m.reasoning ?? null,
-				m.reasoningDurationMs ?? null
-			);
+			insertMsg.run(newId, targetConvId, m.role, m.content, m.status, m.errorCode, ts);
 			for (const t of m.toolCalls ?? []) {
 				insertTool.run(
 					ulid(),
@@ -266,6 +260,17 @@ function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {
 			}
 			for (const e of m.fileEdits ?? []) {
 				insertEdit.run(ulid(), newId, e.path, e.diff, ts, e.textOffset);
+			}
+			for (const r of m.reasoningBlocks ?? []) {
+				insertReasoning.run(
+					ulid(),
+					newId,
+					r.segmentIndex,
+					r.text,
+					r.textOffset,
+					r.startedAt,
+					r.durationMs
+				);
 			}
 		});
 	});
