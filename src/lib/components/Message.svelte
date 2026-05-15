@@ -146,26 +146,28 @@
 		const trailingReasoning: ReasoningBlockRecord[] = [];
 
 		type Anchor =
-			| { offset: number; order: number; kind: 'tool'; tool: ToolCallRecord }
-			| { offset: number; order: number; kind: 'edit'; edit: FileEditRecord }
+			| { offset: number; ts: number; kind: 'tool'; tool: ToolCallRecord }
+			| { offset: number; ts: number; kind: 'edit'; edit: FileEditRecord }
 			| {
 					offset: number;
-					order: number;
+					ts: number;
 					kind: 'reasoning';
 					block: ReasoningBlockRecord;
 			  };
 		const anchors: Anchor[] = [];
-		let order = 0;
-		// Reasoning anchors come first so that when a thinking burst and a
-		// tool call share the same offset (which they always do — the tool
-		// fires right after the reasoning closes), the thinking box renders
-		// above the tool call. Earlier `order` wins ties in the sort below.
+		// Sort tiebreaker at the same textOffset is the wall-clock timestamp
+		// captured at stream time (reasoning.startedAt, tool.startedAt,
+		// edit.createdAt). Reasoning bursts and the tool they precede share
+		// an offset (no visible text between them); using a real temporal
+		// tiebreaker keeps the rendered order matching the actual stream
+		// order — reason → tool → reason → tool — instead of bunching all
+		// reasoning above all tools.
 		for (const r of reasoning) {
 			if (r.textOffset == null) trailingReasoning.push(r);
 			else
 				anchors.push({
 					offset: Math.min(r.textOffset, content.length),
-					order: order++,
+					ts: r.startedAt,
 					kind: 'reasoning',
 					block: r
 				});
@@ -175,7 +177,7 @@
 			else
 				anchors.push({
 					offset: Math.min(t.textOffset, content.length),
-					order: order++,
+					ts: t.startedAt,
 					kind: 'tool',
 					tool: t
 				});
@@ -185,12 +187,12 @@
 			else
 				anchors.push({
 					offset: Math.min(e.textOffset, content.length),
-					order: order++,
+					ts: e.createdAt,
 					kind: 'edit',
 					edit: e
 				});
 		}
-		anchors.sort((a, b) => a.offset - b.offset || a.order - b.order);
+		anchors.sort((a, b) => a.offset - b.offset || a.ts - b.ts);
 
 		const out: Part[] = [];
 		let cursor = 0;
