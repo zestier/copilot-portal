@@ -163,6 +163,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		try {
 			sdkSession = (await client.resumeSession(opts.conversationId, {
 				model: opts.model,
+				workingDirectory: opts.workingDirectory,
 				streaming: true,
 				onPermissionRequest
 			})) as unknown as SdkSession;
@@ -174,6 +175,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			sdkSession = (await client.createSession({
 				model: opts.model,
 				sessionId: opts.conversationId,
+				workingDirectory: opts.workingDirectory,
 				streaming: true,
 				onPermissionRequest
 			})) as unknown as SdkSession;
@@ -182,6 +184,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		sdkSession = (await client.createSession({
 			model: opts.model,
 			sessionId: opts.conversationId,
+			workingDirectory: opts.workingDirectory,
 			streaming: true,
 			onPermissionRequest
 		})) as unknown as SdkSession;

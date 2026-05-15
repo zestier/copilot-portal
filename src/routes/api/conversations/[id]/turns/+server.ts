@@ -8,6 +8,7 @@ import * as tokens from '$lib/server/db/repos/tokens';
 import { loadConfig } from '$lib/server/config';
 import { startTurn, getTurn } from '$lib/server/copilot/turn-runner';
 import { snapshot as takeSnapshot } from '$lib/server/snapshots';
+import { effectiveWorkdir } from '$lib/server/workdir';
 import { log } from '$lib/server/log';
 import { parseBody } from '$lib/server/validate';
 import { authorizeConversation } from '$lib/server/conversation-auth';
@@ -38,12 +39,17 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const userMsg = messages.append(conv.id, { role: 'user', content });
 	convs.touch(conv.id);
 
-	// Capture a pre-turn snapshot of the workdir. Bound to this user
-	// message so a later "edit this message" can restore the workdir to
-	// exactly the state the agent was about to see. Failures here are
-	// non-fatal — we just lose the ability to fork at this turn.
+	// Resolve the workdir we actually hand to the SDK / snapshotter. This
+	// rewrites legacy `DATA_DIR/workspaces/<id>/` rows (empty dirs from
+	// before workdirs were wired up to the SDK) back to PROJECT_ROOT so
+	// existing conversations don't get a useless empty workspace.
+	const workdir = effectiveWorkdir(conv.workdir);
+
+	// Capture a pre-turn snapshot of the workdir so the user can later
+	// inspect / roll back what the agent saw at this point. Non-fatal on
+	// failure (worst case: that turn just has no pre-snapshot).
 	try {
-		await takeSnapshot(conv.workdir, userMsg.id, 'pre');
+		await takeSnapshot(workdir, userMsg.id, 'pre');
 	} catch (e) {
 		log.warn('snapshot.pre.failed', {
 			conversationId: conv.id,
@@ -62,7 +68,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		bridge: {
 			conversationId: conv.id,
 			userId: conv.userId,
-			workingDirectory: conv.workdir,
+			workingDirectory: workdir,
 			model: conv.model ?? cfg.DEFAULT_MODEL,
 			policy: userSettings.defaultPolicy,
 			authToken

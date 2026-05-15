@@ -2,10 +2,11 @@
 //
 // Forking creates a NEW conversation seeded with the prefix of messages
 // up to (but not including) the edited message, plus the edited user
-// message as a fresh row. The new conversation gets a fresh workdir
-// materialised from the pre-snapshot of the edited message — so the
-// agent picks up exactly the file state the original conversation had
-// when that message was first sent.
+// message as a fresh row. The new conversation shares the source's
+// workdir — there is only one real project tree, and rolling it back
+// would clobber other conversations. The per-turn git snapshot ref
+// (`refs/portal/turns/{pre,post}/<msgId>`) remains in the repo if the
+// user wants to manually diff against the captured state.
 //
 // The original conversation is left untouched. This is deliberately
 // non-destructive: the user can always navigate back to the source
@@ -13,38 +14,23 @@
 //
 // Two flavours:
 //  1. EDIT  — target is a user message, `newContent` is the replacement
-//             text. Uses the `pre` snapshot (workdir state before that
-//             user turn ran). The clone includes everything *strictly
-//             before* the edited message, and the edited message is
-//             appended as a fresh user row.
+//             text. The clone includes everything *strictly before* the
+//             edited message, and the edited message is appended as a
+//             fresh user row.
 //  2. RETRY — target is an assistant message, `newContent` is null.
-//             Uses the `post` snapshot (workdir state after that
-//             assistant turn finished). The clone includes everything
-//             *up to and including* the target assistant message, and
-//             no new user message is appended — the user types their
-//             next prompt themselves in the new conversation.
+//             The clone includes everything *up to and including* the
+//             target assistant message, and no new user message is
+//             appended — the user types their next prompt themselves in
+//             the new conversation.
 //
 // Constraints:
 //  - System messages can never be the fork target.
-//  - The source conversation's workdir must be portal-managed (under
-//    DATA_DIR/workspaces/). Forking a bring-your-own workdir is rejected
-//    in v1 — duplicating an arbitrary user-supplied directory is
-//    surprising and may have unbounded cost.
-//  - A pre-snapshot must exist for the target message. If snapshotting
-//    failed at the time the message was sent (very rare, but logged),
-//    the fork is rejected with a clear error rather than silently
-//    forking into a possibly-wrong tree state.
-//  - The source conversation must not have a running turn (the workdir
-//    might be mid-mutation and the source's git index is in flux).
+//  - The source conversation must not have a running turn.
 
-import { resolve } from 'node:path';
-import { realpathSync } from 'node:fs';
 import { ulid } from './db/ids';
 import { getDb } from './db';
-import { loadConfig } from './config';
 import * as convs from './db/repos/conversations';
 import * as messages from './db/repos/messages';
-import { getSnapshot, materializeFromCommit } from './snapshots';
 import { getTurn } from './copilot/turn-runner';
 import { log } from './log';
 import type { Conversation, Message } from '$lib/types';
@@ -56,9 +42,7 @@ export type ForkError =
 	| 'unsupported_role'
 	| 'content_required'
 	| 'content_not_allowed'
-	| 'source_busy'
-	| 'no_snapshot'
-	| 'unsupported_workdir';
+	| 'source_busy';
 
 export class ForkRejected extends Error {
 	constructor(
@@ -85,31 +69,10 @@ export interface ForkResult {
 	conversation: Conversation;
 }
 
-function managedWorkspacesRoot(): string {
-	const cfg = loadConfig();
-	const dir = resolve(cfg.DATA_DIR, 'workspaces');
-	try {
-		return realpathSync(dir);
-	} catch {
-		return dir;
-	}
-}
-
-function isManagedWorkdir(workdir: string): boolean {
-	let real: string;
-	try {
-		real = realpathSync(workdir);
-	} catch {
-		real = resolve(workdir);
-	}
-	const root = managedWorkspacesRoot();
-	return real === root || real.startsWith(root + '/');
-}
-
 /**
  * Edit `messageId` (a user message in `sourceConversationId`) and produce
- * a new forked conversation seeded with prior history + the edit, with
- * a freshly materialised workdir at the message's pre-snapshot.
+ * a new forked conversation seeded with prior history + the edit. The
+ * new conversation shares the source's workdir.
  */
 export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 	const source = convs.get(input.sourceConversationId, input.userId);
@@ -156,43 +119,17 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 		throw new ForkRejected('source_busy', 'Source conversation has a running turn.');
 	}
 
-	const snapKind = mode === 'edit' ? 'pre' : 'post';
-	const snap = getSnapshot(target.id, snapKind);
-	if (!snap) {
-		throw new ForkRejected(
-			'no_snapshot',
-			`No ${snapKind}-snapshot was captured for this message; cannot fork.`
-		);
-	}
-
-	if (!isManagedWorkdir(source.workdir)) {
-		throw new ForkRejected(
-			'unsupported_workdir',
-			'Forking is only supported for portal-managed workdirs in this version.'
-		);
-	}
-
-	// Mint the new conversation id up front so we can derive its workdir
-	// path before inserting the row (matches defaultWorkdirFor()'s layout).
-	const cfg = loadConfig();
+	// The forked conversation reuses the source's workdir. We deliberately
+	// do NOT roll the workdir back to the snapshot — multiple conversations
+	// share the real project tree, and a destructive checkout would clobber
+	// other in-flight work. The per-turn snapshot ref is still in the repo
+	// (`refs/portal/turns/{pre,post}/<msgId>`) for manual `git diff` /
+	// inspection if the user wants to compare states.
 	const newId = convs.newId();
-	const newWorkdir = resolve(cfg.DATA_DIR, 'workspaces', newId);
-
-	try {
-		await materializeFromCommit(source.workdir, snap.commitSha, newWorkdir);
-	} catch (e) {
-		log.warn('fork.materialize_failed', {
-			source: source.id,
-			messageId: target.id,
-			err: String(e)
-		});
-		throw e;
-	}
-
 	const newConv = convs.create(input.userId, {
 		id: newId,
 		title: source.title,
-		workdir: newWorkdir,
+		workdir: source.workdir,
 		model: source.model,
 		forkedFromConversationId: source.id,
 		forkedFromMessageId: target.id

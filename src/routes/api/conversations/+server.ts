@@ -4,7 +4,7 @@ import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as settings from '$lib/server/db/repos/settings';
 import { loadConfig } from '$lib/server/config';
-import { defaultWorkdirFor, resolveAndValidate } from '$lib/server/workdir';
+import { projectRoot, resolveAndValidate } from '$lib/server/workdir';
 import { parseBody } from '$lib/server/validate';
 import { requireUserId } from '$lib/server/auth/require';
 
@@ -28,13 +28,15 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const model = body.model ?? userSettings.defaultModel ?? cfg.DEFAULT_MODEL;
 
 	const id = convs.newId();
+	// Precedence: explicit body.workdir > user's defaultWorkdir > PROJECT_ROOT.
+	const requested = body.workdir ?? userSettings.defaultWorkdir ?? null;
 	let workdir: string;
-	if (body.workdir) {
-		const res = resolveAndValidate(body.workdir);
+	if (requested) {
+		const res = resolveAndValidate(requested);
 		if (!res.ok) throw error(400, res.reason);
 		workdir = res.path;
 	} else {
-		workdir = defaultWorkdirFor(id);
+		workdir = projectRoot();
 	}
 
 	const conv = convs.create(userId, { id, title: body.title, workdir, model });

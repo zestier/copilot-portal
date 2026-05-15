@@ -130,7 +130,7 @@
 			<input
 				name="defaultWorkdir"
 				value={s.defaultWorkdir ?? ''}
-				placeholder="(blank = per-conversation under DATA_DIR/workspaces)"
+				placeholder="(blank = PROJECT_ROOT)"
 			/>
 		</label>
 		<label>

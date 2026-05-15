@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { setupLocalEnv } from './helpers/env';
 
 // Shared mock SDK client/session instances. These are mutated per test.
 const sdkSessionStub = {
@@ -45,7 +46,10 @@ const baseOpts = {
 	policy: 'prompt' as const
 };
 
-beforeEach(() => {
+beforeEach(async () => {
+	// bridge.open() loads config (via bridge-stub.isStubMode → loadConfig)
+	// so we need the same AUTH_MODE=none + HOST guards that real tests use.
+	await setupLocalEnv('portal-bridge-test-');
 	// Reset every stub so any test that re-implements one (e.g. the
 	// usage_info test below mutates sdkSessionStub.send) can't leak its
 	// implementation into the next test. Re-install default resolved

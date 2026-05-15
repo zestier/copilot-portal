@@ -16,9 +16,7 @@ const REJECT_STATUS: Record<string, number> = {
 	unsupported_role: 400,
 	content_required: 400,
 	content_not_allowed: 400,
-	source_busy: 409,
-	no_snapshot: 422,
-	unsupported_workdir: 422
+	source_busy: 409
 };
 
 /**

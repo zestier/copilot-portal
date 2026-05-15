@@ -151,8 +151,14 @@ function refFor(messageId: string, kind: SnapshotKind): string {
  */
 export async function ensureRepo(workdir: string): Promise<void> {
 	mkdirSync(workdir, { recursive: true });
-	const probe = await run(['rev-parse', '--is-inside-work-tree'], { cwd: workdir });
-	if (probe.code === 0 && probe.stdout.trim() === 'true') return;
+	// Check for the workdir's *own* .git, not git's discovery from cwd: the
+	// portal checkout itself is a git repo, so `git rev-parse
+	// --is-inside-work-tree` would happily walk up the tree and report
+	// true even when this workspace has no repo of its own. That left
+	// follow-up operations (which assume `<workdir>/.git` exists) failing
+	// with "Unable to create .../.git/portal-index-...lock: No such file
+	// or directory".
+	if (existsSync(join(workdir, '.git'))) return;
 	await runOk(['init', '-q', '-b', 'portal'], { cwd: workdir });
 	// Make sure commit-tree has an identity, even if the user has no
 	// git config set globally. These are local-only.

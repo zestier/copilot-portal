@@ -50,7 +50,16 @@ export default defineConfig({
 	use: {
 		baseURL: `http://127.0.0.1:${PORT}`,
 		trace: 'retain-on-failure',
-		video: 'retain-on-failure'
+		video: 'retain-on-failure',
+		// The hooks.server.ts CSRF guard rejects mutating /api/* calls that
+		// have neither an Origin nor a Referer matching event.url.origin.
+		// Playwright's APIRequestContext sends neither by default, so every
+		// `request.post(...)` would 403. Inject the expected Origin here so
+		// the API-driven specs (chat, conversations, files, fork) get past
+		// the guard the same way the browser-driven ones do.
+		extraHTTPHeaders: {
+			Origin: `http://127.0.0.1:${PORT}`
+		}
 	},
 	projects: [
 		{
@@ -77,6 +86,11 @@ export default defineConfig({
 			COPILOT_STUB: '1',
 			LOG_LEVEL: 'warn',
 			DB_MIGRATIONS_DIR: resolve(__dirname, 'src/lib/server/db/migrations'),
+			// @sveltejs/adapter-node defaults the request protocol to `https`
+			// when ORIGIN is unset, so event.url.origin ends up as
+			// `https://127.0.0.1:4173` and our same-origin check rejects the
+			// browser's `http://...` Origin header. Pin it explicitly.
+			ORIGIN: `http://127.0.0.1:${PORT}`,
 			// Each conversation's workdir lives under $DATA_DIR/workspaces/<id>.
 			// dataDir lives inside the copilot-portal source tree, which is itself a
 			// git repo. Without this, git commands run inside conversation workdirs
