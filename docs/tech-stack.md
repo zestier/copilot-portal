@@ -30,7 +30,6 @@ specifics beyond file conventions.)
 | Migrations               | Hand-rolled in `src/lib/server/db/migrations/`     |
 | Schema/validation        | `zod`                                              |
 | Markdown rendering       | `marked` + `dompurify` (sanitize on client)        |
-| Syntax highlighting      | `shiki` (lazy-loaded in client)                    |
 | Diff rendering           | `diff` + custom Svelte component                   |
 | Auth (OAuth)             | `@octokit/auth-oauth-app` or hand-rolled flow      |
 | Cookie/session           | SvelteKit's `cookies` API + signed JWT             |

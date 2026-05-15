@@ -58,7 +58,7 @@ with explicit approval, and review the diffs in the UI.
 
 ## Phase 4 — Quality of life
 
-- Syntax highlighting (lazy `shiki`).
+- Syntax highlighting for code blocks (lazy-loaded highlighter; library TBD).
 - Composer drag-and-drop file context.
 - Per-conversation working-directory display + open-in-editor hint.
 - Export (markdown per conversation, tarball whole-DB).

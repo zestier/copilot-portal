@@ -57,9 +57,11 @@ let toolCalls = $state<Record<string, ToolCallView>>({});
 
 ### `Message.svelte`
 
-Renders one message. Assistant content is markdown → sanitized HTML.
-Code blocks lazy-load `shiki` and render with copy buttons. Tool calls
-and file edits are rendered as folded inline cards.
+Renders one message. Assistant content is markdown → sanitized HTML
+(`marked` → `DOMPurify`, client-side). Code blocks render as plain
+`<pre><code>` with copy buttons; syntax highlighting is a Phase 4
+enhancement. Tool calls and file edits are rendered as folded inline
+cards.
 
 ### `ToolCall.svelte`
 

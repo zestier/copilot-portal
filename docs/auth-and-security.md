@@ -11,7 +11,7 @@ accordingly: it is **never** safe to expose unauthenticated.
 | Random internet stranger  | Any access (no anonymous reads, no chat).                    |
 | Someone with the URL      | Same — URL knowledge is not auth.                            |
 | Logged-in user (you)      | Bounded by Copilot CLI's own sandboxing + permission prompts.|
-| Malicious tool output     | Cannot exfil tokens via SSR HTML (sanitize all markdown).    |
+| Malicious tool output     | Cannot inject HTML/script into the chat UI (sanitize all assistant markdown). |
 | XSS on `vscode.dev`-style | Mitigated by strict CSP and no inline scripts in dev/prod.   |
 
 We are not trying to defend the *host machine* from a logged-in user — that's
@@ -108,7 +108,10 @@ Three strategies, configurable per user:
 
 ## Content sanitization
 
-- All markdown from the assistant is rendered with `marked` → `DOMPurify`.
+- All markdown from the assistant is rendered client-side with `marked` →
+  `DOMPurify` (see `src/lib/client/markdown.ts`). Assistant content is
+  never injected into SSR HTML; the chat transcript is hydrated and
+  rendered in the browser, where DOMPurify uses the real DOM.
 - A strict default CSP is sent from `hooks.server.ts`:
   - `default-src 'self'`
   - `script-src 'self'` (no `unsafe-inline`; SvelteKit hashes inline scripts)
