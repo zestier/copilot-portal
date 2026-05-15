@@ -13,6 +13,7 @@
 	import PermissionPrompt from './PermissionPrompt.svelte';
 	import ContextMeter from './ContextMeter.svelte';
 	import PanelHeader from '$lib/components/ui/PanelHeader.svelte';
+	import { addPermission, removePermission } from '$lib/client/permission-queue';
 
 	let {
 		conversation,
@@ -95,7 +96,11 @@
 
 	let composer = $state('');
 	let streaming = $state(false);
-	let pendingPermission = $state<PermissionRequestView | null>(null);
+	// Queue of outstanding permission requests. The SDK can fire multiple
+	// `onPermissionRequest` callbacks concurrently (parallel tool calls),
+	// so we must surface them all — a single slot would let later events
+	// clobber earlier ones, stranding the earlier requests on the server.
+	let pendingPermissions = $state<PermissionRequestView[]>([]);
 	// Active EventSource for the in-flight turn (if any). null when idle.
 	// Holding a reference here lets `stop()` close it on user-cancel and
 	// lets the conversation-prop $effect tear it down on navigation.
@@ -232,8 +237,8 @@
 			};
 			messages = data.messages;
 			// A completed turn means any outstanding permission prompt was
-			// resolved server-side; clear it so we don't strand a dialog.
-			pendingPermission = null;
+			// resolved server-side; clear them so we don't strand a dialog.
+			pendingPermissions = [];
 			await scrollToBottom();
 			// If a new turn became active between events (unlikely but
 			// possible from another tab), attach to it.
@@ -322,24 +327,21 @@
 				break;
 			}
 			case 'tool.permission': {
-				pendingPermission = {
+				pendingPermissions = addPermission(pendingPermissions, {
 					requestId: ev.requestId,
 					tool: ev.tool,
 					kind: ev.kind,
 					summary: ev.summary,
 					args: ev.args
-				};
+				});
 				break;
 			}
 			case 'tool.permission.resolved': {
-				// Clear any prompt for this request id. Critical on replay:
-				// the original `tool.permission` event lives forever in the
-				// turn's event log, so without this signal a refresh or a
-				// visibility-driven reconnect would resurrect a dialog the
-				// user already answered.
-				if (pendingPermission?.requestId === ev.requestId) {
-					pendingPermission = null;
-				}
+				// Drop the matching prompt. Critical on replay: the original
+				// `tool.permission` event lives forever in the turn's event
+				// log, so without this signal a refresh or a visibility-driven
+				// reconnect would resurrect a dialog the user already answered.
+				pendingPermissions = removePermission(pendingPermissions, ev.requestId);
 				break;
 			}
 			case 'file.edit': {
@@ -422,11 +424,12 @@
 		}
 	}
 
-	async function decidePermission(d: PermissionDecision) {
-		if (!pendingPermission) return;
-		const req = pendingPermission;
-		pendingPermission = null;
-		await fetch(`/api/conversations/${conversation.id}/permissions/${req.requestId}`, {
+	async function decidePermission(requestId: string, d: PermissionDecision) {
+		if (!pendingPermissions.some((p) => p.requestId === requestId)) return;
+		// Optimistically drop the prompt; the server will also emit a
+		// `tool.permission.resolved` which is a no-op once removed.
+		pendingPermissions = removePermission(pendingPermissions, requestId);
+		await fetch(`/api/conversations/${conversation.id}/permissions/${requestId}`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ decision: d })
@@ -520,7 +523,7 @@
 	// next assistant message (i.e., streaming but no in-progress assistant
 	// message exists yet, or it exists but has no content and no tool activity).
 	const thinking = $derived.by(() => {
-		if (!streaming || pendingPermission) return false;
+		if (!streaming || pendingPermissions.length > 0) return false;
 		const last = messages[messages.length - 1];
 		if (!last || last.role !== 'assistant') return true;
 		const hasContent = last.content.length > 0;
@@ -579,9 +582,9 @@
 					onForked={refreshForks}
 				/>
 			{/each}
-			{#if pendingPermission}
-				<PermissionPrompt request={pendingPermission} onDecide={decidePermission} />
-			{/if}
+			{#each pendingPermissions as p (p.requestId)}
+				<PermissionPrompt request={p} onDecide={(d) => decidePermission(p.requestId, d)} />
+			{/each}
 			{#if thinking}
 				<div class="thinking" role="status" aria-live="polite">
 					<span class="dot"></span><span class="dot"></span><span class="dot"></span>
@@ -629,7 +632,7 @@
 				oninput={autoGrow}
 				placeholder="Message Copilot…"
 				rows="1"
-				disabled={streaming && !pendingPermission}
+				disabled={streaming && pendingPermissions.length === 0}
 			></textarea>
 			<div class="composer-actions">
 				<span class="kbd-hint muted" aria-hidden="true">
