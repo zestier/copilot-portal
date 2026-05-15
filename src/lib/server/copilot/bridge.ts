@@ -207,7 +207,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 
 	const onReasoningDelta = (e: unknown) => {
 		const ev = e as { data?: { deltaContent?: string } };
-		const text = ev?.data?.deltaContent ?? '';
+		let text = ev?.data?.deltaContent ?? '';
 		if (!text || !activeQueue) return;
 		// Reasoning can arrive before the first visible token. Open the
 		// assistant message early so we don't silently drop the opening
@@ -223,6 +223,12 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		if (!currentReasoningSegmentId) {
 			currentReasoningSegmentId = ulid();
 			currentReasoningStartedAt = Date.now();
+			// The SDK emits space-prefixed tokens (e.g. " plan", " think")
+			// so the first delta of every segment otherwise starts with a
+			// stray leading space. Strip it once per segment to keep the
+			// rendered block flush-left.
+			text = text.replace(/^\s+/, '');
+			if (!text) return;
 		}
 		activeQueue.push({
 			type: 'message.reasoning',
