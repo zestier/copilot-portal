@@ -1,7 +1,4 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
 	decideByPolicy,
 	register,
@@ -10,23 +7,10 @@ import {
 	newRequestId,
 	get
 } from '../src/lib/server/copilot/permissions';
-import { closeDb } from '../src/lib/server/db';
-import { resetConfigForTests } from '../src/lib/server/config';
 import * as users from '../src/lib/server/db/repos/users';
 import * as convs from '../src/lib/server/db/repos/conversations';
 import type { PermissionDecision, PortalEvent } from '../src/lib/types';
-
-function setupTmpDataDir() {
-	const dir = mkdtempSync(join(tmpdir(), 'portal-perm-test-'));
-	process.env.DATA_DIR = dir;
-	process.env.HOST = '127.0.0.1';
-	process.env.AUTH_MODE = 'none';
-	process.env.I_KNOW_THIS_IS_LOCAL = '1';
-	delete process.env.SESSION_SECRET;
-	resetConfigForTests();
-	closeDb();
-	return dir;
-}
+import { setupLocalEnv } from './helpers/env';
 
 describe('decideByPolicy', () => {
 	it('allow-all approves everything', () => {
@@ -51,8 +35,8 @@ describe('decideByPolicy', () => {
 describe('resolve / cancel emit resolved event', () => {
 	let userId: string;
 	let conversationId: string;
-	beforeEach(() => {
-		setupTmpDataDir();
+	beforeEach(async () => {
+		await setupLocalEnv('portal-perm-test-');
 		userId = users.ensureLocalUser().id;
 		conversationId = convs.create(userId, { title: 't', workdir: '/tmp', model: null }).id;
 	});

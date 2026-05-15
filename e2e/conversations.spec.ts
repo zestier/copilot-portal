@@ -1,4 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { resetConversations } from './helpers/reset';
+
+test.beforeEach(async ({ request }) => {
+	await resetConversations(request);
+});
 
 test('conversation CRUD via API matches sidebar state', async ({ page, request }) => {
 	const a = await request

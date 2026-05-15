@@ -1,44 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { PortalEvent } from '../src/lib/types';
-import type { ConversationSession } from '../src/lib/server/copilot/bridge';
-
-function makeFakeSession(events: PortalEvent[]): ConversationSession {
-	return {
-		conversationId: 'conv-x',
-		async *send(): AsyncIterable<PortalEvent> {
-			for (const e of events) yield e;
-		},
-		async abort() {},
-		async dispose() {},
-		lastUsed: Date.now()
-	};
-}
+import { setupLocalEnv } from './helpers/env';
+import { makeFakeSession } from './helpers/fake-session';
 
 const acquireMock = vi.fn();
 vi.mock('../src/lib/server/copilot/pool', () => ({
 	acquire: (...args: unknown[]) => acquireMock(...args)
 }));
 
-function setupTmpDataDir() {
-	const dir = mkdtempSync(join(tmpdir(), 'portal-test-'));
-	process.env.DATA_DIR = dir;
-	process.env.HOST = '127.0.0.1';
-	process.env.AUTH_MODE = 'none';
-	process.env.I_KNOW_THIS_IS_LOCAL = '1';
-	delete process.env.SESSION_SECRET;
-	return dir;
-}
-
 async function freshImports() {
 	vi.resetModules();
-	setupTmpDataDir();
-	const { resetConfigForTests } = await import('../src/lib/server/config');
-	resetConfigForTests();
-	const { closeDb } = await import('../src/lib/server/db');
-	closeDb();
+	await setupLocalEnv();
 	const users = await import('../src/lib/server/db/repos/users');
 	const convs = await import('../src/lib/server/db/repos/conversations');
 	const usage = await import('../src/lib/server/db/repos/usage');

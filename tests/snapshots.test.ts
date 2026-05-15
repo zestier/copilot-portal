@@ -3,22 +3,10 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-
-function setupTmpDataDir() {
-	const dir = mkdtempSync(join(tmpdir(), 'portal-snap-test-'));
-	process.env.DATA_DIR = dir;
-	process.env.HOST = '127.0.0.1';
-	process.env.AUTH_MODE = 'none';
-	process.env.I_KNOW_THIS_IS_LOCAL = '1';
-	delete process.env.SESSION_SECRET;
-	return dir;
-}
+import { setupLocalEnv } from './helpers/env';
+import { makeTmpDir } from './helpers/tmp';
 
 async function freshImports() {
-	const { resetConfigForTests } = await import('../src/lib/server/config');
-	resetConfigForTests();
-	const { closeDb } = await import('../src/lib/server/db');
-	closeDb();
 	const users = await import('../src/lib/server/db/repos/users');
 	const convs = await import('../src/lib/server/db/repos/conversations');
 	const messages = await import('../src/lib/server/db/repos/messages');
@@ -29,9 +17,9 @@ async function freshImports() {
 describe('snapshots', () => {
 	let workdir: string;
 
-	beforeEach(() => {
-		setupTmpDataDir();
-		workdir = mkdtempSync(join(tmpdir(), 'portal-snap-wd-'));
+	beforeEach(async () => {
+		await setupLocalEnv('portal-snap-test-');
+		workdir = makeTmpDir('portal-snap-wd-');
 	});
 
 	it('initialises a git repo on first snapshot and binds it to a ref', async () => {

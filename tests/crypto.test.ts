@@ -25,9 +25,23 @@ describe('crypto', () => {
 		expect(decrypt(b).toString('utf8')).toBe('same');
 	});
 
-	it('rejects tampered ciphertext', () => {
+	it('rejects ciphertext with a tampered auth tag', () => {
 		const ct = encrypt('secret');
 		ct[ct.length - 1] ^= 0xff;
+		expect(() => decrypt(ct)).toThrow();
+	});
+
+	it('rejects ciphertext with a tampered nonce', () => {
+		const ct = encrypt('secret');
+		// AES-GCM nonce is the first 12 bytes of our layout.
+		ct[0] ^= 0x01;
+		expect(() => decrypt(ct)).toThrow();
+	});
+
+	it('rejects ciphertext with a tampered middle byte', () => {
+		const ct = encrypt('secret-message-that-spans-multiple-bytes');
+		const middle = Math.floor(ct.length / 2);
+		ct[middle] ^= 0x40;
 		expect(() => decrypt(ct)).toThrow();
 	});
 });

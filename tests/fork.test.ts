@@ -1,23 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-
-function setupTmpDataDir() {
-	const dir = mkdtempSync(join(tmpdir(), 'portal-fork-test-'));
-	process.env.DATA_DIR = dir;
-	process.env.HOST = '127.0.0.1';
-	process.env.AUTH_MODE = 'none';
-	process.env.I_KNOW_THIS_IS_LOCAL = '1';
-	delete process.env.SESSION_SECRET;
-	return dir;
-}
+import { setupLocalEnv } from './helpers/env';
+import { makeTmpDir } from './helpers/tmp';
 
 async function freshImports() {
-	const { resetConfigForTests } = await import('../src/lib/server/config');
-	resetConfigForTests();
-	const { closeDb } = await import('../src/lib/server/db');
-	closeDb();
 	const users = await import('../src/lib/server/db/repos/users');
 	const convs = await import('../src/lib/server/db/repos/conversations');
 	const messages = await import('../src/lib/server/db/repos/messages');
@@ -29,8 +16,8 @@ async function freshImports() {
 describe('fork.forkAtMessage', () => {
 	let dataDir: string;
 
-	beforeEach(() => {
-		dataDir = setupTmpDataDir();
+	beforeEach(async () => {
+		dataDir = await setupLocalEnv('portal-fork-test-');
 	});
 
 	function managedWorkdirFor(convId: string): string {
@@ -188,7 +175,7 @@ describe('fork.forkAtMessage', () => {
 	it('rejects forks for unmanaged (BYO) workdirs', async () => {
 		const { users, convs, messages, snapshots, fork } = await freshImports();
 		const u = users.ensureLocalUser();
-		const wd = mkdtempSync(join(tmpdir(), 'byo-'));
+		const wd = makeTmpDir('byo-');
 		const conv = convs.create(u.id, { title: 't', workdir: wd, model: null });
 		const m = messages.append(conv.id, { role: 'user', content: 'hi' });
 		writeFileSync(join(wd, 'x.txt'), 'x\n');

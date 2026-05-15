@@ -46,11 +46,21 @@ const baseOpts = {
 };
 
 beforeEach(() => {
-	clientStub.start.mockClear();
-	clientStub.createSession.mockReset().mockResolvedValue(sdkSessionStub);
-	clientStub.resumeSession.mockReset().mockResolvedValue(sdkSessionStub);
-	clientStub.getSessionMetadata.mockReset();
-	sdkSessionStub.on.mockClear();
+	// Reset every stub so any test that re-implements one (e.g. the
+	// usage_info test below mutates sdkSessionStub.send) can't leak its
+	// implementation into the next test. Re-install default resolved
+	// values for the methods bridge expects to be promise-returning.
+	for (const fn of Object.values(clientStub)) fn.mockReset();
+	for (const fn of Object.values(sdkSessionStub)) fn.mockReset();
+	clientStub.start.mockResolvedValue(undefined);
+	clientStub.stop.mockResolvedValue(undefined);
+	clientStub.createSession.mockResolvedValue(sdkSessionStub);
+	clientStub.resumeSession.mockResolvedValue(sdkSessionStub);
+	clientStub.getAuthStatus.mockResolvedValue({ authenticated: true });
+	clientStub.listModels.mockResolvedValue([]);
+	clientStub.getSessionMetadata.mockResolvedValue(undefined);
+	sdkSessionStub.abort.mockResolvedValue(undefined);
+	sdkSessionStub.disconnect.mockResolvedValue(undefined);
 });
 
 describe('bridge.open() session resume behavior', () => {

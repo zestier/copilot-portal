@@ -5,7 +5,18 @@ export default defineConfig({
 	plugins: [sveltekit()],
 	test: {
 		include: ['src/**/*.{test,spec}.{js,ts}', 'tests/**/*.{test,spec}.{js,ts}'],
-		environment: 'node'
+		environment: 'node',
+		setupFiles: ['tests/setup.ts'],
+		// Fork per file so module-level caches (config singleton, sqlite
+		// handle, mocked modules) don't leak across files.
+		pool: 'forks',
+		isolate: true,
+		coverage: {
+			provider: 'v8',
+			reporter: ['text', 'html'],
+			include: ['src/lib/**/*.{ts,js}'],
+			exclude: ['src/lib/**/*.test.{ts,js}', 'src/lib/**/*.spec.{ts,js}', 'src/**/*.d.ts']
+		}
 	},
 	server: {
 		port: 5173,

@@ -1,37 +1,14 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Handle } from '@sveltejs/kit';
-import { closeDb } from '../src/lib/server/db';
-import { resetConfigForTests } from '../src/lib/server/config';
+import { setupAuthedEnv, setupLocalEnv } from './helpers/env';
 
 type HandleEvent = Parameters<Handle>[0]['event'];
 
 /**
- * Exercises the SvelteKit `handle` hook directly. The auth gate is now
- * the single enforcement point for API authentication (per-handler
- * `if (!locals.userId) throw error(401)` checks were consolidated into
- * `requireUserId`, which is still defense-in-depth but trusts that the
- * gate has already rejected unauthenticated traffic). These tests guard
- * the invariant.
+ * Exercises the SvelteKit `handle` hook directly. The auth gate is the
+ * single enforcement point for API authentication; these tests guard the
+ * invariant.
  */
-
-function setupAuthedEnv() {
-	const dir = mkdtempSync(join(tmpdir(), 'portal-hooks-test-'));
-	process.env.DATA_DIR = dir;
-	process.env.HOST = '127.0.0.1';
-	process.env.AUTH_MODE = 'shared-secret';
-	process.env.SHARED_SECRET = 'test-secret';
-	process.env.SESSION_SECRET = randomBytes(48).toString('base64');
-	process.env.ENCRYPTION_KEY = randomBytes(32).toString('base64');
-	delete process.env.I_KNOW_THIS_IS_LOCAL;
-	delete process.env.TUNNEL_HOST;
-	resetConfigForTests();
-	closeDb();
-	return dir;
-}
 
 function makeEvent(opts: { path: string; method?: string; origin?: string }): HandleEvent {
 	const url = new URL(`http://127.0.0.1${opts.path}`);
@@ -42,8 +19,7 @@ function makeEvent(opts: { path: string; method?: string; origin?: string }): Ha
 		headers
 	});
 	// Cast through unknown — we only populate the fields the `handle` hook
-	// actually reads. The full RequestEvent has many runtime-only fields
-	// (fetch, tracing, isRemoteRequest, etc.) we don't need here.
+	// actually reads.
 	return {
 		url,
 		request,
@@ -66,16 +42,18 @@ function makeEvent(opts: { path: string; method?: string; origin?: string }): Ha
 }
 
 async function loadHandle() {
-	// Lazy import: `hooks.server.ts` runs `boot()` at module load, which
-	// calls `loadConfig()`. Env must be set first, so we can't import at
-	// the top of this file.
+	// Lazy import after env is set, and reset modules first so any
+	// previous test's hooks.server (with its boot()-time config snapshot)
+	// is discarded — otherwise switching between authed/no-auth modes
+	// inside a single test file would silently keep the old auth gate.
+	vi.resetModules();
 	const mod = await import('../src/hooks.server');
 	return mod.handle;
 }
 
 describe('hooks auth gate', () => {
-	beforeEach(() => {
-		setupAuthedEnv();
+	beforeEach(async () => {
+		await setupAuthedEnv('portal-hooks-test-');
 	});
 
 	it('returns 401 for unauthenticated /api/* requests', async () => {
@@ -120,20 +98,9 @@ describe('hooks auth gate', () => {
 	});
 
 	it('blocks cross-origin mutating /api/* even when authenticated', async () => {
-		// With no session cookie the request is unauthenticated, but the
-		// auth gate runs before the origin check, so we'd see 401 here. To
-		// exercise the origin gate we need AUTH_MODE=none. Use a separate
-		// env scope.
-		const dir = mkdtempSync(join(tmpdir(), 'portal-hooks-test-'));
-		process.env.DATA_DIR = dir;
-		process.env.HOST = '127.0.0.1';
-		process.env.AUTH_MODE = 'none';
-		process.env.I_KNOW_THIS_IS_LOCAL = '1';
-		delete process.env.SESSION_SECRET;
-		delete process.env.SHARED_SECRET;
-		delete process.env.TUNNEL_HOST;
-		resetConfigForTests();
-		closeDb();
+		// Switch to AUTH_MODE=none so the request is authorized via the
+		// local user; this lets us reach the origin gate.
+		await setupLocalEnv('portal-hooks-test-');
 
 		const handle = await loadHandle();
 		const event = makeEvent({

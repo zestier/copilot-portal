@@ -75,6 +75,11 @@ describe('deriveTitle', () => {
 
 	it('capitalizes the first letter without lowercasing the rest', () => {
 		expect(deriveTitle('fooBar baz')).toBe('FooBar baz');
+		// Intentional: we only uppercase the first character. Acronyms
+		// like "iOS" or "iPhone" get clobbered to "IOS" / "IPhone"; that
+		// trade-off is fine because the alternative (preserving inner
+		// case) would also preserve unwanted internal capitals from
+		// noisy prompts. If you "fix" this, add a test case here.
 		expect(deriveTitle('iOS bug')).toBe('IOS bug');
 	});
 

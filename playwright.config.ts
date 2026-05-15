@@ -1,18 +1,42 @@
 import { defineConfig, devices } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
-import { rmSync, mkdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dataDir = resolve(__dirname, 'e2e/.tmp-data');
 
-// Fresh DATA_DIR every run so tests start from an empty SQLite db.
-rmSync(dataDir, { recursive: true, force: true });
-mkdirSync(dataDir, { recursive: true });
-
 const PORT = Number(process.env.E2E_PORT ?? 4173);
 const buildEntry = resolve(__dirname, 'build');
+
+// Synchronously probe whether something is already listening on PORT.
+// We need this at config-evaluation time so we can decide whether it's
+// safe to wipe DATA_DIR — wiping the directory out from under a server
+// with an open SQLite handle is a footgun, and Playwright lets us reuse
+// a running dev server in non-CI runs.
+//
+// `net.createConnection` is async, but we need a sync answer here, so we
+// run the probe in a tiny child node process and capture its exit code.
+function isPortInUse(port: number): boolean {
+	const script = `
+		const net = require('node:net');
+		const sock = net.createConnection({ host: '127.0.0.1', port: ${port} });
+		const done = (code) => { sock.destroy(); process.exit(code); };
+		sock.once('connect', () => done(0));
+		sock.once('error', () => done(1));
+		setTimeout(() => done(1), 400);
+	`;
+	const r = spawnSync(process.execPath, ['-e', script], { stdio: 'ignore', timeout: 1500 });
+	return r.status === 0;
+}
+
+const willReuseServer = !process.env.CI && isPortInUse(PORT);
+if (!willReuseServer) {
+	rmSync(dataDir, { recursive: true, force: true });
+	mkdirSync(dataDir, { recursive: true });
+}
 
 export default defineConfig({
 	testDir: './e2e',
@@ -58,7 +82,10 @@ export default defineConfig({
 			// git repo. Without this, git commands run inside conversation workdirs
 			// would walk up into the outer repo. Tell git to stop at dataDir so each
 			// test sees an isolated workspace.
-			GIT_CEILING_DIRECTORIES: dataDir
+			GIT_CEILING_DIRECTORIES: dataDir,
+			// Bump rate limit so test-only patterns (poll-for-idle,
+			// reset-all-conversations) don't trip the per-user limiter.
+			API_RATE_LIMIT_PER_MIN: '10000'
 		}
 	}
 });

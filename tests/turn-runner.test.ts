@@ -1,22 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { PortalEvent } from '../src/lib/types';
-import type { ConversationSession } from '../src/lib/server/copilot/bridge';
-
-// Build a fake session whose `send()` yields a fixed sequence of events.
-function makeFakeSession(events: PortalEvent[]): ConversationSession {
-	return {
-		conversationId: 'conv-x',
-		async *send(): AsyncIterable<PortalEvent> {
-			for (const e of events) yield e;
-		},
-		async abort() {},
-		async dispose() {},
-		lastUsed: Date.now()
-	};
-}
+import { setupLocalEnv } from './helpers/env';
+import { makeTmpDir } from './helpers/tmp';
+import { makeFakeSession } from './helpers/fake-session';
 
 // Mock the session pool so turn-runner doesn't try to spin up the real SDK.
 const acquireMock = vi.fn();
@@ -24,23 +10,9 @@ vi.mock('../src/lib/server/copilot/pool', () => ({
 	acquire: (...args: unknown[]) => acquireMock(...args)
 }));
 
-function setupTmpDataDir() {
-	const dir = mkdtempSync(join(tmpdir(), 'portal-test-'));
-	process.env.DATA_DIR = dir;
-	process.env.HOST = '127.0.0.1';
-	process.env.AUTH_MODE = 'none';
-	process.env.I_KNOW_THIS_IS_LOCAL = '1';
-	delete process.env.SESSION_SECRET;
-	return dir;
-}
-
 async function freshImports() {
 	vi.resetModules();
-	setupTmpDataDir();
-	const { resetConfigForTests } = await import('../src/lib/server/config');
-	resetConfigForTests();
-	const { closeDb } = await import('../src/lib/server/db');
-	closeDb();
+	await setupLocalEnv();
 	const users = await import('../src/lib/server/db/repos/users');
 	const convs = await import('../src/lib/server/db/repos/conversations');
 	const turnRunner = await import('../src/lib/server/copilot/turn-runner');
@@ -55,7 +27,7 @@ describe('turn-runner', () => {
 	it('emits conversation.update before the terminal done so clients see the auto-title', async () => {
 		const { users, convs, turnRunner } = await freshImports();
 		const user = users.ensureLocalUser();
-		const wd = mkdtempSync(join(tmpdir(), 'portal-wd-'));
+		const wd = makeTmpDir('portal-wd-');
 		const conv = convs.create(user.id, {
 			title: 'New chat',
 			workdir: wd,
@@ -113,7 +85,7 @@ describe('turn-runner', () => {
 	it('does not emit conversation.update when the title is already set', async () => {
 		const { users, convs, turnRunner } = await freshImports();
 		const user = users.ensureLocalUser();
-		const wd = mkdtempSync(join(tmpdir(), 'portal-wd-'));
+		const wd = makeTmpDir('portal-wd-');
 		const conv = convs.create(user.id, {
 			title: 'Custom title',
 			workdir: wd,
@@ -153,7 +125,7 @@ describe('turn-runner', () => {
 	it('assigns monotonic ids and replays from Last-Event-ID via sinceId', async () => {
 		const { users, convs, turnRunner } = await freshImports();
 		const user = users.ensureLocalUser();
-		const wd = mkdtempSync(join(tmpdir(), 'portal-wd-'));
+		const wd = makeTmpDir('portal-wd-');
 		const conv = convs.create(user.id, {
 			title: 'Custom title',
 			workdir: wd,
@@ -211,7 +183,7 @@ describe('turn-runner', () => {
 	it('getTurnById returns null when the turn id does not match', async () => {
 		const { users, convs, turnRunner } = await freshImports();
 		const user = users.ensureLocalUser();
-		const wd = mkdtempSync(join(tmpdir(), 'portal-wd-'));
+		const wd = makeTmpDir('portal-wd-');
 		const conv = convs.create(user.id, {
 			title: 't',
 			workdir: wd,

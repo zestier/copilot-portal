@@ -1,28 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { closeDb, getDb } from '../src/lib/server/db';
-import { resetConfigForTests } from '../src/lib/server/config';
+import { getDb } from '../src/lib/server/db';
 import * as users from '../src/lib/server/db/repos/users';
 import * as convs from '../src/lib/server/db/repos/conversations';
 import * as messages from '../src/lib/server/db/repos/messages';
 import * as settings from '../src/lib/server/db/repos/settings';
-
-function setupTmpDataDir() {
-	const dir = mkdtempSync(join(tmpdir(), 'portal-test-'));
-	process.env.DATA_DIR = dir;
-	process.env.HOST = '127.0.0.1';
-	process.env.AUTH_MODE = 'none';
-	process.env.I_KNOW_THIS_IS_LOCAL = '1';
-	delete process.env.SESSION_SECRET;
-	resetConfigForTests();
-	closeDb();
-	return dir;
-}
+import { setupLocalEnv } from './helpers/env';
 
 describe('db migrations + repos', () => {
-	beforeEach(() => setupTmpDataDir());
+	beforeEach(async () => {
+		await setupLocalEnv();
+	});
 
 	it('runs migrations on open and creates tables', () => {
 		const db = getDb();

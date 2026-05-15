@@ -1,12 +1,33 @@
 import { test, expect } from '@playwright/test';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resetConversations } from './helpers/reset';
 
 // Server is launched with cwd=DATA_DIR (see playwright.config.ts) so the file
 // browser's workspace root is this directory.
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '.tmp-data');
+
+// File-browser endpoints operate on a shared workspace root. To keep tests
+// independent we clear the root before each test, preserving only the
+// SQLite DB and the per-conversation workspaces/ subdirectory that the
+// server manages.
+const PRESERVE = new Set([
+	'portal.db',
+	'portal.db-journal',
+	'portal.db-wal',
+	'portal.db-shm',
+	'workspaces'
+]);
+
+test.beforeEach(async ({ request }) => {
+	for (const name of readdirSync(workspaceRoot)) {
+		if (PRESERVE.has(name)) continue;
+		rmSync(join(workspaceRoot, name), { recursive: true, force: true });
+	}
+	await resetConversations(request);
+});
 
 async function createConversation(request: import('@playwright/test').APIRequestContext) {
 	const res = await request.post('/api/conversations', { data: { title: 'E2E files' } });

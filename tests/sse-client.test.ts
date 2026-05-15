@@ -185,4 +185,73 @@ describe('streamSse', () => {
 		expect(init?.onStatus).toBeUndefined();
 		expect(init?.onActivity).toBeUndefined();
 	});
+
+	it('forwards an AbortSignal to fetch', async () => {
+		let capturedSignal: AbortSignal | undefined;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn((_url: string, init?: RequestInit) => {
+				capturedSignal = init?.signal ?? undefined;
+				return Promise.resolve(fakeResponse({ status: 204 }));
+			})
+		);
+		const ac = new AbortController();
+		for await (const ev of streamSse('/x', { signal: ac.signal })) void ev;
+		expect(capturedSignal).toBe(ac.signal);
+	});
+
+	it('releases the reader lock when the consumer breaks early', async () => {
+		// Build a response whose body is a ReadableStream we control so we
+		// can assert the lock was released after the consumer breaks.
+		const encoder = new TextEncoder();
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				controller.enqueue(encoder.encode('data: {"type":"a"}\n\n'));
+				controller.enqueue(encoder.encode('data: {"type":"b"}\n\n'));
+				// Don't close — we want the consumer's `break` to be what
+				// stops iteration. The finally block in streamSse must
+				// release the reader.
+			}
+		});
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () =>
+					new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+			)
+		);
+		for await (const ev of streamSse<{ type: string }>('/x')) {
+			if (ev.type === 'a') break;
+		}
+		// After consumer breaks the generator runs its finally → releaseLock.
+		// A second getReader() would throw if the lock was still held.
+		let released: boolean;
+		try {
+			body.getReader();
+			released = true;
+		} catch {
+			released = false;
+		}
+		expect(released).toBe(true);
+	});
+
+	it('ignores malformed JSON frames without throwing', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				fakeResponse({
+					status: 200,
+					chunks: [
+						'data: not json at all\n\n',
+						'data: {"type":"ok"}\n\n',
+						'data: {broken\n\n',
+						'data: {"type":"done"}\n\n'
+					]
+				})
+			)
+		);
+		const seen: Array<{ type: string }> = [];
+		for await (const ev of streamSse<{ type: string }>('/x')) seen.push(ev);
+		expect(seen).toEqual([{ type: 'ok' }, { type: 'done' }]);
+	});
 });

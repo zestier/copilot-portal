@@ -18,7 +18,8 @@ describe('AsyncQueue', () => {
 		const consumer = (async () => {
 			for await (const v of q) seen.push(v);
 		})();
-		await new Promise((r) => setTimeout(r, 5));
+		// Yield once so the consumer parks on the empty queue.
+		await Promise.resolve();
 		q.push(7);
 		q.push(8);
 		q.end();

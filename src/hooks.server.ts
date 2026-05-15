@@ -21,7 +21,10 @@ function boot() {
 boot();
 
 const loginLimiter = perWindow(5, 15 * 60_000); // 5 / 15min per IP
-const apiLimiter = perWindow(60, 60_000); // 60 / min per user
+// Per-user API limit. Allow tests to raise it via env so e2e helper
+// flows (poll-for-idle, reset-all-conversations) don't false-positive.
+const API_LIMIT = Number(process.env.API_RATE_LIMIT_PER_MIN) || 60;
+const apiLimiter = perWindow(API_LIMIT, 60_000);
 
 const PUBLIC_PATHS = new Set(['/login', '/auth/callback', '/api/health']);
 const PUBLIC_PREFIXES = ['/_app/', '/favicon'];
@@ -95,7 +98,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 			return new Response('Too many requests', { status: 429 });
 		}
 	}
-	if (path.startsWith('/api/') && event.locals.userId) {
+	if (path.startsWith('/api/') && event.locals.userId && path !== '/api/health') {
 		if (!apiLimiter.tryAcquire(`api:${event.locals.userId}`)) {
 			return apiErrorResponse(429, 'rate_limited');
 		}

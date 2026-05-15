@@ -1,4 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { resetConversations } from './helpers/reset';
+
+test.beforeEach(async ({ request }) => {
+	await resetConversations(request);
+});
 
 async function createConversation(request: import('@playwright/test').APIRequestContext) {
 	const res = await request.post('/api/conversations', {

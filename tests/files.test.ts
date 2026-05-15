@@ -7,6 +7,20 @@ import { safeResolve, listDir, readFileSafe } from '../src/lib/server/files';
 let root: string;
 let outside: string;
 
+// Probe symlink support at module load. `it.skipIf` is evaluated at test
+// collection time — before `beforeAll` runs — so this can't live there.
+const symlinksWork = (() => {
+	const probe = mkdtempSync(join(tmpdir(), 'files-probe-'));
+	try {
+		symlinkSync(probe, join(probe, 'self'));
+		return true;
+	} catch {
+		return false;
+	} finally {
+		rmSync(probe, { recursive: true, force: true });
+	}
+})();
+
 beforeAll(() => {
 	root = mkdtempSync(join(tmpdir(), 'files-test-'));
 	outside = mkdtempSync(join(tmpdir(), 'files-outside-'));
@@ -14,11 +28,8 @@ beforeAll(() => {
 	writeFileSync(join(root, 'a.txt'), 'hello\n');
 	writeFileSync(join(root, 'sub', 'b.txt'), 'world\n');
 	writeFileSync(join(outside, 'secret.txt'), 'TOPSECRET');
-	// Symlink that escapes the root.
-	try {
+	if (symlinksWork) {
 		symlinkSync(outside, join(root, 'escape'));
-	} catch {
-		// symlinks may not be available on some CI; tests using it will skip.
 	}
 	// Binary file.
 	writeFileSync(join(root, 'bin.dat'), Buffer.from([0, 1, 2, 3, 0, 5]));
@@ -56,7 +67,7 @@ describe('safeResolve', () => {
 		expect(r.ok).toBe(false);
 	});
 
-	it('rejects paths through escaping symlinks', () => {
+	it.skipIf(!symlinksWork)('rejects paths through escaping symlinks', () => {
 		const r = safeResolve(root, 'escape/secret.txt');
 		expect(r.ok).toBe(false);
 	});
