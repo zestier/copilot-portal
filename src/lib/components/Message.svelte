@@ -220,7 +220,40 @@
 		}
 		for (const t of trailingTools) out.push({ kind: 'tool', tool: t });
 		for (const e of trailingEdits) out.push({ kind: 'edit', edit: e });
-		return out;
+
+		// Coalesce visually-adjacent reasoning segments (no tool/edit/text
+		// between them) into a single thinking box. The underlying segments
+		// are still persisted distinctly; this is purely a render-time
+		// merge so users don't see two "Thought for Xs" boxes back-to-back
+		// just because the model emitted a tool that was then cancelled or
+		// because the SDK chunked a single thought into two bursts.
+		const merged: Part[] = [];
+		for (const p of out) {
+			const prev = merged[merged.length - 1];
+			if (p.kind === 'reasoning' && prev && prev.kind === 'reasoning') {
+				// Concatenate text with a blank line separator so the two
+				// bursts remain visually distinct inside the same block.
+				const text = `${prev.block.text}\n\n${p.block.text}`;
+				// Sum finite durations; null wins (still open) so the header
+				// keeps ticking via the streaming flag.
+				const durationMs =
+					prev.block.durationMs == null || p.block.durationMs == null
+						? null
+						: prev.block.durationMs + p.block.durationMs;
+				merged[merged.length - 1] = {
+					kind: 'reasoning',
+					streaming: prev.streaming || p.streaming,
+					block: {
+						...prev.block,
+						text,
+						durationMs
+					}
+				};
+			} else {
+				merged.push(p);
+			}
+		}
+		return merged;
 	});
 </script>
 
