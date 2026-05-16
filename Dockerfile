@@ -27,7 +27,7 @@ RUN corepack enable
 # package's `prepare` lifecycle (which invokes scripts/install-git-hooks.mjs)
 # during install. The script no-ops outside a git checkout, but it still has
 # to exist on disk.
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY scripts ./scripts
 RUN --mount=type=cache,id=pnpm-store-build,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
@@ -47,7 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN corepack enable
 
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY scripts ./scripts
 RUN --mount=type=cache,id=pnpm-store-deps,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod

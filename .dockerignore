@@ -9,6 +9,7 @@
 # Manifests + lockfile (install layer).
 !package.json
 !pnpm-lock.yaml
+!pnpm-workspace.yaml
 
 # Build config.
 !svelte.config.js
