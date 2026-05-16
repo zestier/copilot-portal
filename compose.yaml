@@ -1,12 +1,27 @@
+# Default deployment: portal only, with the project tree bind-mounted.
+#
+# For a public deployment behind Cloudflare Tunnel, combine this with
+# `compose.tunnel.yaml` via:
+#
+#   docker compose -f compose.yaml -f compose.tunnel.yaml up -d
+#
+# PROJECT_DIR must point at the host directory the agent should read and
+# edit. It will be mounted into the container at /workspace and used as
+# the default working directory for new conversations.
+
 services:
   portal:
+    # Default to building from the repo checkout. Once an image has been
+    # pushed to a registry, replace `build:` with
+    # `image: ghcr.io/<owner>/copilot-portal:<tag>`.
     build: .
-    image: copilot-portal:latest
+    image: copilot-portal:local
     restart: unless-stopped
     environment:
-      HOST: 127.0.0.1
+      HOST: 0.0.0.0
       PORT: 3000
       DATA_DIR: /data
+      PROJECT_ROOT: /workspace
       AUTH_MODE: ${AUTH_MODE:-github}
       SESSION_SECRET: ${SESSION_SECRET:?required}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?required}
@@ -19,16 +34,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       IDLE_TIMEOUT_MIN: ${IDLE_TIMEOUT_MIN:-15}
       MAX_CONCURRENT_SESSIONS: ${MAX_CONCURRENT_SESSIONS:-4}
+      TUNNEL_HOST: ${TUNNEL_HOST:-}
     volumes:
       - ./data:/data
-    network_mode: host
-
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?required}
-    network_mode: host
-    depends_on:
-      - portal
+      - ${PROJECT_DIR:?required}:/workspace
+    ports:
+      - '${PORTAL_BIND:-127.0.0.1}:${PORTAL_PORT:-3000}:3000'

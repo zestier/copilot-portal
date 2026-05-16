@@ -1,0 +1,27 @@
+# Overlay that adds a Cloudflare Tunnel sidecar.
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.tunnel.yaml up -d
+#
+# Both services switch to `network_mode: host` so cloudflared can reach the
+# portal on 127.0.0.1:3000 without a shared bridge. The portal is bound to
+# 127.0.0.1 only — public reachability comes from the tunnel.
+
+services:
+  portal:
+    network_mode: host
+    # Override the published port from compose.yaml — host mode publishes
+    # whatever the process binds itself.
+    ports: !reset []
+    environment:
+      HOST: 127.0.0.1
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?required}
+    network_mode: host
+    depends_on:
+      - portal

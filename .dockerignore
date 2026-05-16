@@ -1,0 +1,20 @@
+# Allowlist: ignore everything by default, then un-ignore the specific
+# inputs the Docker build needs. This keeps the Dockerfile's `COPY . .`
+# simple while making "what goes into the image" reviewable in one place.
+#
+# Add to this list whenever a new build-time input is introduced.
+
+*
+
+# Manifests + lockfile (install layer).
+!package.json
+!pnpm-lock.yaml
+
+# Build config.
+!svelte.config.js
+!vite.config.ts
+!tsconfig.json
+
+# Source the build reads.
+!src
+!static

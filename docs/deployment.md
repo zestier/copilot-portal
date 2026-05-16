@@ -1,94 +1,158 @@
 # 07 — Deployment
 
-Target: a Linux host you control (home server, VPS, Raspberry Pi 5+, etc.),
-fronted by a Cloudflare Tunnel for remote access.
+The portal is distributed as a multi-arch container image
+(`linux/amd64` + `linux/arm64`) at
+`ghcr.io/<owner>/copilot-portal:<tag>`. It's a long-running web server
+that needs:
 
-## Build
+- A persistent volume for its encrypted SQLite database (`/data`).
+- A bind mount of the project tree the agent should read and edit
+  (`/workspace`).
+- `git` available in `PATH` inside the container (already included in the
+  image).
 
-```dockerfile
-# Dockerfile
+Three deployment topologies are supported:
 
-# ---- build ----
-FROM node:24-bookworm-slim AS build
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
-COPY . .
-RUN npm run build && npm prune --omit=dev
+- **A. Standalone** — single host, no devcontainer involvement.
+  Recommended default.
+- **B. Devcontainer coexistence** — the portal runs in its own container
+  alongside a devcontainer that mounts the same workspace. Both
+  containers must see the project tree at the same absolute path with
+  matching UIDs.
+- **C. Remote CLI** *(deferred; tracked in a separate issue)* — the
+  Copilot CLI runs inside the devcontainer and the portal connects over
+  TCP via the SDK's `cliUrl` option. Useful when the agent's tools need
+  access to the devcontainer's installed toolchain. Requires a small
+  custom sidecar; not first-class supported by the CLI yet.
 
-# ---- runtime ----
-FROM node:24-bookworm-slim AS runtime
-# git is commonly invoked by the Copilot CLI's tools; include it.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates curl tini \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY --from=build /app/build ./build
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/package.json ./
-
-ENV NODE_ENV=production \
-    HOST=0.0.0.0 \
-    PORT=3000 \
-    DATA_DIR=/data
-
-VOLUME ["/data"]
-EXPOSE 3000
-USER node
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "build"]
-```
-
-The Copilot CLI is bundled into `@github/copilot-sdk` for Node, so no
-separate install step is needed at build time.
-
-## Compose
+## Topology A — Standalone
 
 ```yaml
-# compose.yaml
+# compose.yaml is committed; just supply a .env file.
 services:
   portal:
-    build: .
-    image: copilot-portal:latest
-    restart: unless-stopped
-    environment:
-      HOST: 127.0.0.1            # only reachable via the tunnel
-      PORT: 3000
-      DATA_DIR: /data
-      AUTH_MODE: github
-      SESSION_SECRET: ${SESSION_SECRET:?required}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?required}
-      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?required}
-      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?required}
-      ALLOWED_GITHUB_LOGINS: ${ALLOWED_GITHUB_LOGINS:?required}
-      LOG_LEVEL: info
+    image: ghcr.io/<owner>/copilot-portal:latest
+    # ...
     volumes:
       - ./data:/data
-    network_mode: host          # so 127.0.0.1 is reachable by cloudflared
-                                # (alternative: shared bridge + service name)
-
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?required}
-    network_mode: host
-    depends_on:
-      - portal
+      - ${PROJECT_DIR:?required}:/workspace
+    ports: ["127.0.0.1:3000:3000"]
 ```
 
-Generating secrets:
+`.env`:
+
+```bash
+PROJECT_DIR=/home/me/projects/foo
+SESSION_SECRET=$(openssl rand -base64 48)
+ENCRYPTION_KEY=$(openssl rand -base64 32)
+AUTH_MODE=github
+GITHUB_CLIENT_ID=...
+GITHUB_CLIENT_SECRET=...
+ALLOWED_GITHUB_LOGINS=you
+```
+
+Start:
+
+```bash
+docker compose up -d
+```
+
+The portal is now reachable on `http://127.0.0.1:3000`. For public
+access, see "Cloudflare Tunnel" below.
+
+### UID / permissions
+
+The image runs as the built-in `node` user (UID 1000). Files written to
+`./data` and `/workspace` will be owned by UID 1000 on the host. If your
+host user is also UID 1000 (the default on most Linux desktops), nothing
+special is needed. Otherwise either:
+
+- Run the container as your UID:
+  ```yaml
+  services:
+    portal:
+      user: "${UID}:${GID}"
+  ```
+- Or `chown` the bind-mounted directories to UID 1000 once.
+
+**Podman, rootless mode:** add `--userns=keep-id` (or set
+`userns_mode: keep-id` in the compose file) so that container UID 1000
+maps to your host UID instead of a subuid. Without this, snapshots fail
+to write into the workspace.
+
+**SELinux hosts (Fedora, RHEL):** suffix bind mounts with `:Z` for
+private relabeling:
+
+```yaml
+volumes:
+  - ./data:/data:Z
+  - ${PROJECT_DIR}:/workspace:Z
+```
+
+## Topology B — Devcontainer coexistence
+
+The portal and your devcontainer both bind-mount the same host
+directory, at the same absolute path inside each container. The portal
+does not need to talk to the devcontainer; both processes operate
+independently on the shared tree, and the portal's per-message git
+snapshots capture every change the agent makes regardless of which
+process touched the files.
+
+```
+host:
+  ~/projects/foo                          <-- the project tree
+
+portal container:
+  /workspace                              <-- bind of ~/projects/foo
+
+devcontainer:
+  /workspaces/foo                         <-- bind of ~/projects/foo
+```
+
+Constraints (all enforced or assumed by the codebase):
+
+1. **Workspace bind mount, not a managed volume.** Some devcontainer
+   templates use a named Docker volume for the workspace; the portal
+   cannot reach inside that. Switch the devcontainer's `workspaceMount`
+   to a host bind mount of the same directory you give to
+   `PROJECT_DIR`.
+2. **Same absolute path is preferred.** The diff/file-tree APIs reject
+   paths outside the portal's `PROJECT_ROOT`. They still work if the
+   paths differ between containers, but error messages and any tool
+   output that quotes paths will look inconsistent across the two UIs.
+   Easiest fix: mount at `/workspaces/<repo>` in both containers (the
+   devcontainer convention).
+3. **UID parity.** Devcontainer images commonly run as a `vscode` user
+   at UID 1000, matching this image's `node` user. If your devcontainer
+   uses a different UID, override the portal's user to match (see
+   "UID / permissions" above).
+
+The devcontainer remains responsible for *interactive* development
+(editor, language servers, terminals); the portal runs Copilot agents
+against the same files in the background.
+
+## Topology C — Remote CLI (future)
+
+Tracked separately. The SDK accepts a `cliUrl` option pointing at an
+existing CLI server, but the public CLI does not currently expose a
+long-lived server mode of its own — wiring this up requires a tiny
+sidecar process in the devcontainer that uses the SDK in
+`useStdio: false, port: N` mode and hands control to the portal. When
+implemented, this would let the agent's shell commands run in the
+devcontainer's toolchain while the portal still owns the database,
+snapshots, and UI.
+
+## Secrets
 
 ```bash
 export SESSION_SECRET=$(openssl rand -base64 48)
 export ENCRYPTION_KEY=$(openssl rand -base64 32)
 ```
 
-Store these in a `.env` file (gitignored). `compose.yaml` reads them via
-the `${VAR:?required}` syntax so the stack refuses to start if any are
-missing.
+Both are required for any non-trivial auth mode. `ENCRYPTION_KEY` must
+decode to exactly 32 raw bytes (the default `openssl rand -base64 32`
+produces this). `compose.yaml` reads them via `${VAR:?required}` so the
+stack refuses to start if either is missing.
 
 ## GitHub OAuth App setup
 
@@ -96,49 +160,75 @@ missing.
 2. Homepage URL: `https://copilot.example.com` (your tunnel hostname).
 3. Authorization callback URL: `https://copilot.example.com/auth/callback`.
 4. Copy client id / secret into `.env`.
-5. (Optional) Require this app to be approved by your organization if you
-   want org-scoped Copilot entitlement to flow through.
+5. *(Optional)* Require this app to be approved by your organization if
+   you want org-scoped Copilot entitlement to flow through.
 
-## Cloudflare Tunnel setup
+## Cloudflare Tunnel
+
+Use the `compose.tunnel.yaml` overlay:
+
+```bash
+docker compose -f compose.yaml -f compose.tunnel.yaml up -d
+```
+
+This switches both services to `network_mode: host` so `cloudflared`
+can reach the portal on `127.0.0.1:3000` without a shared bridge. The
+portal binds to `127.0.0.1`; public reachability comes from the tunnel.
+
+Cloudflare side:
 
 1. Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create tunnel.
-2. Install method: Docker → copy the `TUNNEL_TOKEN`.
+2. Install method: Docker → copy the `TUNNEL_TOKEN` into `.env` as
+   `CLOUDFLARE_TUNNEL_TOKEN`.
 3. Public Hostname: `copilot.example.com` → Service `http://127.0.0.1:3000`.
-4. (Strongly recommended) Zero Trust → Access → Applications → Self-hosted.
-   Cover the same hostname; policy: "Emails are one of: you@example.com"
-   with GitHub or Google identity provider.
+4. *(Strongly recommended)* Zero Trust → Access → Applications →
+   Self-hosted. Cover the same hostname; policy: "Emails are one of:
+   you@example.com" with GitHub or Google identity provider.
 
 With Access in front, the portal is doubly protected: CF gates at the
 network edge, and the portal's own login still applies.
+
+When fronted by a tunnel whose hostname won't match
+`event.url.origin`, also set `TUNNEL_HOST=<your-host>` in `.env` so the
+Origin/Referer check on mutating API calls is relaxed (the
+`SameSite=Lax` session cookie still blocks cross-site CSRF).
 
 ## Local development
 
 ```bash
 cp .env.example .env             # fill in dev OAuth app values
-npm ci
-npm run dev                      # SvelteKit dev server on :5173
+pnpm install
+pnpm run dev                     # SvelteKit dev server on :5173
 ```
 
 For dev, use a separate GitHub OAuth app pointing at
-`http://127.0.0.1:5173/auth/callback`. Set `AUTH_MODE=shared-secret`
-or `AUTH_MODE=none` (with `HOST=127.0.0.1` + `I_KNOW_THIS_IS_LOCAL=1`) for
+`http://127.0.0.1:5173/auth/callback`. Set `AUTH_MODE=shared-secret` or
+`AUTH_MODE=none` (with `HOST=127.0.0.1` + `I_KNOW_THIS_IS_LOCAL=1`) for
 faster iteration.
+
+For agent-driven exploratory testing, use `pnpm run dev:isolated` so
+the local DB isn't polluted. See [`AGENTS.md`](../AGENTS.md).
 
 ## Updates
 
-- Image is versioned; `docker compose pull && docker compose up -d` for
-  updates.
+- **Containerized deployment:** `docker compose pull && docker compose up -d`.
+- **Bare metal under `pnpm run serve` (the supervisor):** the in-app
+  redeploy button runs `git pull && pnpm install && pnpm run verify`
+  and exits; the supervisor relaunches on the new code. Disabled by
+  default; set `ENABLE_REDEPLOY=1` to opt in. Not used in the
+  container image (the image ships only the built tree, not the
+  source).
 - Migrations run automatically on startup; DB schema is forward-only.
-- Rolling back across a migration requires restoring a pre-update DB
+  Rolling back across a migration requires restoring a pre-update DB
   backup.
 
 ## Health and observability
 
 - `GET /api/health` → `200 {"ok":true}` if DB reachable and migrations
-  current (`{"ok":false,"error":"…"}` with status 503 on failure). Used by
-  compose healthcheck and CF Tunnel.
-- Logs to stdout as structured JSON. `docker logs -f portal` is sufficient
-  for personal use; pipe to Loki/Vector if you have one.
+  current. `503 {"ok":false,"error":"…"}` on failure. Used by the
+  compose healthcheck and Cloudflare Tunnel origin checks.
+- Logs to stdout as structured JSON. `docker logs -f portal` is
+  sufficient for personal use; pipe to Loki/Vector if you have one.
 - Metrics out of scope for v1.
 
 ## Resource expectations
@@ -146,5 +236,22 @@ faster iteration.
 - Idle: ~150 MB RAM, negligible CPU.
 - Active session: +200–400 MB while the Copilot CLI subprocess is running.
 - Per `MAX_CONCURRENT_SESSIONS=4` (default), budget ~1.5 GB peak RAM.
-- Disk: DB grows with conversation history; expect tens of MB even after
-  heavy use.
+- Disk: DB grows with conversation history; expect tens of MB even
+  after heavy use.
+
+## Building the image locally
+
+```bash
+docker build -t copilot-portal:dev .
+```
+
+For a multi-arch build matching the released image:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t copilot-portal:dev .
+```
+
+Requires `docker buildx` with QEMU set up
+(`docker run --privileged --rm tonistiigi/binfmt --install all`). The
+release workflow at [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+publishes images automatically on tag push (`v*`).
