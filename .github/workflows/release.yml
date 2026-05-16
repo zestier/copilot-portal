@@ -13,8 +13,22 @@ concurrency:
 permissions: {}
 
 jobs:
-  image:
-    runs-on: ubuntu-latest
+  # Build each architecture on its native GitHub-hosted runner (no QEMU)
+  # and push it to GHCR by digest only (no tags yet). The `merge` job
+  # below then stitches the per-arch images into a single multi-arch
+  # manifest under the human-readable tags.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     # workflow_dispatch is restricted to the default branch so that
     # manual runs from feature branches can't publish images.
     if: github.event_name == 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -24,6 +38,8 @@ jobs:
       # Required for SLSA build provenance attestations.
       id-token: write
       attestations: write
+    outputs:
+      image: ${{ steps.image.outputs.value }}
     steps:
       # All actions are SHA-pinned. Update via `pnpm run release:bump-actions`;
       # tag comments show the intended major version.
@@ -32,13 +48,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
-        with:
-          # Only used for the `deps` stage on the non-native target arch.
-          # The `build` stage runs natively via --platform=$BUILDPLATFORM.
-          platforms: arm64
 
       - name: Set up buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
@@ -50,38 +59,111 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Image name (lowercase)
+        id: image
+        run: echo "value=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Image metadata (labels only)
+        id: meta
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6
+        with:
+          images: ${{ steps.image.outputs.value }}
+
+      - name: Build and push (${{ matrix.arch }}, by digest)
+        id: build
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Push without tags; the `merge` job assembles the tagged
+          # manifest list from the resulting digests.
+          outputs: type=image,name=${{ steps.image.outputs.value }},push-by-digest=true,name-canonical=true,push=true
+          # Scope cache to the release ref and arch so unrelated
+          # workflows (CI, PR builds) cannot poison the cache used here
+          # and the two arch legs don't trample each other.
+          cache-from: type=gha,scope=release-${{ github.ref_name }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=release-${{ github.ref_name }}-${{ matrix.arch }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image name (lowercase)
+        id: image
+        run: echo "value=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.image.outputs.value }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=,format=short
 
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Scope cache to the release ref so unrelated workflows (CI,
-          # PR builds) cannot poison the cache used here.
-          cache-from: type=gha,scope=release-${{ github.ref_name }}
-          cache-to: type=gha,mode=max,scope=release-${{ github.ref_name }}
-          provenance: mode=max
-          sbom: true
+      - name: Create manifest list and push
+        id: push
+        working-directory: /tmp/digests
+        run: |
+          # shellcheck disable=SC2046,SC2086
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ steps.image.outputs.value }}@sha256:%s ' *)
 
-      # Cryptographically attest the published image so consumers can verify
+      - name: Inspect manifest digest
+        id: digest
+        run: |
+          digest=$(docker buildx imagetools inspect \
+            '${{ steps.image.outputs.value }}:${{ steps.meta.outputs.version }}' \
+            --format '{{json .Manifest}}' | jq -r .digest)
+          echo "value=$digest" >> "$GITHUB_OUTPUT"
+
+      # Cryptographically attest the published manifest so consumers can verify
       # it with `gh attestation verify`.
       - name: Attest provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
         with:
-          subject-name: ghcr.io/${{ github.repository }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-name: ${{ steps.image.outputs.value }}
+          subject-digest: ${{ steps.digest.outputs.value }}
           push-to-registry: true

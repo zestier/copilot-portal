@@ -31,7 +31,8 @@ concurrency:
 # The Docker job has no `needs:` so it starts at t=0 and runs in parallel
 # with everything else. It rebuilds from source inside Docker (it does
 # not consume the install cache) but that work is mostly base-image
-# pulls + a buildx GHA cache hit on incremental changes.
+# pulls + a buildx GHA cache hit on incremental changes. The job is a
+# matrix that builds each platform on a native runner (no QEMU).
 
 jobs:
   install:
@@ -67,7 +68,7 @@ jobs:
 
       - name: Cache node_modules
         id: nm
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: node_modules
           key: ${{ steps.key.outputs.value }}
@@ -98,7 +99,7 @@ jobs:
 
       - name: Restore node_modules
         id: nm
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: node_modules
           key: ${{ needs.install.outputs.cache-key }}
@@ -132,7 +133,7 @@ jobs:
 
       - name: Restore node_modules
         id: nm
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: node_modules
           key: ${{ needs.install.outputs.cache-key }}
@@ -165,7 +166,7 @@ jobs:
 
       - name: Restore node_modules
         id: nm
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: node_modules
           key: ${{ needs.install.outputs.cache-key }}
@@ -198,7 +199,7 @@ jobs:
 
       - name: Restore node_modules
         id: nm
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: node_modules
           key: ${{ needs.install.outputs.cache-key }}
@@ -228,12 +229,26 @@ jobs:
           if-no-files-found: ignore
 
   # Exercise the same multi-arch Docker build that release.yml publishes,
-  # but without pushing. This catches arm64-only Dockerfile/base-image
+  # but without pushing. This catches arch-specific Dockerfile/base-image
   # regressions in PRs instead of only at release time.
+  #
+  # Each platform builds on its native GitHub-hosted runner (amd64 on
+  # ubuntu-latest, arm64 on ubuntu-24.04-arm) so we don't pay the QEMU
+  # emulation tax for arm64. No QEMU is involved.
   #
   # Independent of the JS test matrix above: starts immediately on push.
   docker:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     steps:
@@ -242,21 +257,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
-        with:
-          platforms: arm64
-
       - name: Set up buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
-      - name: Build Docker image (multi-arch, no push)
+      - name: Build Docker image (${{ matrix.arch }}, no push)
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: false
-          # Scope cache to this branch so PR builds can't poison the
-          # release cache (which is keyed by release ref).
-          cache-from: type=gha,scope=ci-${{ github.ref_name }}
-          cache-to: type=gha,mode=max,scope=ci-${{ github.ref_name }}
+          # Scope cache per-branch and per-arch so PR builds can't poison
+          # the release cache (which is keyed by release ref) and the two
+          # arch legs don't trample each other's cache.
+          cache-from: type=gha,scope=ci-${{ github.ref_name }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ci-${{ github.ref_name }}-${{ matrix.arch }}
