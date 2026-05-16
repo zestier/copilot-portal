@@ -4,7 +4,7 @@ on:
     branches: ['**']
   pull_request:
 
-# Default to no permissions; the single job re-grants only `contents: read`.
+# Default to no permissions; each job re-grants only `contents: read`.
 # This means even if a step is compromised, GITHUB_TOKEN cannot push code,
 # open issues, comment on PRs, or publish packages.
 permissions: {}
@@ -15,11 +15,31 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Fan-out structure:
+#
+#   install -> lint
+#           -> check
+#           -> test
+#           -> e2e
+#   docker (independent, starts immediately)
+#
+# `install` populates a `node_modules` cache (keyed on the lockfile) plus
+# the pnpm store cache that actions/setup-node manages. Downstream jobs
+# restore both, so each one only pays the actual task cost (plus a few
+# seconds of cache restore) instead of re-installing from scratch.
+#
+# The Docker job has no `needs:` so it starts at t=0 and runs in parallel
+# with everything else. It rebuilds from source inside Docker (it does
+# not consume the install cache) but that work is mostly base-image
+# pulls + a buildx GHA cache hit on incremental changes.
+
 jobs:
-  ci:
+  install:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      cache-key: ${{ steps.key.outputs.value }}
     steps:
       # All actions are SHA-pinned. Update via `pnpm run release:bump-actions`;
       # tag comments show the intended major version.
@@ -27,14 +47,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          # Don't leave GITHUB_TOKEN configured as a git credential for
-          # subsequent steps — none of them need to push.
           persist-credentials: false
 
       - name: Set up pnpm
-        # No `version:` here — pnpm/action-setup reads `packageManager`
-        # from package.json. Pinning it in two places trips
-        # ERR_PNPM_BAD_PM_VERSION.
         uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6
 
       - name: Set up Node
@@ -43,10 +58,154 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      # Cache key shared with every downstream job. Tied to the lockfile so
+      # any dependency change invalidates it.
+      - name: Compute cache key
+        id: key
+        run: |
+          echo "value=node_modules-${{ runner.os }}-node24-${{ hashFiles('pnpm-lock.yaml') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache node_modules
+        id: nm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: node_modules
+          key: ${{ steps.key.outputs.value }}
+
+      - name: Install
+        if: steps.nm.outputs.cache-hit != 'true'
+        run: pnpm install --frozen-lockfile
+
+  lint:
+    needs: install
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Restore node_modules
+        id: nm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: node_modules
+          key: ${{ needs.install.outputs.cache-key }}
+
+      # Fallback if the cache was evicted between install and this job.
+      - name: Install (fallback)
+        if: steps.nm.outputs.cache-hit != 'true'
+        run: pnpm install --frozen-lockfile
+
       - run: pnpm run lint
+
+  check:
+    needs: install
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Restore node_modules
+        id: nm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: node_modules
+          key: ${{ needs.install.outputs.cache-key }}
+
+      - name: Install (fallback)
+        if: steps.nm.outputs.cache-hit != 'true'
+        run: pnpm install --frozen-lockfile
+
       - run: pnpm run check
+
+  test:
+    needs: install
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Restore node_modules
+        id: nm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: node_modules
+          key: ${{ needs.install.outputs.cache-key }}
+
+      - name: Install (fallback)
+        if: steps.nm.outputs.cache-hit != 'true'
+        run: pnpm install --frozen-lockfile
+
       - run: pnpm test
+
+  e2e:
+    needs: install
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Restore node_modules
+        id: nm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: node_modules
+          key: ${{ needs.install.outputs.cache-key }}
+
+      - name: Install (fallback)
+        if: steps.nm.outputs.cache-hit != 'true'
+        run: pnpm install --frozen-lockfile
 
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
@@ -68,10 +227,21 @@ jobs:
           # Don't warn the run as a result.
           if-no-files-found: ignore
 
-      # Exercise the same multi-arch Docker build that release.yml
-      # publishes, but without pushing. This catches arm64-only
-      # Dockerfile/base-image regressions in PRs instead of only at
-      # release time.
+  # Exercise the same multi-arch Docker build that release.yml publishes,
+  # but without pushing. This catches arm64-only Dockerfile/base-image
+  # regressions in PRs instead of only at release time.
+  #
+  # Independent of the JS test matrix above: starts immediately on push.
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
         with:
