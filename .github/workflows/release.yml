@@ -10,6 +10,12 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Until upstream JS actions ship Node 24 majors, opt in explicitly so
+# the deprecation warning ("Node.js 20 actions are deprecated") is
+# resolved without waiting for new releases.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 permissions: {}
 
 jobs:
