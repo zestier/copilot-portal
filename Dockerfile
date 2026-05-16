@@ -23,7 +23,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN corepack enable
 
+# `scripts/` is copied before `pnpm install` because pnpm runs the root
+# package's `prepare` lifecycle (which invokes scripts/install-git-hooks.mjs)
+# during install. The script no-ops outside a git checkout, but it still has
+# to exist on disk.
 COPY package.json pnpm-lock.yaml ./
+COPY scripts ./scripts
 RUN --mount=type=cache,id=pnpm-store-build,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
@@ -43,6 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml ./
+COPY scripts ./scripts
 RUN --mount=type=cache,id=pnpm-store-deps,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod
 
@@ -79,54 +85,6 @@ VOLUME ["/data"]
 # Project tree the agent reads and edits. Mount your repo here.
 VOLUME ["/workspace"]
 
-EXPOSE 3000
-USER node
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "build"]
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:${PORT:-3000}/api/health || exit 1
-# syntax=docker/dockerfile:1.7
-
-# ---- build ----
-FROM node:24-bookworm-slim AS build
-WORKDIR /app
-
-# Install build deps for better-sqlite3.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-# Enable pnpm via corepack.
-RUN corepack enable
-
-COPY package.json pnpm-lock.yaml .npmrc* ./
-RUN pnpm install --frozen-lockfile
-
-COPY . .
-RUN pnpm run build && pnpm prune --prod
-
-# ---- runtime ----
-FROM node:24-bookworm-slim AS runtime
-
-# git is commonly invoked by Copilot's tools; tini for clean shutdown.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates curl tini \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-ENV NODE_ENV=production \
-    HOST=0.0.0.0 \
-    PORT=3000 \
-    DATA_DIR=/data
-
-COPY --from=build /app/build ./build
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/package.json ./
-# Migrations are read from disk at runtime.
-COPY --from=build /app/src/lib/server/db/migrations ./src/lib/server/db/migrations
-
-VOLUME ["/data"]
 EXPOSE 3000
 USER node
 ENTRYPOINT ["/usr/bin/tini", "--"]

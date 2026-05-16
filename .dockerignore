@@ -18,3 +18,7 @@
 # Source the build reads.
 !src
 !static
+
+# Repo scripts (the root `prepare` lifecycle invokes one of these during
+# `pnpm install`; it no-ops outside a git checkout but must exist on disk).
+!scripts
