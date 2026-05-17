@@ -19,11 +19,9 @@ Three deployment topologies are supported:
   alongside a devcontainer that mounts the same workspace. Both
   containers must see the project tree at the same absolute path with
   matching UIDs.
-- **C. Remote CLI** *(deferred; tracked in a separate issue)* — the
-  Copilot CLI runs inside the devcontainer and the portal connects over
-  TCP via the SDK's `cliUrl` option. Useful when the agent's tools need
-  access to the devcontainer's installed toolchain. Requires a small
-  custom sidecar; not first-class supported by the CLI yet.
+- **C. Remote CLI** — the Copilot CLI runs as a long-lived headless
+  JSON-RPC server, and the portal
+  connects to it over TCP via the SDK's `cliUrl` option.
 
 ## Topology A — Standalone
 
@@ -131,16 +129,85 @@ The devcontainer remains responsible for *interactive* development
 (editor, language servers, terminals); the portal runs Copilot agents
 against the same files in the background.
 
-## Topology C — Remote CLI (future)
+## Topology C — Remote CLI
 
-Tracked separately. The SDK accepts a `cliUrl` option pointing at an
-existing CLI server, but the public CLI does not currently expose a
-long-lived server mode of its own — wiring this up requires a tiny
-sidecar process in the devcontainer that uses the SDK in
-`useStdio: false, port: N` mode and hands control to the portal. When
-implemented, this would let the agent's shell commands run in the
-devcontainer's toolchain while the portal still owns the database,
-snapshots, and UI.
+The portal can connect to an externally-managed `copilot` process
+instead of spawning the bundled one. The Copilot CLI exposes a hidden
+headless JSON-RPC server mode that the SDK's `cliUrl` option talks to.
+
+This is the right topology when:
+
+- The agent's shell tool should run inside a devcontainer (or another
+  host) with its own toolchain, while the portal stays on the host.
+- You want a single long-lived agent process whose state survives portal
+  restarts and redeploys.
+- You want the human and the portal sharing one Copilot auth — the
+  remote CLI owns its own `~/.copilot/accounts.json`; the portal does
+  not need `COPILOT_GITHUB_TOKEN` in this mode.
+
+### 1. Start the headless CLI
+
+Inside the devcontainer (or wherever you want the agent to run):
+
+```bash
+copilot login              # one-time, populates ~/.copilot/accounts.json
+copilot --headless --port 9000
+```
+
+`--headless` (alias `--server`) is undocumented in `copilot --help` but
+is the supported pairing for the SDK's `cliUrl`. It runs the CLI as a
+long-lived JSON-RPC server with no TUI. Bind to `127.0.0.1` only unless
+the portal is on a different host; the JSON-RPC server has no
+authentication of its own.
+
+Other flags that may be useful on the headless side:
+
+- `-C <directory>` — change cwd before doing anything else.
+- `--add-dir <directory>` — additional directories the CLI is allowed
+  to touch.
+- `--log-dir /some/path` — surface CLI logs somewhere you can tail.
+
+### 2. Point the portal at it
+
+Set `COPILOT_CLI_URL` to the headless server's address. Accepted forms
+(see `CopilotClient.parseCliUrl`): bare port `"9000"`, `"host:9000"`,
+or `"http://host:9000"`.
+
+```bash
+# .env
+COPILOT_CLI_URL=host.docker.internal:9000   # portal in Docker, CLI on host
+# or, when portal and CLI are on the same host network:
+# COPILOT_CLI_URL=127.0.0.1:9000
+```
+
+When `COPILOT_CLI_URL` is set, `bridge.ts` constructs the SDK client
+with `{ cliUrl, autoStart: false }` and does NOT pass `gitHubToken` or
+`useLoggedInUser` — those are mutually exclusive with `cliUrl`, and the
+remote CLI manages its own auth.
+
+### Caveats
+
+- **No auth on the JSON-RPC port.** The CLI prints a warning at
+  startup:
+
+  > Warning: No COPILOT_CONNECTION_TOKEN was set, so connections will
+  > be accepted from any client
+
+  Setting `COPILOT_CONNECTION_TOKEN` on the CLI side makes it require
+  clients to include a matching token in the handshake.
+  `@github/copilot-sdk@0.3.0` does not yet expose an option to send
+  that token, so **the portal cannot connect to a token-protected
+  CLI today**. Until the SDK adds it, keep the headless port bound to
+  loopback (or an otherwise-trusted private network). Anything that
+  can reach the port can drive the agent, including running shell
+  commands.
+- **Per-conversation working directories don't transfer.** The portal
+  passes `workingDirectory` to `createSession`, but the remote CLI
+  must already have file access to that path (start it with `-C` and
+  `--add-dir` covering everything you want the agent to touch).
+- **Restart coupling.** If the headless CLI dies, the portal's cached
+  `CopilotClient` is now pointing at nothing — restart the portal too
+  (or implement a reconnect; not done yet).
 
 ## Secrets
 

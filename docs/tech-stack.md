@@ -160,6 +160,7 @@ invalid config.
 | `ALLOWED_GITHUB_LOGINS`   | —                        | Comma-separated allowlist (`github` mode, non-empty). |
 | `SHARED_SECRET`           | —                        | If `AUTH_MODE=shared-secret`.        |
 | `COPILOT_GITHUB_TOKEN`    | —                        | Optional: forwarded to the SDK.      |
+| `COPILOT_CLI_URL`         | —                        | If set, connect to an external `copilot --headless --port N` instead of spawning the bundled CLI. See `docs/deployment.md` Topology C. |
 | `DEFAULT_MODEL`           | `claude-sonnet-4.5`      | Default model id for new conversations. |
 | `IDLE_TIMEOUT_MIN`        | `15`                     | SDK session idle reap.               |
 | `MAX_CONCURRENT_SESSIONS` | `4`                      | Hard cap on live sessions.           |

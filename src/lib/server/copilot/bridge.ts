@@ -26,14 +26,21 @@ export async function getClient(authToken?: string): Promise<CopilotClient> {
 	if (sharedClient) return sharedClient;
 	if (starting) return starting;
 	starting = (async () => {
+		const cliUrl = process.env.COPILOT_CLI_URL?.trim();
 		const client = isStubMode()
 			? (new StubCopilotClient() as unknown as CopilotClient)
-			: new CopilotClient({
-					useStdio: true,
-					autoStart: false,
-					useLoggedInUser: true,
-					gitHubToken: authToken
-				});
+			: cliUrl
+				? // Connect to an externally-managed `copilot --headless --port N`
+					// process. That process owns its own auth (run `copilot login`
+					// there); `useLoggedInUser`/`gitHubToken` are rejected by the
+					// SDK when `cliUrl` is set.
+					new CopilotClient({ cliUrl, autoStart: false })
+				: new CopilotClient({
+						useStdio: true,
+						autoStart: false,
+						useLoggedInUser: true,
+						gitHubToken: authToken
+					});
 		await client.start();
 		sharedClient = client;
 		log.info('copilot.client.started');
