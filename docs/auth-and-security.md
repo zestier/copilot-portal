@@ -44,8 +44,11 @@ a session cookie. Rate-limited (5 attempts / 15 min / IP).
 
 ### `none`
 
-Disables auth. **Only** honored when `HOST=127.0.0.1` *and* an explicit
-`I_KNOW_THIS_IS_LOCAL=1` is set. Refuses to start otherwise.
+Disables auth. **Only** honored when `HOST=127.0.0.1` (or `0.0.0.0`) *and*
+an explicit `I_KNOW_THIS_IS_LOCAL=1` is set. Refuses to start otherwise.
+Use `0.0.0.0` only when reachability is fenced off some other way — e.g.
+a container with no published port, a private network, or an
+authenticating reverse proxy in front.
 
 ## Session cookies
 

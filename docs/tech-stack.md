@@ -154,7 +154,7 @@ invalid config.
 | `SESSION_SECRET`          | *(required unless `AUTH_MODE=none`)* | Signs session cookies (≥ 32 chars). |
 | `ENCRYPTION_KEY`          | *(required, base64 of 32 raw bytes)* | At-rest encryption for tokens. |
 | `AUTH_MODE`               | `none`                   | `github` \| `shared-secret` \| `none`. |
-| `I_KNOW_THIS_IS_LOCAL`    | —                        | Must be `1` together with `HOST=127.0.0.1` for `AUTH_MODE=none`. |
+| `I_KNOW_THIS_IS_LOCAL`    | —                        | Must be `1` together with `HOST=127.0.0.1` (or `0.0.0.0`) for `AUTH_MODE=none`. |
 | `GITHUB_CLIENT_ID`        | —                        | OAuth app client id (`github` mode). |
 | `GITHUB_CLIENT_SECRET`    | —                        | OAuth app secret (`github` mode).    |
 | `ALLOWED_GITHUB_LOGINS`   | —                        | Comma-separated allowlist (`github` mode, non-empty). |
