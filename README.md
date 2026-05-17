@@ -5,8 +5,11 @@ on top of the official [`github/copilot-sdk`](https://github.com/github/copilot-
 Intended to be run on a personal/home machine and exposed via a Cloudflare Tunnel
 (or similar) for remote access from a phone or laptop.
 
-> **Status:** Initial implementation (Phases 0–2 of the roadmap). The
-> Copilot SDK is pinned to `@github/copilot-sdk@^0.3.0` (preview).
+> **Status:** Phases 0–3 of the roadmap are implemented (single-user
+> local chat, tools/permissions/diffs, OAuth + Cloudflare Tunnel
+> deployment, plus a read-only git-aware file browser and edit/retry
+> forking). The Copilot SDK is pinned to `@github/copilot-sdk@^0.3.0`
+> (preview).
 
 ## Quick start (local, no auth)
 
@@ -36,16 +39,20 @@ See [docs/deployment.md](docs/deployment.md) for the OAuth + tunnel setup.
 
 ## Scripts
 
-| Script              | Purpose                                                                               |
-| ------------------- | ------------------------------------------------------------------------------------- |
-| `pnpm run dev`      | Vite dev server with HMR.                                                             |
-| `pnpm run build`    | Production build into `build/`.                                                       |
-| `pnpm start`        | Run the production build (`node build`).                                              |
-| `pnpm run check`    | `svelte-check` + TS.                                                                  |
-| `pnpm run lint`     | ESLint + Prettier check.                                                              |
-| `pnpm test`         | Vitest unit tests.                                                                    |
-| `pnpm run test:e2e` | Build + Playwright e2e (uses stubbed Copilot).                                        |
-| `pnpm run verify`   | Lint + check + unit + e2e. Same gate the redeploy button and the pre-commit hook run. |
+| Script                          | Purpose                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------- |
+| `pnpm run dev`                  | Vite dev server with HMR.                                                             |
+| `pnpm run dev:isolated`         | Like `dev`, but points `DATA_DIR` at a fresh temp dir. See [AGENTS.md](AGENTS.md).    |
+| `pnpm run build`                | Production build into `build/`.                                                       |
+| `pnpm start`                    | Run the production build (`node build`).                                              |
+| `pnpm run serve`                | Supervisor that runs the build from `build.live/` and supports in-app redeploy.       |
+| `pnpm run check`                | `svelte-check` + TS.                                                                  |
+| `pnpm run lint`                 | ESLint + Prettier check.                                                              |
+| `pnpm run format`               | Prettier write.                                                                       |
+| `pnpm test`                     | Vitest unit tests.                                                                    |
+| `pnpm run test:e2e`             | Build + Playwright e2e (uses stubbed Copilot).                                        |
+| `pnpm run verify`               | Lint + check + unit + e2e. Same gate the redeploy button and the pre-commit hook run. |
+| `pnpm run release:bump-actions` | Pin GitHub Actions in `.github/workflows/` to current SHAs.                           |
 
 This project uses **pnpm** (declared via `packageManager` in `package.json`).
 Use `corepack enable` once to make pnpm available without a global install.

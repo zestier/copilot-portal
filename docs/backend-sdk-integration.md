@@ -11,57 +11,56 @@ agent sessions.
 
 A thin wrapper that:
 
-1. Instantiates one SDK client per conversation, scoped to that conversation's
-   working directory.
-2. Translates SDK events into the normalized `PortalEvent` discriminated union
-   defined in `$lib/types.ts`.
-3. Handles backpressure: SSE writes are awaited; if a client disconnects, the
-   stream is cancelled and the SDK call aborted via `AbortController`.
+1. Owns a single process-wide `CopilotClient` (the SDK's child process),
+   started lazily on first use and reused across conversations.
+2. Opens a per-conversation **session** on top of that shared client,
+   scoped to the conversation's working directory.
+3. Translates SDK events into the normalized `PortalEvent` discriminated
+   union defined in `$lib/types.ts`.
+4. Handles backpressure: SSE writes are awaited; if a client disconnects,
+   the stream is cancelled and the SDK call aborted via `AbortController`.
 
 ### Sketch
 
 ```ts
 // $lib/server/copilot/bridge.ts
-import { Copilot } from "@github/copilot-sdk";
-import type { PortalEvent } from "$lib/types";
+import { CopilotClient } from '@github/copilot-sdk';
+import type { PortalEvent } from '$lib/types';
 
-export interface BridgeOptions {
-  conversationId: string;
-  workingDirectory: string;
-  model?: string;
-  authToken?: string;          // forwarded as COPILOT_GITHUB_TOKEN env
-  onPermission: (req: PermissionRequest) => Promise<PermissionDecision>;
-  signal: AbortSignal;
+let shared: CopilotClient | null = null;
+
+async function getClient(authToken?: string): Promise<CopilotClient> {
+  if (shared) return shared;
+  shared = new CopilotClient({
+    useStdio: true,
+    autoStart: false,
+    useLoggedInUser: true,
+    gitHubToken: authToken
+  });
+  await shared.start();
+  return shared;
 }
 
-export class CopilotBridge {
-  private client: Copilot;
-  constructor(private opts: BridgeOptions) {
-    this.client = new Copilot({
-      cwd: opts.workingDirectory,
-      model: opts.model,
-      env: opts.authToken ? { COPILOT_GITHUB_TOKEN: opts.authToken } : undefined,
-      // SDK exposes a permission handler hook:
-      onToolPermissionRequest: opts.onPermission,
-    });
-  }
+export interface BridgeOpenOptions {
+  conversationId: string;
+  userId: string;
+  workingDirectory: string;
+  model: string;
+  policy: PermissionPolicy;
+  authToken?: string;
+  onEvent?: (e: PortalEvent) => void;
+}
 
-  async *send(prompt: string): AsyncIterable<PortalEvent> {
-    const stream = this.client.sendMessage(prompt, { signal: this.opts.signal });
-    for await (const ev of stream) {
-      yield* normalize(ev);
-    }
-  }
-
-  async close() {
-    await this.client.dispose();
-  }
+export async function open(opts: BridgeOpenOptions): Promise<ConversationSession> {
+  const client = await getClient(opts.authToken);
+  // … returns a per-conversation Session that wraps client.openSession(…)
+  // and exposes send(prompt) -> AsyncIterable<PortalEvent>.
 }
 ```
 
-`normalize()` is a pure function in the same module that maps SDK event shapes
-to `PortalEvent`. It is the single point of coupling to the SDK's wire format;
-when the SDK changes, this is the only file that needs updating (plus tests).
+The SDK event → `PortalEvent` mapping is a pure function inside the same
+module. It is the single point of coupling to the SDK's wire format; when
+the SDK changes, this is the only file that needs updating (plus tests).
 
 ### Context-window usage events
 
@@ -86,18 +85,19 @@ view is needed.
 ## Module: `$lib/server/copilot/pool.ts`
 
 ```ts
-// Singleton, per-process.
-const clients = new Map<string, { bridge: CopilotBridge; lastUsed: number }>();
+// Singleton, per-process. Tracks per-conversation sessions on top of
+// the bridge's shared CopilotClient.
+const sessions = new Map<string, { session: ConversationSession; lastUsed: number }>();
 
-export async function acquire(convId: string, opts: BridgeOptions) { ... }
-export function touch(convId: string) { ... }
-export async function release(convId: string) { ... }
+export async function acquire(opts: BridgeOpenOptions): Promise<ConversationSession> { ... }
+export function touch(convId: string): void { ... }
+export async function release(convId: string): Promise<void> { ... }
 
 // Idle reaper, started in hooks.server.ts:
 export function startIdleReaper(idleMs: number) {
   setInterval(async () => {
     const now = Date.now();
-    for (const [id, entry] of clients) {
+    for (const [id, entry] of sessions) {
       if (now - entry.lastUsed > idleMs) await release(id);
     }
   }, 60_000).unref();

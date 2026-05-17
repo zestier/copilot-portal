@@ -86,14 +86,21 @@ Three strategies, configurable per user:
 
 ## Working-directory containment
 
-- Conversations are pinned to a directory at creation; it cannot be changed
-  after the first message. (Renaming via settings is a delete + recreate.)
-- The portal enforces that the directory is within an allowlist
-  (`DATA_DIR/workspaces/` by default, plus any explicit
-  `ALLOWED_WORKDIRS` entries). Symlinks resolved with `realpath`; any
-  resolution outside the allowlist is rejected.
-- The Copilot CLI itself does additional containment within that directory;
-  we don't try to second-guess it.
+- The Copilot SDK is pointed at a single directory — `PROJECT_ROOT`
+  (env, defaulting to the server process's cwd). All conversations
+  share that workdir; the per-conversation `workdir` column exists for
+  historical reasons but resolves back to `PROJECT_ROOT` via
+  `src/lib/server/workdir.ts`.
+- No allowlist is enforced. The portal is a single-trusted-user app;
+  if you can log in, you can already make the agent run shell
+  commands, so policing the chosen directory adds no real defence.
+- The read-only file browser and git endpoints (`/api/conversations/[id]/fs/*`,
+  `/api/conversations/[id]/git/*`) constrain paths to the workspace
+  root's realpath; symlinks that resolve outside it are rejected, and
+  `git` is spawned with `shell: false`, hard timeouts, and output
+  size caps.
+- The Copilot CLI itself does additional containment within that
+  directory; we don't try to second-guess it.
 
 ## Tool permissions
 
