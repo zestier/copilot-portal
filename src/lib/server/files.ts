@@ -17,26 +17,36 @@ import {
 } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve, join, relative, sep, isAbsolute, normalize } from 'node:path';
+import { projectRoot } from './workdir';
 
 /**
- * The root the file browser operates on. We use the server process's working
- * directory at startup, resolved to its realpath. This is independent of any
- * per-conversation workdir (which exists for the SDK's working set isolation).
+ * The root the file browser and git endpoints operate on. Tracks the
+ * configured PROJECT_ROOT (env var, default `process.cwd()`) so the
+ * sidebar file tree and git panel show the same tree the Copilot SDK is
+ * editing. Resolved to its realpath; the result is cached per-root so a
+ * mid-run PROJECT_ROOT change (test helpers) is honored without paying
+ * the realpath() cost on every request.
  */
-let cachedWorkspaceRoot: string | null = null;
+let cachedFor: string | null = null;
+let cachedReal: string | null = null;
 export function workspaceRoot(): string {
-	if (cachedWorkspaceRoot !== null) return cachedWorkspaceRoot;
+	const root = projectRoot();
+	if (cachedFor === root && cachedReal !== null) return cachedReal;
+	let real: string;
 	try {
-		cachedWorkspaceRoot = realpathSync(process.cwd());
+		real = realpathSync(root);
 	} catch {
-		cachedWorkspaceRoot = resolve(process.cwd());
+		real = resolve(root);
 	}
-	return cachedWorkspaceRoot;
+	cachedFor = root;
+	cachedReal = real;
+	return real;
 }
 
 /** Test-only: reset the cached workspace root. */
 export function resetWorkspaceRootForTests() {
-	cachedWorkspaceRoot = null;
+	cachedFor = null;
+	cachedReal = null;
 }
 
 export interface DirEntry {
