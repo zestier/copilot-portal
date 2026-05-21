@@ -1,4 +1,4 @@
-import { redirect } from '@sveltejs/kit';
+import { redirect, fail } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { PageServerLoad, Actions } from './$types';
 import * as settings from '$lib/server/db/repos/settings';
@@ -11,6 +11,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.userId) throw redirect(302, '/login');
 	const cfg = loadConfig();
 	const authToken = tokens.getGithubToken(locals.userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
+
+	// Garbage-collect expired grants on load so the management table
+	// doesn't show TTL'd rows the matcher is already ignoring.
+	const purged = settings.pruneExpiredGrants();
+	if (purged > 0) log.info('settings.grants_pruned', { count: purged });
 
 	let copilot: {
 		auth: { isAuthenticated: boolean; authType?: string; login?: string; statusMessage?: string };
@@ -41,6 +46,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		settings: settings.get(locals.userId) ?? settings.defaults(),
 		copilot,
 		recentDecisions: settings.listRecentDecisionsForUser(locals.userId, 25),
+		grants: settings.listGrantsForUser(locals.userId),
 		enableRedeploy: cfg.ENABLE_REDEPLOY
 	};
 };
@@ -72,6 +78,18 @@ export const actions: Actions = {
 			theme: parsed.data.theme
 		};
 		settings.save(locals.userId, next);
+		return { ok: true };
+	},
+	revokeGrant: async ({ request, locals }) => {
+		if (!locals.userId) return fail(401, { ok: false, error: 'Not authenticated' });
+		const data = await request.formData();
+		const id = Number(data.get('id'));
+		if (!Number.isInteger(id) || id <= 0) {
+			return fail(400, { ok: false, error: 'Invalid grant id' });
+		}
+		const removed = settings.revokeGrant(locals.userId, id);
+		if (!removed) return fail(404, { ok: false, error: 'Grant not found' });
+		log.info('settings.grant_revoked', { userId: locals.userId, id });
 		return { ok: true };
 	}
 };

@@ -70,6 +70,48 @@ describe('db migrations + repos', () => {
 		expect(settings.hasGrant(u.id, c.id, 'read')).toBe(true);
 	});
 
+	it('lists and revokes grants per user; prune drops expired rows', () => {
+		const u = users.ensureLocalUser();
+		const other = users.upsertGithub({
+			githubLogin: 'rival',
+			githubId: 7,
+			displayName: null,
+			avatarUrl: null
+		});
+		const c = convs.create(u.id, { title: 'main', workdir: '/tmp', model: null });
+		settings.addGrant({ userId: u.id, conversationId: c.id, tool: 'shell' });
+		settings.addGrant({
+			userId: u.id,
+			conversationId: null,
+			tool: 'read',
+			expiresAt: Date.now() - 1000
+		});
+		settings.addGrant({ userId: other.id, conversationId: null, tool: 'shell' });
+
+		// Each user only sees their own grants.
+		const mine = settings.listGrantsForUser(u.id);
+		expect(mine.map((g) => g.tool).sort()).toEqual(['read', 'shell']);
+		expect(settings.listGrantsForUser(other.id).map((g) => g.tool)).toEqual(['shell']);
+
+		// Conversation title comes through the join for conversation-scoped rows.
+		const shellGrant = mine.find((g) => g.tool === 'shell')!;
+		expect(shellGrant.conversationTitle).toBe('main');
+		expect(shellGrant.conversationId).toBe(c.id);
+
+		// Pruning drops the expired global 'read' grant, nothing else.
+		const purged = settings.pruneExpiredGrants();
+		expect(purged).toBe(1);
+		expect(settings.listGrantsForUser(u.id).map((g) => g.tool)).toEqual(['shell']);
+
+		// Revoke is scoped to the owner — another user can't delete my row.
+		const target = settings.listGrantsForUser(u.id)[0];
+		expect(settings.revokeGrant(other.id, target.id)).toBe(false);
+		expect(settings.revokeGrant(u.id, target.id)).toBe(true);
+		expect(settings.listGrantsForUser(u.id)).toEqual([]);
+		// Idempotent.
+		expect(settings.revokeGrant(u.id, target.id)).toBe(false);
+	});
+
 	it('archives and unarchives conversations and filters list accordingly', () => {
 		const u = users.ensureLocalUser();
 		const a = convs.create(u.id, { title: 'a', workdir: '/tmp', model: null });

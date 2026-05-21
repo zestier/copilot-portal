@@ -102,6 +102,22 @@
 				return 'Deny always';
 		}
 	}
+
+	function grantScopeLabel(g: { conversationId: string | null; conversationTitle: string | null }) {
+		if (!g.conversationId) return 'Global';
+		return g.conversationTitle ?? g.conversationId;
+	}
+
+	function formatExpiry(ms: number | null): string {
+		if (ms == null) return 'Never';
+		const delta = ms - Date.now();
+		if (delta <= 0) return 'expired';
+		const mins = Math.round(delta / 60_000);
+		if (mins < 60) return `in ${mins}m`;
+		const hours = Math.round(mins / 60);
+		if (hours < 48) return `in ${hours}h`;
+		return `in ${Math.round(hours / 24)}d`;
+	}
 </script>
 
 <svelte:head><title>Settings — Copilot Portal</title></svelte:head>
@@ -180,6 +196,44 @@
 	<form method="POST" action="/logout" class="logout-form">
 		<button class="btn">Log out</button>
 	</form>
+
+	<section class="grants">
+		<h2>Saved permission grants</h2>
+		{#if data.grants.length === 0}
+			<p class="muted small">
+				No saved grants. When you click "Allow always" or "Deny always" on a tool prompt, the
+				resulting rule shows up here so you can revoke it later.
+			</p>
+		{:else}
+			<p class="muted small">
+				{data.grants.length} active grant{data.grants.length === 1 ? '' : 's'}. Expired grants are
+				cleared automatically when you load this page.
+			</p>
+			<ul class="grant-list">
+				{#each data.grants as g (g.id)}
+					<li class="grant-row">
+						<span class="decision-tag {g.decision}"
+							>{g.decision === 'allow' ? 'Allow' : 'Deny'}</span
+						>
+						<code class="tool">{g.tool}</code>
+						<span class="kind">{g.permissionKind ?? 'any kind'}</span>
+						<code class="pattern" title={g.scopePattern ?? 'any scope'}>
+							{g.scopePattern ?? '*'}
+						</code>
+						<span class="meta">
+							{grantScopeLabel(g)} · granted {formatTime(g.grantedAt)} · expires {formatExpiry(
+								g.expiresAt
+							)}
+						</span>
+						<form method="POST" action="?/revokeGrant" class="revoke">
+							<input type="hidden" name="id" value={g.id} />
+							<button class="btn small" type="submit">Revoke</button>
+						</form>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</section>
 
 	<section class="decisions">
 		<h2>Recent permission decisions</h2>
@@ -417,5 +471,60 @@
 		margin-left: auto;
 		font-size: 0.8em;
 		opacity: 0.75;
+	}
+	.grants {
+		margin-top: 2rem;
+		padding-top: 1.5rem;
+		border-top: 1px solid var(--border);
+	}
+	.grants h2 {
+		margin: 0 0 0.5rem;
+		font-size: 1.05rem;
+	}
+	.grant-list {
+		list-style: none;
+		padding: 0;
+		margin: 0.75rem 0 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+	.grant-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.5rem;
+		padding: 0.4rem 0.6rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--surface);
+		font-size: 0.9em;
+	}
+	.grant-row .tool {
+		font-weight: 600;
+	}
+	.grant-row .kind {
+		font-size: 0.8em;
+		opacity: 0.75;
+	}
+	.grant-row .pattern {
+		font-family: var(--font-mono, monospace);
+		font-size: 0.85em;
+		opacity: 0.85;
+		max-width: 28ch;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.grant-row .meta {
+		font-size: 0.8em;
+		opacity: 0.75;
+	}
+	.grant-row .revoke {
+		margin-left: auto;
+	}
+	.btn.small {
+		padding: 0.2rem 0.55rem;
+		font-size: 0.8em;
 	}
 </style>

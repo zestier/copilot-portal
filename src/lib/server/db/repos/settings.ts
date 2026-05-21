@@ -180,6 +180,85 @@ export function addGrant(opts: AddGrantOptions) {
 		);
 }
 
+export interface GrantSummary {
+	id: number;
+	conversationId: string | null;
+	conversationTitle: string | null;
+	tool: string;
+	permissionKind: string | null;
+	scopePattern: string | null;
+	decision: GrantDecision;
+	expiresAt: number | null;
+	grantedAt: number;
+}
+
+/**
+ * Every grant the user owns, oldest expiry / newest grant first. Joins
+ * `conversations` so the UI can show "in <title>" for conversation-scoped
+ * rows; user-global rows return `conversationTitle = null`.
+ *
+ * Uses SQLite's implicit `rowid` as a stable per-row id for revocation
+ * (the table has no other unique key — two identical-shape grants are
+ * legal, just redundant).
+ */
+export function listGrantsForUser(userId: string): GrantSummary[] {
+	const rows = getDb()
+		.prepare(
+			`SELECT pg.rowid AS id, pg.conversation_id, c.title AS conversation_title,
+			        pg.tool, pg.permission_kind, pg.scope_pattern, pg.decision,
+			        pg.expires_at, pg.granted_at
+			 FROM permission_grants pg
+			 LEFT JOIN conversations c ON c.id = pg.conversation_id
+			 WHERE pg.user_id = ?
+			 ORDER BY pg.granted_at DESC, pg.rowid DESC`
+		)
+		.all(userId) as Array<{
+		id: number;
+		conversation_id: string | null;
+		conversation_title: string | null;
+		tool: string;
+		permission_kind: string | null;
+		scope_pattern: string | null;
+		decision: string;
+		expires_at: number | null;
+		granted_at: number;
+	}>;
+	return rows.map((r) => ({
+		id: r.id,
+		conversationId: r.conversation_id,
+		conversationTitle: r.conversation_title,
+		tool: r.tool,
+		permissionKind: r.permission_kind,
+		scopePattern: r.scope_pattern,
+		decision: r.decision === 'deny' ? 'deny' : 'allow',
+		expiresAt: r.expires_at,
+		grantedAt: r.granted_at
+	}));
+}
+
+/**
+ * Delete a single grant by rowid. Scoped to `userId` so users can only
+ * revoke their own. Returns true iff a row was removed.
+ */
+export function revokeGrant(userId: string, id: number): boolean {
+	const r = getDb()
+		.prepare(`DELETE FROM permission_grants WHERE rowid = ? AND user_id = ?`)
+		.run(id, userId);
+	return r.changes > 0;
+}
+
+/**
+ * Drop grants past their TTL. The matcher already ignores expired rows at
+ * read time, so this is purely housekeeping — keeping the settings page
+ * from accumulating dead rows.
+ */
+export function pruneExpiredGrants(now: number = Date.now()): number {
+	const r = getDb()
+		.prepare(`DELETE FROM permission_grants WHERE expires_at IS NOT NULL AND expires_at < ?`)
+		.run(now);
+	return r.changes;
+}
+
 export function recordDecision(
 	conversationId: string,
 	tool: string,
