@@ -69,7 +69,7 @@
 			{/if}
 		{:else if toolCall.resultJson}
 			{#if synthDiff}
-				<DiffView path={synthDiff.path} diff={synthDiff.diff} />
+				<DiffView path={synthDiff.path} diff={synthDiff.diff} showLineNumbers={false} />
 			{:else}
 				{#each decoded.blocks as block, i (i)}
 					<ResultBlock {block} />
