@@ -81,6 +81,25 @@
 		const via = a.authType ? ` via ${a.authType}` : '';
 		return `${who}${via}`;
 	}
+
+	function formatTime(ms: number): string {
+		try {
+			return new Date(ms).toLocaleString();
+		} catch {
+			return String(ms);
+		}
+	}
+
+	function decisionLabel(d: 'allow-once' | 'allow-always' | 'deny'): string {
+		switch (d) {
+			case 'allow-once':
+				return 'Allow once';
+			case 'allow-always':
+				return 'Allow always';
+			case 'deny':
+				return 'Deny';
+		}
+	}
 </script>
 
 <svelte:head><title>Settings — Copilot Portal</title></svelte:head>
@@ -136,8 +155,7 @@
 		<label>
 			Permission policy
 			<select name="defaultPolicy" value={s.defaultPolicy}>
-				<option value="prompt">Prompt for non-read tools (default)</option>
-				<option value="allow-readonly">Auto-allow read-only tools</option>
+				<option value="prompt">Auto-allow read-only tools, prompt otherwise (default)</option>
 				<option value="allow-all">Allow all (dangerous)</option>
 				<option value="deny-all">Deny all</option>
 			</select>
@@ -160,6 +178,34 @@
 	<form method="POST" action="/logout" class="logout-form">
 		<button class="btn">Log out</button>
 	</form>
+
+	<section class="decisions">
+		<h2>Recent permission decisions</h2>
+		{#if data.recentDecisions.length === 0}
+			<p class="muted small">No permission requests have been answered yet.</p>
+		{:else}
+			<p class="muted small">
+				The last {data.recentDecisions.length} tool permission decisions across your conversations. "Allow
+				always" rows also installed a grant for that tool in the listed conversation.
+			</p>
+			<ul class="decision-list">
+				{#each data.recentDecisions as d (d.id)}
+					<li class="decision-row">
+						<span class="decision-tag {d.decision}">{decisionLabel(d.decision)}</span>
+						<code class="tool">{d.tool}</code>
+						{#if d.argsSummary}<span class="args" title={d.argsSummary}>{d.argsSummary}</span>{/if}
+						<span class="meta">
+							in
+							<a href="/conversations/{d.conversationId}"
+								>{d.conversationTitle ?? d.conversationId}</a
+							>
+							· {formatTime(d.decidedAt)}
+						</span>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</section>
 
 	{#if data.enableRedeploy}
 		<section class="deploy">
@@ -302,5 +348,71 @@
 		font-size: var(--code-fs);
 		white-space: pre-wrap;
 		word-break: break-word;
+	}
+	.decisions {
+		margin-top: 2rem;
+		padding-top: 1.5rem;
+		border-top: 1px solid var(--border);
+	}
+	.decisions h2 {
+		margin: 0 0 0.5rem;
+		font-size: 1.05rem;
+	}
+	.decision-list {
+		list-style: none;
+		padding: 0;
+		margin: 0.75rem 0 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+	.decision-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.5rem;
+		padding: 0.4rem 0.6rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--surface);
+		font-size: 0.9em;
+	}
+	.decision-tag {
+		font-size: 0.75em;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		padding: 0.1rem 0.4rem;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--border);
+	}
+	.decision-tag.allow-once {
+		color: var(--success);
+		border-color: var(--success);
+	}
+	.decision-tag.allow-always {
+		color: var(--success);
+		border-color: var(--success);
+		background: var(--success-bg, transparent);
+	}
+	.decision-tag.deny {
+		color: var(--danger);
+		border-color: var(--danger);
+	}
+	.decision-row .tool {
+		font-weight: 600;
+	}
+	.decision-row .args {
+		font-family: var(--font-mono, monospace);
+		font-size: 0.85em;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		opacity: 0.85;
+	}
+	.decision-row .meta {
+		margin-left: auto;
+		font-size: 0.8em;
+		opacity: 0.75;
 	}
 </style>

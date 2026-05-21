@@ -12,10 +12,15 @@ interface SettingsRow {
 }
 
 function rowToSettings(r: SettingsRow): UserSettings {
+	const raw = r.default_policy;
+	// Migration 008 rewrites 'allow-readonly' → 'prompt', but be defensive
+	// against any straggler rows (e.g., a connection that opened before the
+	// migration ran in dev HMR).
+	const policy: PermissionPolicy = raw === 'allow-all' || raw === 'deny-all' ? raw : 'prompt';
 	return {
 		defaultModel: r.default_model,
 		defaultWorkdir: r.default_workdir,
-		defaultPolicy: r.default_policy as PermissionPolicy,
+		defaultPolicy: policy,
 		theme: r.theme === 'light' ? 'light' : r.theme === 'system' ? 'system' : 'dark'
 	};
 }
@@ -96,4 +101,50 @@ export function recordDecision(
 			 VALUES (?, ?, ?, ?, ?, ?)`
 		)
 		.run(id, conversationId, tool, argsSummary, decision, Date.now());
+}
+
+export interface PermissionDecisionRecord {
+	id: string;
+	conversationId: string;
+	conversationTitle: string | null;
+	tool: string;
+	argsSummary: string | null;
+	decision: 'allow-once' | 'allow-always' | 'deny';
+	decidedAt: number;
+}
+
+/**
+ * Most recent permission decisions across all conversations owned by
+ * `userId`. Used by the settings page audit panel so users can see what
+ * tools they've been approving (or denying) without spelunking SQLite.
+ */
+export function listRecentDecisionsForUser(userId: string, limit = 50): PermissionDecisionRecord[] {
+	const rows = getDb()
+		.prepare(
+			`SELECT pd.id, pd.conversation_id, c.title AS conversation_title,
+			        pd.tool, pd.args_summary, pd.decision, pd.decided_at
+			 FROM permission_decisions pd
+			 JOIN conversations c ON c.id = pd.conversation_id
+			 WHERE c.user_id = ?
+			 ORDER BY pd.decided_at DESC, pd.id DESC
+			 LIMIT ?`
+		)
+		.all(userId, limit) as Array<{
+		id: string;
+		conversation_id: string;
+		conversation_title: string | null;
+		tool: string;
+		args_summary: string | null;
+		decision: string;
+		decided_at: number;
+	}>;
+	return rows.map((r) => ({
+		id: r.id,
+		conversationId: r.conversation_id,
+		conversationTitle: r.conversation_title,
+		tool: r.tool,
+		argsSummary: r.args_summary,
+		decision: r.decision as 'allow-once' | 'allow-always' | 'deny',
+		decidedAt: r.decided_at
+	}));
 }

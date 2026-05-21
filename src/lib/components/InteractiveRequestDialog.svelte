@@ -58,6 +58,20 @@
 	function fieldLabel(name: string, f: ElicitationSchemaField): string {
 		return f.title ?? name;
 	}
+
+	// Pretty-print permission `args` so the user can see exactly what the
+	// tool will receive. The SDK's permission summary often collapses to
+	// just a file name or command, hiding flags / payloads that matter.
+	function formatArgs(args: unknown): string | null {
+		if (args === null || args === undefined) return null;
+		if (typeof args === 'string') return args.length > 0 ? args : null;
+		try {
+			const s = JSON.stringify(args, null, 2);
+			return s && s !== '{}' && s !== '[]' ? s : null;
+		} catch {
+			return String(args);
+		}
+	}
 </script>
 
 <div class="interactive" role="alertdialog" aria-modal="true">
@@ -69,6 +83,12 @@
 				<span class="muted">({request.permissionKind})</span>
 			</div>
 			<pre>{request.summary}</pre>
+			{#if formatArgs(request.args)}
+				<details class="args">
+					<summary>Arguments</summary>
+					<pre>{formatArgs(request.args)}</pre>
+				</details>
+			{/if}
 		</div>
 		<div class="actions">
 			<button
@@ -338,6 +358,18 @@
 		overflow: auto;
 		margin-top: 0.4rem;
 		font-size: 0.85em;
+	}
+	.body details.args {
+		margin-top: 0.4rem;
+		font-size: 0.85em;
+	}
+	.body details.args > summary {
+		cursor: pointer;
+		opacity: 0.8;
+	}
+	.body details.args pre {
+		margin-top: 0.3rem;
+		max-height: 240px;
 	}
 	.actions {
 		display: flex;

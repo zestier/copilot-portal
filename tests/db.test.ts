@@ -114,14 +114,29 @@ describe('db migrations + repos', () => {
 		settings.save(u.id, {
 			defaultModel: 'claude',
 			defaultWorkdir: null,
-			defaultPolicy: 'allow-readonly',
+			defaultPolicy: 'allow-all',
 			theme: 'light'
 		});
 		expect(settings.get(u.id)).toEqual({
 			defaultModel: 'claude',
 			defaultWorkdir: null,
-			defaultPolicy: 'allow-readonly',
+			defaultPolicy: 'allow-all',
 			theme: 'light'
 		});
+	});
+
+	it('coerces a stale legacy allow-readonly policy row to prompt', () => {
+		const u = users.ensureLocalUser();
+		settings.save(u.id, {
+			defaultModel: null,
+			defaultWorkdir: null,
+			defaultPolicy: 'prompt',
+			theme: 'dark'
+		});
+		// Simulate a row that escaped migration 008.
+		getDb()
+			.prepare('UPDATE user_settings SET default_policy = ? WHERE user_id = ?')
+			.run('allow-readonly', u.id);
+		expect(settings.get(u.id)?.defaultPolicy).toBe('prompt');
 	});
 });

@@ -135,7 +135,23 @@ export function resolve(requestId: string, userId: string, response: Interactive
 				response.decision
 			);
 			if (response.decision === 'allow-always') {
-				settingsRepo.addGrant(userId, p.conversationId, p.view.tool);
+				// Defense in depth: if the user's current policy is deny-all,
+				// don't persist a grant that would silently override it on the
+				// next call. Under normal flow, decideByPolicy would have
+				// short-circuited before the dialog ever appeared, so this
+				// branch only fires if a stale dialog or non-standard caller
+				// reached here.
+				const s = settingsRepo.get(userId);
+				if (s && s.defaultPolicy === 'deny-all') {
+					log.warn('interactive.allow_always_under_deny_all_ignored', {
+						requestId,
+						userId,
+						conversationId: p.conversationId,
+						tool: p.view.tool
+					});
+				} else {
+					settingsRepo.addGrant(userId, p.conversationId, p.view.tool);
+				}
 			}
 		} catch (e) {
 			log.warn('interactive.permission_persist_failed', { requestId, err: String(e) });
@@ -238,20 +254,10 @@ export function decideByPolicy(
 			return 'approved';
 		case 'deny-all':
 			return 'denied';
-		case 'allow-readonly':
-			return READ_ONLY_PERMISSION_KINDS.has(pk) ? 'approved' : 'ask';
 		case 'prompt':
 		default:
 			return READ_ONLY_PERMISSION_KINDS.has(pk) ? 'approved' : 'ask';
 	}
-}
-
-/** @deprecated kept for legacy callers — prefer the InteractiveResponse path. */
-export function permissionDecisionFromPolicy(
-	policy: PermissionPolicy,
-	permissionKind: string
-): 'approved' | 'denied' | 'ask' {
-	return decideByPolicy(policy, 'permission', permissionKind);
 }
 
 // Re-export so existing imports keep working through the rename.

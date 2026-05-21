@@ -40,6 +40,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		settings: settings.get(locals.userId) ?? settings.defaults(),
 		copilot,
+		recentDecisions: settings.listRecentDecisionsForUser(locals.userId, 25),
 		enableRedeploy: cfg.ENABLE_REDEPLOY
 	};
 };
@@ -47,7 +48,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 const SaveSchema = z.object({
 	defaultModel: z.string().optional(),
 	defaultWorkdir: z.string().optional(),
-	defaultPolicy: z.enum(['prompt', 'allow-readonly', 'allow-all', 'deny-all']),
+	defaultPolicy: z.enum(['prompt', 'allow-all', 'deny-all']),
 	theme: z.enum(['dark', 'light', 'system'])
 });
 

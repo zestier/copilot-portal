@@ -26,14 +26,12 @@ describe('decideByPolicy', () => {
 		expect(decideByPolicy('allow-all', 'user_input')).toBe('ask');
 		expect(decideByPolicy('deny-all', 'elicitation')).toBe('ask');
 	});
-	it('permission kind respects the legacy policy table', () => {
+	it('permission kind respects the policy table', () => {
 		expect(decideByPolicy('allow-all', 'permission', 'shell')).toBe('approved');
 		expect(decideByPolicy('deny-all', 'permission', 'read')).toBe('denied');
-		expect(decideByPolicy('allow-readonly', 'permission', 'read')).toBe('approved');
-		expect(decideByPolicy('allow-readonly', 'permission', 'url')).toBe('approved');
-		expect(decideByPolicy('allow-readonly', 'permission', 'shell')).toBe('ask');
 		expect(decideByPolicy('prompt', 'permission', 'shell')).toBe('ask');
 		expect(decideByPolicy('prompt', 'permission', 'read')).toBe('approved');
+		expect(decideByPolicy('prompt', 'permission', 'url')).toBe('approved');
 	});
 });
 
@@ -168,5 +166,42 @@ describe('interactive request registry', () => {
 			resolve(requestId, userId, { kind: 'permission', decision: 'allow-once' })
 		).not.toThrow();
 		expect(getResolved()).toEqual({ kind: 'permission', decision: 'allow-once' });
+	});
+
+	it('allow-always installs a grant for the tool in the conversation', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const requestId = newRequestId();
+		makePending('permission', permView(requestId), undefined);
+		expect(settings.hasGrant(userId, conversationId, 'shell')).toBe(false);
+		resolve(requestId, userId, { kind: 'permission', decision: 'allow-always' });
+		expect(settings.hasGrant(userId, conversationId, 'shell')).toBe(true);
+	});
+
+	it('refuses to persist an allow-always grant when policy is deny-all', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		settings.save(userId, {
+			defaultModel: null,
+			defaultWorkdir: null,
+			defaultPolicy: 'deny-all',
+			theme: 'dark'
+		});
+		const requestId = newRequestId();
+		makePending('permission', permView(requestId), undefined);
+		resolve(requestId, userId, { kind: 'permission', decision: 'allow-always' });
+		expect(settings.hasGrant(userId, conversationId, 'shell')).toBe(false);
+	});
+
+	it('lists recent permission decisions for the user', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		for (const decision of ['allow-once', 'deny', 'allow-always'] as const) {
+			const requestId = newRequestId();
+			makePending('permission', permView(requestId), undefined);
+			resolve(requestId, userId, { kind: 'permission', decision });
+		}
+		const recent = settings.listRecentDecisionsForUser(userId, 10);
+		expect(recent).toHaveLength(3);
+		expect(recent[0].decision).toBe('allow-always');
+		expect(recent[0].tool).toBe('shell');
+		expect(recent[0].conversationId).toBe(conversationId);
 	});
 });

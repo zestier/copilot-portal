@@ -98,7 +98,12 @@ export interface UserSettings {
 	theme: 'dark' | 'light' | 'system';
 }
 
-export type PermissionPolicy = 'prompt' | 'allow-readonly' | 'allow-all' | 'deny-all';
+// 'prompt' is the default: auto-approves read-only permission kinds
+// (`read`, `url`) and asks the user for everything else. 'allow-all' and
+// 'deny-all' are escape hatches. A previous 'allow-readonly' value was
+// dropped because it behaved identically to 'prompt'; migration 008
+// rewrites existing rows.
+export type PermissionPolicy = 'prompt' | 'allow-all' | 'deny-all';
 
 // --- Interactive requests ---
 //
