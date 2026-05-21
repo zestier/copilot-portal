@@ -20,8 +20,13 @@ export const GET: RequestHandler = ({ params, locals }) => {
 		lines.push(`---`);
 		lines.push(`## ${m.role} — ${new Date(m.createdAt).toISOString()}`);
 		lines.push('');
-		const tools = m.toolCalls ?? [];
-		const edits = m.fileEdits ?? [];
+		// Children of sub-agent task calls (parentToolCallId set) are not
+		// rendered at the message level — they belong inside the outer task
+		// call's section. The task call's own result_json already contains
+		// the sub-agent's final response, which is what's most useful in an
+		// export.
+		const tools = (m.toolCalls ?? []).filter((t) => t.parentToolCallId == null);
+		const edits = (m.fileEdits ?? []).filter((e) => e.parentToolCallId == null);
 		const content = m.content ?? '';
 
 		const trailingTools = tools.filter((t) => t.textOffset == null);

@@ -31,22 +31,25 @@ interface PendingTool {
 	status: 'pending' | 'ok' | 'error';
 	startedAt: number;
 	endedAt: number | null;
-	textOffset: number;
+	textOffset: number | null;
+	parentToolCallId: string | null;
 }
 
 interface PendingEdit {
 	path: string;
 	diff: string;
-	textOffset: number;
+	textOffset: number | null;
+	parentToolCallId: string | null;
 }
 
 interface PendingReasoning {
 	id: string;
 	segmentIndex: number;
 	text: string;
-	textOffset: number;
+	textOffset: number | null;
 	startedAt: number;
 	durationMs: number | null;
+	parentToolCallId: string | null;
 }
 
 // A single event in the turn's transcript, paired with its monotonic id.
@@ -194,13 +197,17 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		} else if (ev.type === 'message.reasoning') {
 			let seg = pendingReasoning.get(ev.segmentId);
 			if (!seg) {
+				const isChild = !!ev.parentToolCallId;
 				seg = {
 					id: ulid(),
 					segmentIndex: nextReasoningIndex++,
 					text: '',
-					textOffset: assistantBuf.length,
+					// Child reasoning isn't anchored to the outer assistant text;
+					// it's rendered inside the SubagentCall card instead.
+					textOffset: isChild ? null : assistantBuf.length,
 					startedAt: Date.now(),
-					durationMs: null
+					durationMs: null,
+					parentToolCallId: ev.parentToolCallId ?? null
 				};
 				pendingReasoning.set(ev.segmentId, seg);
 			}
@@ -209,6 +216,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 			const seg = pendingReasoning.get(ev.segmentId);
 			if (seg) seg.durationMs = ev.durationMs;
 		} else if (ev.type === 'tool.call') {
+			const isChild = !!ev.parentToolCallId;
 			pendingTools.set(ev.toolCallId, {
 				toolCallId: ev.toolCallId,
 				tool: ev.tool,
@@ -217,7 +225,8 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				status: 'pending',
 				startedAt: Date.now(),
 				endedAt: null,
-				textOffset: assistantBuf.length
+				textOffset: isChild ? null : assistantBuf.length,
+				parentToolCallId: ev.parentToolCallId ?? null
 			});
 		} else if (ev.type === 'tool.result') {
 			const tc = pendingTools.get(ev.toolCallId);
@@ -227,10 +236,12 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				tc.endedAt = Date.now();
 			}
 		} else if (ev.type === 'file.edit') {
+			const isChild = !!ev.parentToolCallId;
 			pendingEdits.push({
 				path: ev.path,
 				diff: ev.diff,
-				textOffset: assistantBuf.length
+				textOffset: isChild ? null : assistantBuf.length,
+				parentToolCallId: ev.parentToolCallId ?? null
 			});
 		} else if (ev.type === 'context.usage') {
 			try {
@@ -294,11 +305,12 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 							status: t.status === 'pending' ? 'error' : t.status,
 							startedAt: t.startedAt,
 							endedAt: t.endedAt,
-							textOffset: t.textOffset
+							textOffset: t.textOffset,
+							parentToolCallId: t.parentToolCallId
 						});
 					}
 					for (const e of pendingEdits) {
-						messages.insertFileEdit(persisted.id, e.path, e.diff, e.textOffset);
+						messages.insertFileEdit(persisted.id, e.path, e.diff, e.textOffset, e.parentToolCallId);
 					}
 					// Preserve insertion order so segment_index stays monotonic
 					// with the stream.
@@ -309,7 +321,8 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 							text: seg.text,
 							textOffset: seg.textOffset,
 							startedAt: seg.startedAt,
-							durationMs: seg.durationMs
+							durationMs: seg.durationMs,
+							parentToolCallId: seg.parentToolCallId
 						});
 					}
 				}

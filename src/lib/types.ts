@@ -48,10 +48,15 @@ export interface ReasoningBlockRecord {
 	segmentIndex: number;
 	text: string;
 	// Where this segment appeared within the assistant's accumulated content
-	// (mirrors ToolCallRecord.textOffset). NULL = legacy / unknown.
+	// (mirrors ToolCallRecord.textOffset). NULL = legacy / unknown / child
+	// of a sub-agent (not anchored to the outer assistant's text).
 	textOffset: number | null;
 	startedAt: number;
 	durationMs: number | null;
+	// When set, this block was emitted by a sub-agent spawned by the outer
+	// `task` tool call with this id. Such blocks are rendered inside the
+	// SubagentCall component, not at the message level.
+	parentToolCallId: string | null;
 }
 
 export interface ToolCallRecord {
@@ -64,6 +69,10 @@ export interface ToolCallRecord {
 	startedAt: number;
 	endedAt: number | null;
 	textOffset: number | null;
+	// See ReasoningBlockRecord.parentToolCallId. Sub-agents can in turn
+	// invoke their own tools; those nested calls are children of the
+	// outermost `task` tool call.
+	parentToolCallId: string | null;
 }
 
 export interface FileEditRecord {
@@ -73,6 +82,8 @@ export interface FileEditRecord {
 	diff: string;
 	createdAt: number;
 	textOffset: number | null;
+	// See ReasoningBlockRecord.parentToolCallId.
+	parentToolCallId: string | null;
 }
 
 export interface UserSettings {
@@ -240,15 +251,30 @@ export type ElicitationSchemaField =
 export type PortalEvent =
 	| { type: 'message.start'; messageId: string; role: 'assistant' }
 	| { type: 'message.delta'; messageId: string; text: string }
-	| { type: 'message.reasoning'; messageId: string; segmentId: string; text: string }
+	| {
+			type: 'message.reasoning';
+			messageId: string;
+			segmentId: string;
+			text: string;
+			// When set, this reasoning burst originated inside the sub-agent
+			// spawned by the outer `task` tool call with this id.
+			parentToolCallId?: string;
+	  }
 	| {
 			type: 'message.reasoning.end';
 			messageId: string;
 			segmentId: string;
 			durationMs: number;
+			parentToolCallId?: string;
 	  }
 	| { type: 'message.end'; messageId: string }
-	| { type: 'tool.call'; toolCallId: string; tool: string; args: unknown }
+	| {
+			type: 'tool.call';
+			toolCallId: string;
+			tool: string;
+			args: unknown;
+			parentToolCallId?: string;
+	  }
 	| { type: 'interactive.request'; request: InteractiveRequestView }
 	| {
 			type: 'interactive.resolved';
@@ -265,8 +291,9 @@ export type PortalEvent =
 			ok: boolean;
 			summary: string;
 			output?: unknown;
+			parentToolCallId?: string;
 	  }
-	| { type: 'file.edit'; path: string; diff: string }
+	| { type: 'file.edit'; path: string; diff: string; parentToolCallId?: string }
 	| { type: 'conversation.update'; conversationId: string; title?: string }
 	| { type: 'reasoning.summary'; text: string }
 	| {

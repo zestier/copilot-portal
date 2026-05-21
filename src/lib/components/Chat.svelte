@@ -276,14 +276,16 @@
 				const blocks = (m.reasoningBlocks ??= []);
 				let seg = blocks.find((b) => b.id === ev.segmentId);
 				if (!seg) {
+					const isChild = !!ev.parentToolCallId;
 					seg = {
 						id: ev.segmentId,
 						messageId: m.id,
 						segmentIndex: blocks.length,
 						text: '',
-						textOffset: m.content.length,
+						textOffset: isChild ? null : m.content.length,
 						startedAt: Date.now(),
-						durationMs: null
+						durationMs: null,
+						parentToolCallId: ev.parentToolCallId ?? null
 					};
 					blocks.push(seg);
 				}
@@ -304,6 +306,7 @@
 			case 'tool.call': {
 				const m = messages[messages.length - 1];
 				if (m && m.role === 'assistant') {
+					const isChild = !!ev.parentToolCallId;
 					(m.toolCalls ??= []).push({
 						id: ev.toolCallId,
 						messageId: m.id,
@@ -313,7 +316,8 @@
 						status: 'pending',
 						startedAt: Date.now(),
 						endedAt: null,
-						textOffset: m.content.length
+						textOffset: isChild ? null : m.content.length,
+						parentToolCallId: ev.parentToolCallId ?? null
 					});
 				}
 				break;
@@ -343,13 +347,15 @@
 			case 'file.edit': {
 				const m = messages[messages.length - 1];
 				if (m && m.role === 'assistant') {
+					const isChild = !!ev.parentToolCallId;
 					(m.fileEdits ??= []).push({
 						id: `${m.id}-${(m.fileEdits ?? []).length}`,
 						messageId: m.id,
 						path: ev.path,
 						diff: ev.diff,
 						createdAt: Date.now(),
-						textOffset: m.content.length
+						textOffset: isChild ? null : m.content.length,
+						parentToolCallId: ev.parentToolCallId ?? null
 					});
 				}
 				break;

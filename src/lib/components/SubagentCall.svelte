@@ -1,8 +1,21 @@
 <script lang="ts">
-	import type { ToolCallRecord } from '$lib/types';
+	import type { ToolCallRecord, ReasoningBlockRecord, FileEditRecord } from '$lib/types';
 	import { renderMarkdown } from '$lib/client/markdown';
+	import ToolCall from './ToolCall.svelte';
+	import ReasoningBlock from './ReasoningBlock.svelte';
+	import DiffView from './DiffView.svelte';
 
-	let { toolCall }: { toolCall: ToolCallRecord } = $props();
+	let {
+		toolCall,
+		childTools = [],
+		childReasoning = [],
+		childEdits = []
+	}: {
+		toolCall: ToolCallRecord;
+		childTools?: ToolCallRecord[];
+		childReasoning?: ReasoningBlockRecord[];
+		childEdits?: FileEditRecord[];
+	} = $props();
 
 	// Auto-expand while the subagent is running so the user sees activity,
 	// then auto-collapse once it completes (the parent assistant typically
@@ -100,6 +113,54 @@
 	const headline = $derived(
 		args.description ?? args.name ?? (args.prompt ? firstLine(args.prompt) : 'subagent')
 	);
+
+	// Sub-agent activity timeline: child reasoning bursts and tool calls in
+	// the order they happened. There's no parent-text to anchor against
+	// (the sub-agent's only output is the final response, which we render
+	// separately), so we sort purely by start timestamp.
+	type ActivityItem =
+		| { kind: 'reasoning'; ts: number; block: ReasoningBlockRecord }
+		| { kind: 'tool'; ts: number; tool: ToolCallRecord }
+		| { kind: 'edit'; ts: number; edit: FileEditRecord };
+
+	const activity = $derived.by<ActivityItem[]>(() => {
+		const items: ActivityItem[] = [];
+		for (const r of childReasoning) {
+			items.push({ kind: 'reasoning', ts: r.startedAt, block: r });
+		}
+		for (const t of childTools) {
+			items.push({ kind: 'tool', ts: t.startedAt, tool: t });
+		}
+		for (const e of childEdits) {
+			items.push({ kind: 'edit', ts: e.createdAt, edit: e });
+		}
+		items.sort((a, b) => a.ts - b.ts);
+		return items;
+	});
+
+	// While the sub-agent is still running, the latest open reasoning
+	// segment should keep ticking its "Thinking… Xs" header.
+	const latestOpenChildReasoningIdx = $derived.by(() => {
+		if (!pending) return -1;
+		let max = -1;
+		for (const r of childReasoning) {
+			if (r.durationMs == null && r.segmentIndex > max) max = r.segmentIndex;
+		}
+		return max;
+	});
+	// Activity section auto-expands while the subagent runs (so streaming
+	// reasoning/tool calls are visible) and auto-collapses on completion,
+	// since the final Response usually summarizes everything anyway. Click
+	// to override either direction.
+	let activityUserToggled = $state(false);
+	let activityManualOpen = $state(false);
+	const activityOpen = $derived(activityUserToggled ? activityManualOpen : pending);
+	function onActivityToggle(e: Event) {
+		const el = e.currentTarget as HTMLDetailsElement;
+		activityUserToggled = true;
+		activityManualOpen = el.open;
+	}
+
 	const elapsedMs = $derived(
 		toolCall.endedAt != null ? toolCall.endedAt - toolCall.startedAt : null
 	);
@@ -163,6 +224,43 @@
 				</summary>
 				<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 				<div class="markdown">{@html promptHtml}</div>
+			</details>
+		{/if}
+		{#if activity.length > 0}
+			<details class="section activity" open={activityOpen} ontoggle={onActivityToggle}>
+				<summary class="disclosure">
+					<svg
+						class="chevron"
+						width="10"
+						height="10"
+						viewBox="0 0 16 16"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+					>
+						<path d="M5 3l6 5-6 5" />
+					</svg>
+					<span class="label">Activity</span>
+					<span class="count">{activity.length}</span>
+				</summary>
+				<div class="timeline">
+					{#each activity as item, i (i)}
+						{#if item.kind === 'reasoning'}
+							<ReasoningBlock
+								text={item.block.text}
+								streaming={item.block.segmentIndex === latestOpenChildReasoningIdx}
+								durationMs={item.block.durationMs}
+							/>
+						{:else if item.kind === 'tool'}
+							<ToolCall toolCall={item.tool} />
+						{:else}
+							<DiffView path={item.edit.path} diff={item.edit.diff} />
+						{/if}
+					{/each}
+				</div>
 			</details>
 		{/if}
 		{#if resultHtml}
@@ -370,9 +468,20 @@
 		color: var(--text-muted);
 		font-style: italic;
 	}
+	.timeline {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+	}
 	.prompt[open] > .disclosure,
+	.activity[open] > .disclosure,
 	.raw[open] > .disclosure {
 		margin-bottom: 0.4rem;
+	}
+	.count {
+		font-size: var(--fs-xs);
+		color: var(--text-muted);
+		font-family: var(--mono);
 	}
 	pre {
 		max-width: 100%;

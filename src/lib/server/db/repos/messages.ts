@@ -31,6 +31,7 @@ interface ToolRow {
 	started_at: number;
 	ended_at: number | null;
 	text_offset: number | null;
+	parent_tool_call_id: string | null;
 }
 
 interface EditRow {
@@ -40,6 +41,7 @@ interface EditRow {
 	diff: string;
 	created_at: number;
 	text_offset: number | null;
+	parent_tool_call_id: string | null;
 }
 
 interface ReasoningRow {
@@ -50,6 +52,7 @@ interface ReasoningRow {
 	text_offset: number | null;
 	started_at: number;
 	duration_ms: number | null;
+	parent_tool_call_id: string | null;
 }
 
 function rowToMessage(r: MsgRow): Message {
@@ -101,7 +104,8 @@ export function listByConversation(conversationId: string): Message[] {
 			status: t.status as ToolCallRecord['status'],
 			startedAt: t.started_at,
 			endedAt: t.ended_at,
-			textOffset: t.text_offset
+			textOffset: t.text_offset,
+			parentToolCallId: t.parent_tool_call_id
 		});
 	}
 	const byMsgE: Record<string, FileEditRecord[]> = {};
@@ -112,7 +116,8 @@ export function listByConversation(conversationId: string): Message[] {
 			path: e.path,
 			diff: e.diff,
 			createdAt: e.created_at,
-			textOffset: e.text_offset
+			textOffset: e.text_offset,
+			parentToolCallId: e.parent_tool_call_id
 		});
 	}
 	const byMsgR: Record<string, ReasoningBlockRecord[]> = {};
@@ -124,7 +129,8 @@ export function listByConversation(conversationId: string): Message[] {
 			text: r.text,
 			textOffset: r.text_offset,
 			startedAt: r.started_at,
-			durationMs: r.duration_ms
+			durationMs: r.duration_ms,
+			parentToolCallId: r.parent_tool_call_id
 		});
 	}
 	for (const m of msgs) {
@@ -185,8 +191,8 @@ export function updateContent(id: string, content: string, status: MessageStatus
 export function insertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messageId'>) {
 	getDb()
 		.prepare(
-			`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at, text_offset)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at, text_offset, parent_tool_call_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			t.id,
@@ -197,7 +203,8 @@ export function insertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messa
 			t.status,
 			t.startedAt,
 			t.endedAt,
-			t.textOffset
+			t.textOffset,
+			t.parentToolCallId ?? null
 		);
 }
 
@@ -230,15 +237,16 @@ export function insertFileEdit(
 	messageId: string,
 	path: string,
 	diff: string,
-	textOffset: number | null = null
+	textOffset: number | null = null,
+	parentToolCallId: string | null = null
 ) {
 	const id = ulid();
 	getDb()
 		.prepare(
-			`INSERT INTO file_edits(id, message_id, path, diff, created_at, text_offset)
-			 VALUES (?, ?, ?, ?, ?, ?)`
+			`INSERT INTO file_edits(id, message_id, path, diff, created_at, text_offset, parent_tool_call_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`
 		)
-		.run(id, messageId, path, diff, Date.now(), textOffset);
+		.run(id, messageId, path, diff, Date.now(), textOffset, parentToolCallId);
 }
 
 export function insertReasoningBlock(
@@ -247,8 +255,17 @@ export function insertReasoningBlock(
 ) {
 	getDb()
 		.prepare(
-			`INSERT INTO reasoning_blocks(id, message_id, segment_index, text, text_offset, started_at, duration_ms)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`
+			`INSERT INTO reasoning_blocks(id, message_id, segment_index, text, text_offset, started_at, duration_ms, parent_tool_call_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		)
-		.run(r.id, messageId, r.segmentIndex, r.text, r.textOffset, r.startedAt, r.durationMs ?? null);
+		.run(
+			r.id,
+			messageId,
+			r.segmentIndex,
+			r.text,
+			r.textOffset,
+			r.startedAt,
+			r.durationMs ?? null,
+			r.parentToolCallId ?? null
+		);
 }

@@ -123,9 +123,11 @@
 	const parts = $derived.by<Part[]>(() => {
 		if (message.role !== 'assistant') return [];
 		const content = message.content ?? '';
-		const tools = message.toolCalls ?? [];
-		const edits = message.fileEdits ?? [];
-		const reasoning = message.reasoningBlocks ?? [];
+		// Filter out children of sub-agent task calls — they belong inside
+		// the outer SubagentCall card, not at the message level.
+		const tools = (message.toolCalls ?? []).filter((t) => t.parentToolCallId == null);
+		const edits = (message.fileEdits ?? []).filter((e) => e.parentToolCallId == null);
+		const reasoning = (message.reasoningBlocks ?? []).filter((r) => r.parentToolCallId == null);
 
 		// Only the latest still-open block on a streaming message ticks the
 		// "Thinking… Xs" header. A reasoning block is "open" until its
@@ -355,7 +357,14 @@
 					<div class="text-part">{@html p.html}</div>
 				{:else if p.kind === 'tool'}
 					{#if p.tool.tool === 'task'}
-						<SubagentCall toolCall={p.tool} />
+						<SubagentCall
+							toolCall={p.tool}
+							childTools={(message.toolCalls ?? []).filter((t) => t.parentToolCallId === p.tool.id)}
+							childReasoning={(message.reasoningBlocks ?? []).filter(
+								(r) => r.parentToolCallId === p.tool.id
+							)}
+							childEdits={(message.fileEdits ?? []).filter((e) => e.parentToolCallId === p.tool.id)}
+						/>
 					{:else}
 						<ToolCall toolCall={p.tool} />
 					{/if}

@@ -126,6 +126,29 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	let activeQueue: AsyncQueue<PortalEvent> | null = null;
 	let currentReasoningSegmentId: string | null = null;
 	let currentReasoningStartedAt = 0;
+	// Maps a sub-agent's `agentId` (set on every event the SDK emits from a
+	// child agent) to the `toolCallId` of the outer `task` tool call that
+	// spawned it. We populate this on `subagent.started` and use it to
+	// thread child reasoning / tool calls / file edits back to their
+	// originating subagent invocation in the UI. Cleaned up on
+	// `subagent.completed` / `subagent.failed`.
+	const subagentParentByAgentId = new Map<string, string>();
+
+	// A child agent's reasoning lives in its own segment-id namespace. The
+	// outer turn already has its own currentReasoningSegmentId / currentMessageId,
+	// so we track child reasoning state per-agentId to avoid the streams
+	// stepping on each other.
+	interface ChildReasoningState {
+		segmentId: string | null;
+		startedAt: number;
+	}
+	const childReasoning = new Map<string, ChildReasoningState>();
+
+	function parentToolCallId(ev: { agentId?: string }): string | undefined {
+		const agentId = ev.agentId;
+		if (!agentId) return undefined;
+		return subagentParentByAgentId.get(agentId);
+	}
 
 	function closeReasoning() {
 		if (!activeQueue || !currentReasoningSegmentId || !currentMessageId) return;
@@ -318,7 +341,11 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	}
 
 	const onDelta = (e: unknown) => {
-		const ev = e as { data?: { deltaContent?: string } };
+		const ev = e as { agentId?: string; data?: { deltaContent?: string } };
+		// Sub-agent message text is also surfaced to the host as the final
+		// `tool.result` for the outer `task` call. Suppress the deltas so they
+		// don't get appended to the outer assistant's message buffer.
+		if (ev.agentId) return;
 		const text = ev?.data?.deltaContent ?? '';
 		if (!text || !activeQueue) return;
 		if (!currentMessageId) {
@@ -334,9 +361,32 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	};
 
 	const onReasoningDelta = (e: unknown) => {
-		const ev = e as { data?: { deltaContent?: string } };
+		const ev = e as { agentId?: string; data?: { deltaContent?: string } };
 		let text = ev?.data?.deltaContent ?? '';
 		if (!text || !activeQueue) return;
+		const parent = parentToolCallId(ev);
+		if (parent) {
+			// Child reasoning: emit as a child reasoning event tagged with the
+			// outer tool call id; the turn-runner persists it under that
+			// parent and the UI renders it inside the SubagentCall card.
+			if (!currentMessageId) return; // child reasoning before any host message
+			let state = childReasoning.get(ev.agentId!);
+			if (!state || !state.segmentId) {
+				state = { segmentId: ulid(), startedAt: Date.now() };
+				childReasoning.set(ev.agentId!, state);
+				text = text.replace(/^\s+/, '');
+				if (!text) return;
+			}
+			const segmentId = state.segmentId!;
+			activeQueue.push({
+				type: 'message.reasoning',
+				messageId: currentMessageId,
+				segmentId,
+				text,
+				parentToolCallId: parent
+			});
+			return;
+		}
 		if (!currentMessageId) {
 			currentMessageId = ulid();
 			activeQueue.push({
@@ -360,7 +410,24 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	};
 
 	const onAssistantMessage = (e: unknown) => {
-		const ev = e as { data?: { content?: string } };
+		const ev = e as { agentId?: string; data?: { content?: string } };
+		// Child-agent final messages are captured by tool.result; ignore here.
+		if (ev.agentId) {
+			// Close any open child reasoning segment so durations get recorded.
+			const state = childReasoning.get(ev.agentId);
+			if (state?.segmentId && currentMessageId && activeQueue) {
+				const parent = parentToolCallId(ev);
+				activeQueue.push({
+					type: 'message.reasoning.end',
+					messageId: currentMessageId,
+					segmentId: state.segmentId,
+					durationMs: Date.now() - state.startedAt,
+					parentToolCallId: parent
+				});
+				state.segmentId = null;
+			}
+			return;
+		}
 		if (!activeQueue) return;
 		if (!currentMessageId) {
 			currentMessageId = ulid();
@@ -379,20 +446,41 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 
 	const onToolStart = (e: unknown) => {
 		const ev = e as {
+			agentId?: string;
 			data?: { toolCallId?: string; toolName?: string; arguments?: unknown };
 		};
 		if (!activeQueue) return;
-		closeReasoning();
+		const parent = parentToolCallId(ev);
+		// Close child reasoning before its tool call, mirroring the outer
+		// closeReasoning() pattern so the UI doesn't show the thinking box
+		// continuing across the tool invocation.
+		if (parent && ev.agentId) {
+			const state = childReasoning.get(ev.agentId);
+			if (state?.segmentId && currentMessageId) {
+				activeQueue.push({
+					type: 'message.reasoning.end',
+					messageId: currentMessageId,
+					segmentId: state.segmentId,
+					durationMs: Date.now() - state.startedAt,
+					parentToolCallId: parent
+				});
+				state.segmentId = null;
+			}
+		} else {
+			closeReasoning();
+		}
 		activeQueue.push({
 			type: 'tool.call',
 			toolCallId: ev?.data?.toolCallId ?? ulid(),
 			tool: ev?.data?.toolName ?? 'unknown',
-			args: ev?.data?.arguments ?? null
+			args: ev?.data?.arguments ?? null,
+			parentToolCallId: parent
 		});
 	};
 
 	const onToolComplete = (e: unknown) => {
 		const ev = e as {
+			agentId?: string;
 			data?: {
 				toolCallId?: string;
 				toolName?: string;
@@ -408,8 +496,33 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			toolCallId: ev?.data?.toolCallId ?? ulid(),
 			ok,
 			summary: summarizeResult(ev?.data?.result, ev?.data?.error),
-			output: ev?.data?.result ?? ev?.data?.error ?? null
+			output: ev?.data?.result ?? ev?.data?.error ?? null,
+			parentToolCallId: parentToolCallId(ev)
 		});
+	};
+
+	const onSubagentStarted = (e: unknown) => {
+		const ev = e as { agentId?: string; data?: { toolCallId?: string } };
+		if (ev.agentId && ev.data?.toolCallId) {
+			subagentParentByAgentId.set(ev.agentId, ev.data.toolCallId);
+		}
+	};
+	const onSubagentEnded = (e: unknown) => {
+		const ev = e as { agentId?: string };
+		if (!ev.agentId) return;
+		// Flush any still-open child reasoning so its duration is recorded.
+		const state = childReasoning.get(ev.agentId);
+		if (state?.segmentId && currentMessageId && activeQueue) {
+			activeQueue.push({
+				type: 'message.reasoning.end',
+				messageId: currentMessageId,
+				segmentId: state.segmentId,
+				durationMs: Date.now() - state.startedAt,
+				parentToolCallId: subagentParentByAgentId.get(ev.agentId)
+			});
+		}
+		childReasoning.delete(ev.agentId);
+		subagentParentByAgentId.delete(ev.agentId);
 	};
 
 	const onSessionIdle = () => {
@@ -559,6 +672,9 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	sdkSession.on('assistant.message', onAssistantMessage);
 	sdkSession.on('tool.execution_start', onToolStart);
 	sdkSession.on('tool.execution_complete', onToolComplete);
+	sdkSession.on('subagent.started', onSubagentStarted);
+	sdkSession.on('subagent.completed', onSubagentEnded);
+	sdkSession.on('subagent.failed', onSubagentEnded);
 	sdkSession.on('session.idle', onSessionIdle);
 	sdkSession.on('session.usage_info', onUsageInfo);
 	sdkSession.on('session.compaction_start', onCompactionStart);
