@@ -59,6 +59,25 @@ describe('synthesizeDiff', () => {
 		expect(r!.path).toBe('a.md');
 	});
 
+	it('preserves unchanged lines as context (LCS-based, not whole-block replacement)', () => {
+		const r = synthesizeDiff({
+			tool: 'edit',
+			argsJson: JSON.stringify({
+				path: 'f.ts',
+				old_str: 'line1\nline2\nline3\nline4',
+				new_str: 'line1\nLINE2\nline3\nline4'
+			})
+		});
+		expect(r).not.toBeNull();
+		const parsed = parseUnifiedDiff(r!.diff);
+		const stats = diffStats(parsed);
+		// Only line2 changed; the other three lines must be context, not
+		// re-emitted as add/del.
+		expect(stats.added).toBe(1);
+		expect(stats.removed).toBe(1);
+		expect(parsed.filter((l) => l.kind === 'context').length).toBe(3);
+	});
+
 	it('returns null on malformed JSON', () => {
 		expect(synthesizeDiff({ tool: 'edit', argsJson: 'not json' })).toBeNull();
 	});

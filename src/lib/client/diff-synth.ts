@@ -1,12 +1,15 @@
+import { createTwoFilesPatch } from 'diff';
+
 // Synthesize a unified-diff string from the arguments of file-mutation tool
 // calls (create, edit, write_file, etc.) so the existing DiffView component
 // can render the change. The Copilot SDK doesn't always emit a structured
 // diff in the tool result; the args themselves contain enough information
 // to reconstruct one.
 //
-// This is best-effort: callers should be prepared for `null` (e.g. when
-// args don't match a known shape) and fall back to rendering the raw
-// result text.
+// We delegate the actual diff math to `jsdiff` so the output has proper
+// LCS-based context lines instead of marking every line in the edit block
+// as changed. The library prepends an `Index:` / `===` header that
+// `parseUnifiedDiff` doesn't understand, so we strip it.
 
 export interface SynthDiffInput {
 	tool: string;
@@ -35,47 +38,35 @@ function str(v: unknown): string | null {
 	return typeof v === 'string' ? v : null;
 }
 
-// Build a unified diff hunk for `oldLines` → `newLines`. We don't try to
-// minimize the hunk (no LCS); we just emit the entire old block as deletions
-// followed by the entire new block as additions. That keeps the
-// implementation small and the rendered output matches what users expect
-// from a "before/after" edit summary.
-function buildHunk(oldLines: string[], newLines: string[]): string {
-	const oldCount = oldLines.length;
-	const newCount = newLines.length;
-	const header = `@@ -1,${oldCount} +1,${newCount} @@`;
-	const body: string[] = [header];
-	for (const l of oldLines) body.push('-' + l);
-	for (const l of newLines) body.push('+' + l);
-	return body.join('\n');
+// jsdiff returns a "Index:" / "===" preamble and tab-padded ---/+++ headers
+// (GNU diff quirk). Strip the preamble and trim the header whitespace so
+// the output matches what `parseUnifiedDiff` expects.
+function cleanPatch(patch: string): string {
+	const lines = patch.split('\n');
+	let i = 0;
+	if (lines[i]?.startsWith('Index:')) i += 1;
+	if (lines[i]?.startsWith('===')) i += 1;
+	const rest = lines.slice(i);
+	if (rest[0]?.startsWith('--- ')) rest[0] = rest[0].replace(/\s+$/, '');
+	if (rest[1]?.startsWith('+++ ')) rest[1] = rest[1].replace(/\s+$/, '');
+	return rest.join('\n');
 }
 
-function splitLines(s: string): string[] {
-	if (s === '') return [];
-	// Strip a single trailing newline so the diff doesn't show a blank
-	// final line — matches `git diff` convention.
-	const trimmed = s.endsWith('\n') ? s.slice(0, -1) : s;
-	return trimmed.split('\n');
-}
-
-// Try to derive a diff from {old_str, new_str} edit-style args. Returns
-// null if either string isn't present.
 function fromEditArgs(path: string, args: ParsedArgs): SynthDiff | null {
 	const oldStr = str(args.old_str) ?? str(args.old_string) ?? str(args.search);
 	const newStr = str(args.new_str) ?? str(args.new_string) ?? str(args.replace);
 	if (oldStr == null || newStr == null) return null;
-	const diff = `--- a/${path}\n+++ b/${path}\n${buildHunk(splitLines(oldStr), splitLines(newStr))}`;
-	return { path, diff };
+	const patch = createTwoFilesPatch(`a/${path}`, `b/${path}`, oldStr, newStr, '', '', {
+		context: 3
+	});
+	return { path, diff: cleanPatch(patch) };
 }
 
-// Try to derive a diff from {file_text} create-style args (full file body
-// for a new file).
 function fromCreateArgs(path: string, args: ParsedArgs): SynthDiff | null {
 	const body = str(args.file_text) ?? str(args.content) ?? str(args.contents) ?? str(args.text);
 	if (body == null) return null;
-	const lines = splitLines(body);
-	const diff = `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n${lines.map((l) => '+' + l).join('\n')}`;
-	return { path, diff };
+	const patch = createTwoFilesPatch('/dev/null', `b/${path}`, '', body, '', '', { context: 3 });
+	return { path, diff: cleanPatch(patch) };
 }
 
 const EDIT_TOOLS = new Set(['edit', 'str_replace_editor', 'replace', 'apply_patch']);
