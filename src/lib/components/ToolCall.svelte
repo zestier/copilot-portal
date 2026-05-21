@@ -9,18 +9,13 @@
 
 	let { toolCall }: { toolCall: ToolCallRecord } = $props();
 
-	// Auto-expand while pending so live progress / partial output is
-	// visible; auto-collapse once complete. User clicks override either
-	// direction (matches SubagentCall behavior).
-	let userToggled = $state(false);
-	let manualOpen = $state(false);
-	const pending = $derived(toolCall.status === 'pending');
-	const open = $derived(userToggled ? manualOpen : pending);
-	function onToggle(e: Event) {
-		const el = e.currentTarget as HTMLDetailsElement;
-		userToggled = true;
-		manualOpen = el.open;
-	}
+	// Default-closed; users opt in to seeing args + result by clicking.
+	// We don't auto-expand while pending: the summary header already
+	// surfaces the tool name, target, and progress message, which is
+	// enough running feedback for the quick tool calls that make up the
+	// bulk of a turn. (Subagents have their own auto-expand because they
+	// run longer and have richer interior content.)
+	let open = $state(false);
 
 	function statusEmoji(s: ToolCallRecord['status']) {
 		switch (s) {
@@ -37,6 +32,7 @@
 
 	const summary = $derived(summarizeToolCall(toolCall.tool, toolCall.argsJson));
 	const decoded = $derived(decodeToolResult(toolCall.resultJson));
+	const pending = $derived(toolCall.status === 'pending');
 	// Edits/creates render as a unified diff synthesized from args. We only
 	// show the diff once the call succeeded; while pending we'd be
 	// rendering args that haven't been applied, and on error the result
@@ -44,7 +40,7 @@
 	const synthDiff = $derived(toolCall.status === 'ok' ? synthesizeDiff(toolCall) : null);
 </script>
 
-<details class="tool" class:open class:is-pending={pending} {open} ontoggle={onToggle}>
+<details class="tool" class:open class:is-pending={pending} bind:open>
 	<summary>
 		<span class="emoji">{statusEmoji(toolCall.status)}</span>
 		<code>{toolCall.tool}</code>
