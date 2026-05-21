@@ -126,7 +126,12 @@ export const handle: Handle = async ({ event, resolve }) => {
 		);
 	}
 	response.headers.set('x-content-type-options', 'nosniff');
-	response.headers.set('referrer-policy', 'no-referrer');
+	// 'same-origin' (not 'no-referrer') so browsers still send the Origin
+	// header on same-site form POSTs. With 'no-referrer' the browser sends
+	// `Origin: null`, which SvelteKit's built-in CSRF check rejects. The
+	// path is still stripped for cross-origin requests, which is what the
+	// privacy intent was.
+	response.headers.set('referrer-policy', 'same-origin');
 	response.headers.set('x-frame-options', 'DENY');
 	if (secure) {
 		response.headers.set('strict-transport-security', 'max-age=63072000; includeSubDomains');
