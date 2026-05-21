@@ -38,6 +38,24 @@
 	// rendering args that haven't been applied, and on error the result
 	// text usually explains the failure.
 	const synthDiff = $derived(toolCall.status === 'ok' ? synthesizeDiff(toolCall) : null);
+	// For shell-style tools, surface the actual command so a viewer
+	// doesn't have to expand "Arguments" to see what ran. We thread it
+	// into the terminal pane (both live partial output and final result)
+	// as a leading `$ command` prompt line.
+	const shellCommand = $derived.by(() => {
+		const t = toolCall.tool.toLowerCase();
+		if (t !== 'bash' && t !== 'shell' && t !== 'run') return null;
+		try {
+			const a = JSON.parse(toolCall.argsJson);
+			if (a && typeof a === 'object' && !Array.isArray(a)) {
+				const cmd = (a as Record<string, unknown>).command ?? (a as Record<string, unknown>).cmd;
+				return typeof cmd === 'string' && cmd.length > 0 ? cmd : null;
+			}
+		} catch {
+			/* ignore */
+		}
+		return null;
+	});
 </script>
 
 <details class="tool" class:open class:is-pending={pending} bind:open>
@@ -60,8 +78,15 @@
 		</details>
 
 		{#if pending}
-			{#if toolCall.partialOutput}
-				<TerminalBlock text={toolCall.partialOutput} streaming />
+			{#if shellCommand || toolCall.partialOutput}
+				<TerminalBlock
+					text={toolCall.partialOutput ?? ''}
+					command={shellCommand ?? undefined}
+					streaming
+				/>
+				{#if toolCall.progressMessage && !toolCall.partialOutput}
+					<div class="muted progress-line">{toolCall.progressMessage}</div>
+				{/if}
 			{:else if toolCall.progressMessage}
 				<div class="muted progress-line">{toolCall.progressMessage}</div>
 			{:else}
@@ -72,7 +97,7 @@
 				<DiffView path={synthDiff.path} diff={synthDiff.diff} showLineNumbers={false} />
 			{:else}
 				{#each decoded.blocks as block, i (i)}
-					<ResultBlock {block} />
+					<ResultBlock {block} command={i === 0 && shellCommand ? shellCommand : undefined} />
 				{/each}
 			{/if}
 			<details class="raw">

@@ -2,11 +2,13 @@
 	import type { ResultBlock } from '$lib/client/tool-result';
 	import TerminalBlock from './TerminalBlock.svelte';
 
-	let { block }: { block: ResultBlock } = $props();
+	let { block, command }: { block: ResultBlock; command?: string } = $props();
 </script>
 
 {#if block.kind === 'terminal'}
-	<TerminalBlock text={block.text} cwd={block.cwd} exitCode={block.exitCode} />
+	<TerminalBlock text={block.text} cwd={block.cwd} exitCode={block.exitCode} {command} />
+{:else if block.kind === 'text' && command}
+	<TerminalBlock text={block.text} {command} />
 {:else if block.kind === 'image'}
 	<img class="image" src={`data:${block.mimeType};base64,${block.data}`} alt="tool output" />
 {:else if block.kind === 'audio'}

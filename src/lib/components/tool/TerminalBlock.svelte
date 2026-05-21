@@ -6,11 +6,13 @@
 		text,
 		cwd,
 		exitCode,
+		command,
 		streaming = false
 	}: {
 		text: string;
 		cwd?: string;
 		exitCode?: number;
+		command?: string;
 		streaming?: boolean;
 	} = $props();
 
@@ -26,8 +28,10 @@
 			{/if}
 		</div>
 	{/if}
-	<pre class="body"><code>{text}</code>{#if streaming}<span class="cursor" aria-hidden="true"
-				>▍</span
+	<pre class="body">{#if command}<span class="prompt">$ </span><span class="command">{command}</span
+			>{#if text}{'\n'}{/if}{/if}<code>{text}</code>{#if streaming}<span
+				class="cursor"
+				aria-hidden="true">▍</span
 			>{/if}</pre>
 </div>
 
@@ -85,6 +89,14 @@
 		display: inline-block;
 		color: var(--accent, #7c5cff);
 		animation: cursor-blink 1s steps(2, start) infinite;
+	}
+	.prompt {
+		color: var(--accent, #7c5cff);
+		user-select: none;
+	}
+	.command {
+		color: var(--text);
+		font-weight: 600;
 	}
 	@keyframes cursor-blink {
 		to {
