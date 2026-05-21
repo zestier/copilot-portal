@@ -195,7 +195,16 @@ export type InteractiveRequestViewBody =
 export type InteractiveRequestView = { requestId: string } & InteractiveRequestViewBody;
 
 export type InteractiveResponse =
-	| { kind: 'permission'; decision: PermissionDecision }
+	| {
+			kind: 'permission';
+			decision: PermissionDecision;
+			/** Optional narrow scope for *-always decisions. Omitted scope means
+			 * "any kind, any args" (backwards-compatible with the original
+			 * coarse "Allow always for this tool" grant). */
+			scope?: PermissionGrantScope;
+			/** Optional TTL for *-always decisions, in milliseconds. */
+			expiresInMs?: number;
+	  }
 	| { kind: 'auto_mode_switch'; decision: 'yes' | 'yes_always' | 'no' }
 	| { kind: 'user_input'; answer: string; wasFreeform?: boolean }
 	| {
@@ -213,6 +222,13 @@ export type InteractiveResponse =
 	| { kind: 'sampling'; action: 'ack' }
 	| { kind: 'mcp_oauth'; action: 'ack' }
 	| { kind: 'external_tool'; action: 'ack' };
+
+export interface PermissionGrantScope {
+	/** NULL/omitted = any permission kind for the requested tool. */
+	permissionKind?: string | null;
+	/** Tiny glob (`*` matches any run). NULL/omitted = any scope. */
+	pattern?: string | null;
+}
 
 export interface ElicitationSchema {
 	type: 'object';
@@ -356,7 +372,7 @@ export interface ConversationUsage {
 	updatedAt: number;
 }
 
-export type PermissionDecision = 'allow-once' | 'allow-always' | 'deny';
+export type PermissionDecision = 'allow-once' | 'allow-always' | 'deny' | 'deny-always';
 
 // --- File browser / git response shapes (shared by client & server) ---
 

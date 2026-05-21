@@ -225,7 +225,8 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 				args: req.args ?? null
 			}
 		);
-		if (response.decision === 'deny') return { kind: 'reject' } as const;
+		if (response.decision === 'deny' || response.decision === 'deny-always')
+			return { kind: 'reject' } as const;
 		return { kind: 'approve-once' } as const;
 	};
 

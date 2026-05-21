@@ -10,9 +10,22 @@ import type { InteractiveResponse } from '$lib/types';
 // route to the right shape; the server-side registry then verifies the kind
 // matches the pending request before applying any side effects.
 
+const PermissionScope = z.object({
+	permissionKind: z.string().min(1).max(64).nullable().optional(),
+	pattern: z.string().max(1024).nullable().optional()
+});
+
 const PermissionBody = z.object({
 	kind: z.literal('permission'),
-	decision: z.enum(['allow-once', 'allow-always', 'deny'])
+	decision: z.enum(['allow-once', 'allow-always', 'deny', 'deny-always']),
+	scope: PermissionScope.optional(),
+	// Cap at 30 days to keep "time-limited" meaningful.
+	expiresInMs: z
+		.number()
+		.int()
+		.positive()
+		.max(30 * 24 * 60 * 60 * 1000)
+		.optional()
 });
 
 const AutoModeSwitchBody = z.object({

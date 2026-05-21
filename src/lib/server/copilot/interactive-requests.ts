@@ -134,26 +134,43 @@ export function resolve(requestId: string, userId: string, response: Interactive
 				typeof p.view.summary === 'string' ? p.view.summary : '',
 				response.decision
 			);
-			if (response.decision === 'allow-always') {
+			const isAlways = response.decision === 'allow-always' || response.decision === 'deny-always';
+			if (isAlways) {
+				const grantDecision = response.decision === 'allow-always' ? 'allow' : 'deny';
 				// Defense in depth: if the user's current policy is deny-all,
-				// don't persist a grant that would silently override it on the
-				// next call. Under normal flow, decideByPolicy would have
-				// short-circuited before the dialog ever appeared, so this
-				// branch only fires if a stale dialog or non-standard caller
-				// reached here.
-				const s = settingsRepo.get(userId);
-				if (s && s.defaultPolicy === 'deny-all') {
-					log.warn('interactive.allow_always_under_deny_all_ignored', {
-						requestId,
-						userId,
-						conversationId: p.conversationId,
-						tool: p.view.tool
-					});
+				// don't persist a positive grant that would silently override
+				// it on the next call. Deny grants are always safe to record.
+				if (grantDecision === 'allow') {
+					const s = settingsRepo.get(userId);
+					if (s && s.defaultPolicy === 'deny-all') {
+						log.warn('interactive.allow_always_under_deny_all_ignored', {
+							requestId,
+							userId,
+							conversationId: p.conversationId,
+							tool: p.view.tool
+						});
+					} else {
+						settingsRepo.addGrant({
+							userId,
+							conversationId: p.conversationId,
+							tool: p.view.tool,
+							permissionKind: response.scope?.permissionKind ?? null,
+							scopePattern: response.scope?.pattern ?? null,
+							decision: 'allow',
+							expiresAt:
+								typeof response.expiresInMs === 'number' ? Date.now() + response.expiresInMs : null
+						});
+					}
 				} else {
 					settingsRepo.addGrant({
 						userId,
 						conversationId: p.conversationId,
-						tool: p.view.tool
+						tool: p.view.tool,
+						permissionKind: response.scope?.permissionKind ?? null,
+						scopePattern: response.scope?.pattern ?? null,
+						decision: 'deny',
+						expiresAt:
+							typeof response.expiresInMs === 'number' ? Date.now() + response.expiresInMs : null
 					});
 				}
 			}

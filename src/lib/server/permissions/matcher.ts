@@ -2,6 +2,8 @@
 // settings repo; this module only knows about pattern shapes and
 // precedence rules so it can be exercised by unit tests without a DB.
 
+export { deriveScopeKey } from '../../permissions/scope-key';
+
 export type GrantDecision = 'allow' | 'deny';
 export type MatchOutcome = 'allow' | 'deny' | 'none';
 
@@ -99,36 +101,9 @@ export function globToRegex(pattern: string): RegExp {
  * null if no meaningful scope can be extracted; the matcher will then
  * only fire for wildcard-pattern grants.
  *
- * Kept here (not in bridge.ts) so the same derivation can be reused by
- * the dialog's "suggest a narrow scope" UI in Tier 2 phase C.
+ * @deprecated Re-exported from `$lib/permissions/scope-key` so the dialog
+ * can use the same logic without pulling in server-only modules. Server
+ * code may import this name; new client code should import from
+ * `$lib/permissions/scope-key`.
  */
-export function deriveScopeKey(
-	permissionKind: string,
-	req: {
-		fullCommandText?: string;
-		fileName?: string;
-		args?: unknown;
-	}
-): string | null {
-	switch (permissionKind) {
-		case 'shell':
-			return req.fullCommandText ?? null;
-		case 'write':
-		case 'edit':
-		case 'read':
-			return req.fileName ?? readArgString(req.args, 'path') ?? null;
-		case 'url': {
-			const url =
-				readArgString(req.args, 'url') ?? readArgString(req.args, 'href') ?? req.fullCommandText;
-			return url ?? null;
-		}
-		default:
-			return null;
-	}
-}
-
-function readArgString(args: unknown, key: string): string | null {
-	if (!args || typeof args !== 'object') return null;
-	const v = (args as Record<string, unknown>)[key];
-	return typeof v === 'string' && v.length > 0 ? v : null;
-}
+export {};

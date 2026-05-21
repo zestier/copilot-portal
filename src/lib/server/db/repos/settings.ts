@@ -184,7 +184,7 @@ export function recordDecision(
 	conversationId: string,
 	tool: string,
 	argsSummary: string,
-	decision: 'allow-once' | 'allow-always' | 'deny'
+	decision: 'allow-once' | 'allow-always' | 'deny' | 'deny-always'
 ) {
 	const id = ulid();
 	getDb()
@@ -201,7 +201,7 @@ export interface PermissionDecisionRecord {
 	conversationTitle: string | null;
 	tool: string;
 	argsSummary: string | null;
-	decision: 'allow-once' | 'allow-always' | 'deny';
+	decision: 'allow-once' | 'allow-always' | 'deny' | 'deny-always';
 	decidedAt: number;
 }
 
@@ -236,7 +236,7 @@ export function listRecentDecisionsForUser(userId: string, limit = 50): Permissi
 		conversationTitle: r.conversation_title,
 		tool: r.tool,
 		argsSummary: r.args_summary,
-		decision: r.decision as 'allow-once' | 'allow-always' | 'deny',
+		decision: r.decision as PermissionDecisionRecord['decision'],
 		decidedAt: r.decided_at
 	}));
 }

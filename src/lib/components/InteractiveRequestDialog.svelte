@@ -3,8 +3,10 @@
 		InteractiveRequestView,
 		InteractiveResponse,
 		ElicitationSchema,
-		ElicitationSchemaField
+		ElicitationSchemaField,
+		PermissionGrantScope
 	} from '$lib/types';
+	import { deriveScopeKey } from '$lib/permissions/scope-key';
 
 	let {
 		request,
@@ -72,6 +74,105 @@
 			return String(args);
 		}
 	}
+
+	// --- permission scope picker state ---
+	//
+	// Four scope choices, narrowest first. Default to the narrowest
+	// available so a reflex click on "Allow always" doesn't blanket-grant
+	// the tool. The two narrowest options require a derivable scopeKey;
+	// without one (e.g. an unfamiliar permission kind) we fall back to
+	// "any-kind".
+	type ScopeChoice = 'this-exact' | 'tool-kind' | 'tool-any' | 'everything';
+	let scopeChoice = $state<ScopeChoice>('tool-kind');
+	let expiryChoice = $state<'forever' | '1h' | '1d'>('forever');
+
+	const HOUR_MS = 60 * 60 * 1000;
+	const DAY_MS = 24 * HOUR_MS;
+
+	const permissionScopeKey = $derived(
+		request.kind === 'permission'
+			? (deriveScopeKey(request.permissionKind, {
+					fullCommandText: undefined,
+					fileName: undefined,
+					args: request.args
+				}) ?? deriveFromSummary(request))
+			: null
+	);
+
+	// SDK already collapsed scope into `summary`; for shell that's the full
+	// command, for write/edit/read that's the file path. Use it as a
+	// fallback scopeKey when the structured args path didn't yield one.
+	function deriveFromSummary(
+		req: Extract<InteractiveRequestView, { kind: 'permission' }>
+	): string | null {
+		const s = typeof req.summary === 'string' ? req.summary.trim() : '';
+		return s.length > 0 && s !== req.tool ? s : null;
+	}
+
+	$effect(() => {
+		if (request.kind !== 'permission') return;
+		// Auto-select the narrowest scope we can support.
+		scopeChoice = permissionScopeKey ? 'this-exact' : 'tool-kind';
+	});
+
+	function buildScope(): PermissionGrantScope | undefined {
+		if (request.kind !== 'permission') return undefined;
+		switch (scopeChoice) {
+			case 'this-exact':
+				return permissionScopeKey
+					? { permissionKind: request.permissionKind, pattern: permissionScopeKey }
+					: { permissionKind: request.permissionKind, pattern: null };
+			case 'tool-kind':
+				return { permissionKind: request.permissionKind, pattern: null };
+			case 'tool-any':
+				return { permissionKind: null, pattern: null };
+			case 'everything':
+				// Sentinel: omit scope entirely, server interprets as "no
+				// kind/pattern restriction" but the row is still keyed on the
+				// requested tool. This matches the legacy "Allow always"
+				// semantics exactly.
+				return undefined;
+		}
+	}
+
+	function buildExpiry(): number | undefined {
+		switch (expiryChoice) {
+			case '1h':
+				return HOUR_MS;
+			case '1d':
+				return DAY_MS;
+			case 'forever':
+			default:
+				return undefined;
+		}
+	}
+
+	function pickAlways(decision: 'allow-always' | 'deny-always') {
+		pick({
+			kind: 'permission',
+			decision,
+			scope: buildScope(),
+			expiresInMs: buildExpiry()
+		});
+	}
+
+	function scopeOptionLabel(choice: ScopeChoice): string {
+		if (request.kind !== 'permission') return choice;
+		const tool = request.tool;
+		const kind = request.permissionKind;
+		switch (choice) {
+			case 'this-exact':
+				return permissionScopeKey
+					? `Just this exact ${kind || 'request'}`
+					: `Just this exact ${kind || 'request'} (unavailable)`;
+			case 'tool-kind':
+				return `Any ${tool} (${kind}) request`;
+			case 'tool-any':
+				return `Any ${tool} request, regardless of kind`;
+			case 'everything':
+				return `Any tool request (matches legacy "Allow always")`;
+		}
+	}
 </script>
 
 <div class="interactive" role="alertdialog" aria-modal="true">
@@ -89,8 +190,55 @@
 					<pre>{formatArgs(request.args)}</pre>
 				</details>
 			{/if}
+
+			<details class="grant-scope">
+				<summary>Remember this decision (optional)</summary>
+				<div class="scope-body">
+					<fieldset class="scope-group">
+						<legend>Scope</legend>
+						{#each ['this-exact', 'tool-kind', 'tool-any', 'everything'] as choice (choice)}
+							{@const c = choice as typeof scopeChoice}
+							<label class="scope-option">
+								<input
+									type="radio"
+									name="perm-scope"
+									value={c}
+									checked={scopeChoice === c}
+									disabled={c === 'this-exact' && !permissionScopeKey}
+									onchange={() => (scopeChoice = c)}
+								/>
+								{scopeOptionLabel(c)}
+							</label>
+						{/each}
+						{#if scopeChoice === 'this-exact' && permissionScopeKey}
+							<div class="muted small">Matches pattern: <code>{permissionScopeKey}</code></div>
+						{/if}
+					</fieldset>
+					<label class="expiry">
+						Expires:
+						<select
+							value={expiryChoice}
+							onchange={(e) =>
+								(expiryChoice = (e.currentTarget as HTMLSelectElement).value as
+									| 'forever'
+									| '1h'
+									| '1d')}
+						>
+							<option value="forever">Never</option>
+							<option value="1h">In 1 hour</option>
+							<option value="1d">In 1 day</option>
+						</select>
+					</label>
+				</div>
+			</details>
 		</div>
 		<div class="actions">
+			<button
+				class="btn"
+				disabled={busy}
+				onclick={() => pickAlways('deny-always')}
+				title="Deny this and any matching future requests">Deny always</button
+			>
 			<button
 				class="btn"
 				disabled={busy}
@@ -104,7 +252,8 @@
 			<button
 				class="btn primary"
 				disabled={busy}
-				onclick={() => pick({ kind: 'permission', decision: 'allow-always' })}>Allow always</button
+				onclick={() => pickAlways('allow-always')}
+				title="Allow this and any matching future requests">Allow always</button
 			>
 		</div>
 	{:else if request.kind === 'auto_mode_switch'}
@@ -370,6 +519,56 @@
 	.body details.args pre {
 		margin-top: 0.3rem;
 		max-height: 240px;
+	}
+	.body details.grant-scope {
+		margin-top: 0.6rem;
+		padding: 0.4rem 0.5rem;
+		border: 1px dashed var(--border);
+		border-radius: var(--radius-sm);
+		font-size: 0.85em;
+	}
+	.body details.grant-scope > summary {
+		cursor: pointer;
+		opacity: 0.85;
+	}
+	.scope-body {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		margin-top: 0.5rem;
+	}
+	.scope-group {
+		border: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+	.scope-group legend {
+		font-weight: 600;
+		padding: 0 0 0.2rem;
+	}
+	.scope-option {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-weight: normal;
+	}
+	.scope-option:has(input[type='radio']:disabled) {
+		opacity: 0.5;
+	}
+	.expiry {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+	}
+	.expiry select {
+		padding: 0.2rem 0.4rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--surface);
+		color: inherit;
 	}
 	.actions {
 		display: flex;

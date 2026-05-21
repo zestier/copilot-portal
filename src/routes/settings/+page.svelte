@@ -90,7 +90,7 @@
 		}
 	}
 
-	function decisionLabel(d: 'allow-once' | 'allow-always' | 'deny'): string {
+	function decisionLabel(d: 'allow-once' | 'allow-always' | 'deny' | 'deny-always'): string {
 		switch (d) {
 			case 'allow-once':
 				return 'Allow once';
@@ -98,6 +98,8 @@
 				return 'Allow always';
 			case 'deny':
 				return 'Deny';
+			case 'deny-always':
+				return 'Deny always';
 		}
 	}
 </script>
@@ -394,7 +396,8 @@
 		border-color: var(--success);
 		background: var(--success-bg, transparent);
 	}
-	.decision-tag.deny {
+	.decision-tag.deny,
+	.decision-tag.deny-always {
 		color: var(--danger);
 		border-color: var(--danger);
 	}

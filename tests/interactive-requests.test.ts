@@ -242,4 +242,51 @@ describe('interactive request registry', () => {
 		settings.addGrant({ userId, conversationId: null, tool: 'shell' });
 		expect(settings.matchGrant(userId, other, 'shell', 'shell', 'anything')).toBe('allow');
 	});
+
+	it('deny-always writes a deny grant and rejects future matching requests', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const requestId = newRequestId();
+		makePending('permission', permView(requestId), undefined);
+		resolve(requestId, userId, {
+			kind: 'permission',
+			decision: 'deny-always',
+			scope: { permissionKind: 'shell', pattern: 'rm *' }
+		});
+		expect(settings.matchGrant(userId, conversationId, 'shell', 'shell', 'rm -rf /')).toBe('deny');
+		// Unrelated commands still fall through.
+		expect(settings.matchGrant(userId, conversationId, 'shell', 'shell', 'ls')).toBe('none');
+	});
+
+	it('allow-always with expiresInMs writes a TTL grant', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const requestId = newRequestId();
+		makePending('permission', permView(requestId), undefined);
+		resolve(requestId, userId, {
+			kind: 'permission',
+			decision: 'allow-always',
+			expiresInMs: 60_000
+		});
+		expect(settings.matchGrant(userId, conversationId, 'shell', 'shell', 'ls')).toBe('allow');
+		expect(
+			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'ls', Date.now() + 120_000)
+		).toBe('none');
+	});
+
+	it('deny-always is allowed even when policy is deny-all', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		settings.save(userId, {
+			defaultModel: null,
+			defaultWorkdir: null,
+			defaultPolicy: 'deny-all',
+			theme: 'dark'
+		});
+		const requestId = newRequestId();
+		makePending('permission', permView(requestId), undefined);
+		resolve(requestId, userId, {
+			kind: 'permission',
+			decision: 'deny-always'
+		});
+		// Recording a deny grant under deny-all is fine — it's never less safe.
+		expect(settings.matchGrant(userId, conversationId, 'shell', 'shell', 'x')).toBe('deny');
+	});
 });
