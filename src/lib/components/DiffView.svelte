@@ -111,15 +111,19 @@
 		font-family: var(--mono);
 		font-size: 0.82em;
 		line-height: 1.45;
+		display: flex;
+		flex-direction: column;
 	}
 	.line {
 		display: grid;
-		grid-template-columns: 3.5em 1em 1fr;
+		grid-template-columns: 3.5em 1em max-content;
 		align-items: baseline;
 		white-space: pre;
+		min-width: 100%;
+		width: max-content;
 	}
 	.no-gutter .line {
-		grid-template-columns: 1em 1fr;
+		grid-template-columns: 1em max-content;
 	}
 	.gutter {
 		text-align: right;
