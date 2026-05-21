@@ -27,31 +27,33 @@
 		<div class="empty">No textual diff (file may be binary, empty, or unchanged).</div>
 	{:else}
 		<div class="lines" class:no-gutter={!showLineNumbers} role="table" aria-label="diff lines">
-			{#each parsed as l, i (i)}
-				{#if l.kind === 'hunk' && !showLineNumbers}
-					<!-- Suppress the @@ -L,N +L,N @@ header when we don't trust the
-					     line ranges (e.g. for diffs synthesized from edit args
-					     without full-file context). -->
-				{:else}
-					<div class={'line ' + l.kind} role="row">
-						{#if showLineNumbers}
-							<span class="gutter" role="cell" aria-label="line number"
-								>{fmtNo(l.newNo ?? l.oldNo)}</span
+			<div class="rows">
+				{#each parsed as l, i (i)}
+					{#if l.kind === 'hunk' && !showLineNumbers}
+						<!-- Suppress the @@ -L,N +L,N @@ header when we don't trust the
+						     line ranges (e.g. for diffs synthesized from edit args
+						     without full-file context). -->
+					{:else}
+						<div class={'line ' + l.kind} role="row">
+							{#if showLineNumbers}
+								<span class="gutter" role="cell" aria-label="line number"
+									>{fmtNo(l.newNo ?? l.oldNo)}</span
+								>
+							{/if}
+							<span class="sign" aria-hidden="true"
+								>{l.kind === 'add'
+									? '+'
+									: l.kind === 'del'
+										? '-'
+										: l.kind === 'hunk'
+											? '@'
+											: ' '}</span
 							>
-						{/if}
-						<span class="sign" aria-hidden="true"
-							>{l.kind === 'add'
-								? '+'
-								: l.kind === 'del'
-									? '-'
-									: l.kind === 'hunk'
-										? '@'
-										: ' '}</span
-						>
-						<span class="text" role="cell">{l.text}</span>
-					</div>
-				{/if}
-			{/each}
+							<span class="text" role="cell">{l.text}</span>
+						</div>
+					{/if}
+				{/each}
+			</div>
 		</div>
 	{/if}
 </div>
@@ -111,19 +113,19 @@
 		font-family: var(--mono);
 		font-size: 0.82em;
 		line-height: 1.45;
-		display: flex;
-		flex-direction: column;
 	}
-	.line {
-		display: grid;
-		grid-template-columns: 3.5em 1em max-content;
-		align-items: baseline;
-		white-space: pre;
+	.rows {
 		min-width: 100%;
 		width: max-content;
 	}
+	.line {
+		display: grid;
+		grid-template-columns: 3.5em 1em 1fr;
+		align-items: baseline;
+		white-space: pre;
+	}
 	.no-gutter .line {
-		grid-template-columns: 1em max-content;
+		grid-template-columns: 1em 1fr;
 	}
 	.gutter {
 		text-align: right;
