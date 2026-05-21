@@ -84,6 +84,157 @@ export interface UserSettings {
 
 export type PermissionPolicy = 'prompt' | 'allow-readonly' | 'allow-all' | 'deny-all';
 
+// --- Interactive requests ---
+//
+// The SDK can pause a turn to ask the host (us) for input: permission to run
+// a tool, free-form text, structured form fields, approval to leave plan
+// mode, etc. We normalize all of them into a single discriminated union so
+// the UI has one event channel + one dialog component to switch on.
+
+export type InteractiveKind =
+	| 'permission'
+	| 'auto_mode_switch'
+	| 'user_input'
+	| 'elicitation'
+	| 'exit_plan_mode'
+	// "info" kinds: the SDK fires these but does not expose a public
+	// responder. We surface them so the user knows what's happening; the
+	// turn proceeds whenever the SDK resolves the request on its own.
+	| 'sampling'
+	| 'mcp_oauth'
+	| 'external_tool';
+
+export interface InteractivePermissionView {
+	kind: 'permission';
+	tool: string;
+	permissionKind: string;
+	summary: string;
+	args: unknown;
+}
+
+export interface InteractiveAutoModeSwitchView {
+	kind: 'auto_mode_switch';
+	errorCode?: string;
+	retryAfterSeconds?: number;
+}
+
+export interface InteractiveUserInputView {
+	kind: 'user_input';
+	question: string;
+	choices?: string[];
+	allowFreeform: boolean;
+}
+
+export interface InteractiveElicitationView {
+	kind: 'elicitation';
+	message: string;
+	mode: 'form' | 'url';
+	url?: string;
+	requestedSchema?: ElicitationSchema;
+	elicitationSource?: string;
+}
+
+export interface InteractiveExitPlanModeView {
+	kind: 'exit_plan_mode';
+	summary: string;
+	planContent?: string;
+	actions: string[];
+	recommendedAction: string;
+}
+
+export interface InteractiveSamplingView {
+	kind: 'sampling';
+	mcpServerName?: string;
+	summary: string;
+}
+
+export interface InteractiveMcpOauthView {
+	kind: 'mcp_oauth';
+	mcpServerName?: string;
+	authorizationUrl?: string;
+	summary: string;
+}
+
+export interface InteractiveExternalToolView {
+	kind: 'external_tool';
+	toolName: string;
+	summary: string;
+}
+
+export type InteractiveRequestViewBody =
+	| InteractivePermissionView
+	| InteractiveAutoModeSwitchView
+	| InteractiveUserInputView
+	| InteractiveElicitationView
+	| InteractiveExitPlanModeView
+	| InteractiveSamplingView
+	| InteractiveMcpOauthView
+	| InteractiveExternalToolView;
+
+export type InteractiveRequestView = { requestId: string } & InteractiveRequestViewBody;
+
+export type InteractiveResponse =
+	| { kind: 'permission'; decision: PermissionDecision }
+	| { kind: 'auto_mode_switch'; decision: 'yes' | 'yes_always' | 'no' }
+	| { kind: 'user_input'; answer: string; wasFreeform?: boolean }
+	| {
+			kind: 'elicitation';
+			action: 'accept' | 'decline' | 'cancel';
+			content?: Record<string, string | number | boolean | string[]>;
+	  }
+	| {
+			kind: 'exit_plan_mode';
+			approved: boolean;
+			selectedAction?: string;
+			feedback?: string;
+	  }
+	// "info" kinds: client can only acknowledge / dismiss. Always 'ack'.
+	| { kind: 'sampling'; action: 'ack' }
+	| { kind: 'mcp_oauth'; action: 'ack' }
+	| { kind: 'external_tool'; action: 'ack' };
+
+export interface ElicitationSchema {
+	type: 'object';
+	properties: Record<string, ElicitationSchemaField>;
+	required?: string[];
+}
+
+export type ElicitationSchemaField =
+	| {
+			type: 'string';
+			title?: string;
+			description?: string;
+			enum?: string[];
+			enumNames?: string[];
+			minLength?: number;
+			maxLength?: number;
+			format?: 'email' | 'uri' | 'date' | 'date-time';
+			default?: string;
+	  }
+	| {
+			type: 'number' | 'integer';
+			title?: string;
+			description?: string;
+			minimum?: number;
+			maximum?: number;
+			default?: number;
+	  }
+	| {
+			type: 'boolean';
+			title?: string;
+			description?: string;
+			default?: boolean;
+	  }
+	| {
+			type: 'array';
+			title?: string;
+			description?: string;
+			minItems?: number;
+			maxItems?: number;
+			items: { type: 'string'; enum?: string[] };
+			default?: string[];
+	  };
+
 // --- Normalized streaming protocol (server -> client over SSE) ---
 
 export type PortalEvent =
@@ -98,18 +249,15 @@ export type PortalEvent =
 	  }
 	| { type: 'message.end'; messageId: string }
 	| { type: 'tool.call'; toolCallId: string; tool: string; args: unknown }
+	| { type: 'interactive.request'; request: InteractiveRequestView }
 	| {
-			type: 'tool.permission';
+			type: 'interactive.resolved';
 			requestId: string;
-			tool: string;
-			kind: string;
-			summary: string;
-			args: unknown;
-	  }
-	| {
-			type: 'tool.permission.resolved';
-			requestId: string;
-			decision: PermissionDecision;
+			kind: InteractiveKind;
+			// Free-form snapshot of the resolution for replay / audit. Specific
+			// shape mirrors InteractiveResponse but is intentionally `unknown`
+			// here so the SSE consumer can replay it without re-parsing.
+			outcome: unknown;
 	  }
 	| {
 			type: 'tool.result';
@@ -181,12 +329,4 @@ export interface ChangeEntry {
 export interface ChangesResponse {
 	initialized: boolean;
 	entries: ChangeEntry[];
-}
-
-export interface PermissionRequestView {
-	requestId: string;
-	tool: string;
-	kind: string;
-	summary: string;
-	args: unknown;
 }

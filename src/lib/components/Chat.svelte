@@ -6,15 +6,15 @@
 		ConversationUsage,
 		Message,
 		PortalEvent,
-		PermissionDecision,
-		PermissionRequestView
+		InteractiveRequestView,
+		InteractiveResponse
 	} from '$lib/types';
 	import Message_ from './Message.svelte';
-	import PermissionPrompt from './PermissionPrompt.svelte';
+	import InteractiveRequestDialog from './InteractiveRequestDialog.svelte';
 	import ChatHeader from './ChatHeader.svelte';
 	import Composer from './Composer.svelte';
 	import ThinkingIndicator from './ThinkingIndicator.svelte';
-	import { addPermission, removePermission } from '$lib/client/permission-queue';
+	import { addInteractive, removeInteractive } from '$lib/client/interactive-queue';
 
 	let {
 		conversation,
@@ -101,7 +101,7 @@
 	// `onPermissionRequest` callbacks concurrently (parallel tool calls),
 	// so we must surface them all — a single slot would let later events
 	// clobber earlier ones, stranding the earlier requests on the server.
-	let pendingPermissions = $state<PermissionRequestView[]>([]);
+	let pendingInteractive = $state<InteractiveRequestView[]>([]);
 	// Active EventSource for the in-flight turn (if any). null when idle.
 	// Holding a reference here lets `stop()` close it on user-cancel and
 	// lets the conversation-prop $effect tear it down on navigation.
@@ -219,7 +219,7 @@
 			messages = data.messages;
 			// A completed turn means any outstanding permission prompt was
 			// resolved server-side; clear them so we don't strand a dialog.
-			pendingPermissions = [];
+			pendingInteractive = [];
 			await scrollToBottom();
 			// If a new turn became active between events (unlikely but
 			// possible from another tab), attach to it.
@@ -328,22 +328,16 @@
 				}
 				break;
 			}
-			case 'tool.permission': {
-				pendingPermissions = addPermission(pendingPermissions, {
-					requestId: ev.requestId,
-					tool: ev.tool,
-					kind: ev.kind,
-					summary: ev.summary,
-					args: ev.args
-				});
+			case 'interactive.request': {
+				pendingInteractive = addInteractive(pendingInteractive, ev.request);
 				break;
 			}
-			case 'tool.permission.resolved': {
+			case 'interactive.resolved': {
 				// Drop the matching prompt. Critical on replay: the original
-				// `tool.permission` event lives forever in the turn's event
+				// `interactive.request` event lives forever in the turn's event
 				// log, so without this signal a refresh or a visibility-driven
 				// reconnect would resurrect a dialog the user already answered.
-				pendingPermissions = removePermission(pendingPermissions, ev.requestId);
+				pendingInteractive = removeInteractive(pendingInteractive, ev.requestId);
 				break;
 			}
 			case 'file.edit': {
@@ -426,15 +420,15 @@
 		}
 	}
 
-	async function decidePermission(requestId: string, d: PermissionDecision) {
-		if (!pendingPermissions.some((p) => p.requestId === requestId)) return;
-		// Optimistically drop the prompt; the server will also emit a
-		// `tool.permission.resolved` which is a no-op once removed.
-		pendingPermissions = removePermission(pendingPermissions, requestId);
-		await fetch(`/api/conversations/${conversation.id}/permissions/${requestId}`, {
+	async function respondInteractive(requestId: string, response: InteractiveResponse) {
+		if (!pendingInteractive.some((p) => p.requestId === requestId)) return;
+		// Optimistically drop the prompt; the server will also emit an
+		// `interactive.resolved` which is a no-op once removed.
+		pendingInteractive = removeInteractive(pendingInteractive, requestId);
+		await fetch(`/api/conversations/${conversation.id}/interactive/${requestId}`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ decision: d })
+			body: JSON.stringify(response)
 		});
 	}
 
@@ -510,7 +504,7 @@
 	// next assistant message (i.e., streaming but no in-progress assistant
 	// message exists yet, or it exists but has no content and no tool activity).
 	const thinking = $derived.by(() => {
-		if (!streaming || pendingPermissions.length > 0) return false;
+		if (!streaming || pendingInteractive.length > 0) return false;
 		const last = messages[messages.length - 1];
 		if (!last || last.role !== 'assistant') return true;
 		const hasContent = last.content.length > 0;
@@ -538,8 +532,11 @@
 					onForked={refreshForks}
 				/>
 			{/each}
-			{#each pendingPermissions as p (p.requestId)}
-				<PermissionPrompt request={p} onDecide={(d) => decidePermission(p.requestId, d)} />
+			{#each pendingInteractive as p (p.requestId)}
+				<InteractiveRequestDialog
+					request={p}
+					onRespond={(r) => respondInteractive(p.requestId, r)}
+				/>
 			{/each}
 			{#if thinking}
 				<ThinkingIndicator />
@@ -573,7 +570,7 @@
 	<Composer
 		bind:value={composer}
 		{streaming}
-		inputDisabled={streaming && pendingPermissions.length === 0}
+		inputDisabled={streaming && pendingInteractive.length === 0}
 		onSend={send}
 		onStop={stop}
 	/>

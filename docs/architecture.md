@@ -92,14 +92,19 @@ Server → client SSE events, one JSON object per `data:` line:
 | `message.delta`       | `{ messageId, text }`                                |
 | `message.end`         | `{ messageId }`                                      |
 | `tool.call`           | `{ toolCallId, tool, args }`                         |
-| `tool.permission`     | `{ toolCallId, tool, args, requestId }` (needs ack)  |
+| `interactive.request` | `{ request: InteractiveRequestView }` (needs ack)    |
+| `interactive.resolved`| `{ requestId, kind, outcome }`                       |
 | `tool.result`         | `{ toolCallId, ok, summary, output? }`               |
 | `file.edit`           | `{ path, diff }`                                     |
 | `error`               | `{ code, message }`                                  |
 | `done`                | `{}`                                                 |
 
-Permission acknowledgements are a separate POST:
-`POST /api/conversations/:id/permissions/:requestId { decision: "allow-once" | "allow-always" | "deny" }`.
+Interactive acknowledgements (permission, auto-mode-switch, user-input,
+elicitation, exit-plan-mode, plus info-only sampling/mcp_oauth/external_tool)
+all flow through one endpoint:
+`POST /api/conversations/:id/interactive/:requestId` with a
+discriminated `{ kind, ... }` body. The legacy
+`/permissions/:requestId` endpoint remains as a one-release shim.
 
 ## Concurrency model
 

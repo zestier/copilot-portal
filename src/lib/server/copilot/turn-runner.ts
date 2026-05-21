@@ -17,6 +17,7 @@ import * as convs from '../db/repos/conversations';
 import * as usageRepo from '../db/repos/usage';
 import * as pool from './pool';
 import { deriveTitle, isDefaultTitle } from '../title';
+import * as interactiveRequests from './interactive-requests';
 import { AsyncQueue } from './async-queue';
 import { snapshot as takeSnapshot } from '../snapshots';
 import type { BridgeOpenOptions } from './bridge';
@@ -157,6 +158,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		},
 		async abort() {
 			turnAc.abort();
+			interactiveRequests.cancelConversation(opts.conversationId, 'turn_aborted');
 			try {
 				await session.abort();
 			} catch {

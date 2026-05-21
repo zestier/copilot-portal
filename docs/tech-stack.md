@@ -57,10 +57,10 @@ copilot-portal/
 │  │  │  ├─ markdown.ts
 │  │  │  ├─ diff-parser.ts
 │  │  │  ├─ file-browser.ts
-│  │  │  ├─ permission-queue.ts
+│  │  │  ├─ interactive-queue.ts
 │  │  │  └─ sidebar.ts
 │  │  ├─ components/             # Chat, Sidebar, FileBrowser,
-│  │  │                          # PermissionPrompt, ToolCall,
+│  │  │                          # InteractiveRequestDialog, ToolCall,
 │  │  │                          # DiffView, ContextMeter,
 │  │  │                          # ReasoningBlock, … + ui/
 │  │  ├─ server/
@@ -70,7 +70,7 @@ copilot-portal/
 │  │  │  │  ├─ pool.ts            # conversation→session map, idle reaper
 │  │  │  │  ├─ turn-runner.ts     # per-turn event log + persistence
 │  │  │  │  ├─ async-queue.ts
-│  │  │  │  └─ permissions.ts
+│  │  │  │  └─ interactive-requests.ts
 │  │  │  ├─ db/
 │  │  │  │  ├─ index.ts           # better-sqlite3 singleton
 │  │  │  │  ├─ ids.ts             # monotonic ULID factory

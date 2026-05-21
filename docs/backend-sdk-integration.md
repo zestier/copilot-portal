@@ -107,23 +107,36 @@ export function startIdleReaper(idleMs: number) {
 Hard cap: when `clients.size >= MAX_CONCURRENT_SESSIONS`, refuse new sends
 with HTTP 429 unless the caller releases an existing one.
 
-## Module: `$lib/server/copilot/permissions.ts`
+## Module: `$lib/server/copilot/interactive-requests.ts`
 
-Tool-call permission flow:
+Generic interactive-request flow (covers permission, auto_mode_switch,
+user_input, elicitation, exit_plan_mode, plus informational
+sampling / mcp_oauth / external_tool):
 
-1. SDK calls `onToolPermissionRequest({ tool, args })`.
-2. Bridge emits `tool.permission` SSE event with a unique `requestId` and
-   stashes a `{ resolve }` deferred keyed by `requestId`.
-3. Client renders a `<PermissionPrompt>` and the user picks
-   *Allow once / Allow always / Deny*.
-4. Client posts `POST /api/conversations/:id/permissions/:requestId` with
-   the decision. Endpoint looks up the deferred, resolves it, returns 204.
-5. "Allow always" persists `{ tool, conversationId }` (or `{ tool, *  }` for
-   global) to SQLite; the permission handler short-circuits future requests
-   matching either scope without prompting.
+1. SDK fires one of `onPermissionRequest` / `onUserInputRequest` /
+   `onElicitationRequest` / `onExitPlanMode` / `onAutoModeSwitch`, or
+   emits a `sampling.requested` / `mcp.oauth_required` /
+   `external_tool.requested` event.
+2. Bridge mints a `requestId`, registers a `{ resolve, reject, kind, view }`
+   deferred, and emits an `interactive.request` SSE event.
+3. Client renders `<InteractiveRequestDialog>` (one component switching on
+   `kind`) and the user picks a kind-appropriate response.
+4. Client posts `POST /api/conversations/:id/interactive/:requestId` with
+   a discriminated `{ kind, ... }` body. Endpoint validates against the
+   pending request's kind, resolves the deferred, and returns 200.
+5. The registry emits `interactive.resolved` into the turn's event log
+   *before* unblocking the SDK so any replay (page refresh) sees the
+   resolution and clears the dialog.
+6. For `permission` only: "Allow always" persists `{ tool, conversationId }`
+   so the bridge can short-circuit future requests for the same tool.
 
 A user-configurable default policy (deny-all / prompt-all / allow-readonly /
-allow-all) gates the prompt entirely.
+allow-all) gates the prompt, but **only** for the `permission` kind —
+auto-mode-switch et al. are billing/quota decisions and always ask.
+
+Pending requests have a server-side timeout (default 10 min). When a turn
+is aborted, `cancelConversation()` rejects every pending request with a
+kind-appropriate default denial so the SDK doesn't hang.
 
 ## Conversation turn endpoints
 

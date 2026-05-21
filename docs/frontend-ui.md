@@ -43,7 +43,7 @@ Sidebar is a `<details>`-like drawer below a breakpoint (~768 px).
 ### `Chat.svelte`
 
 Owns the conversation's runtime state: messages, current stream, pending
-permission prompts. Reads initial data from `+page.server.ts`'s `load`,
+interactive requests. Reads initial data from `+page.server.ts`'s `load`,
 then opens an SSE connection on submit.
 
 State (Svelte 5 runes):
@@ -51,7 +51,7 @@ State (Svelte 5 runes):
 ```ts
 let messages = $state<Message[]>(initial);
 let streaming = $state<{ messageId: string; buffer: string } | null>(null);
-let pendingPermission = $state<PermissionRequest | null>(null);
+let pendingInteractive = $state<InteractiveRequestView[]>([]);
 let toolCalls = $state<Record<string, ToolCallView>>({});
 ```
 
@@ -107,12 +107,15 @@ All paths are constrained to the workspace root realpath; symlinks that
 escape are rejected. `git` is spawned with `shell: false`, hard timeouts,
 and output size caps.
 
-### `PermissionPrompt.svelte`
+### `InteractiveRequestDialog.svelte`
 
-Modal-ish inline card that blocks further streaming. Shows tool name,
-arguments preview, and three buttons: *Allow once*, *Allow always for this
-conversation*, *Deny*. A small "what does this tool do?" tooltip pulls from
-a static description map.
+Modal-ish inline card that handles every interactive-request kind the
+Copilot SDK can ask for: tool permission (Allow once / Allow always /
+Deny), auto-mode-switch on rate limit, user_input (choices + freeform),
+elicitation (schema-driven form or url mode), exit_plan_mode (per-action
+buttons), and informational sampling / mcp_oauth / external_tool surfaces.
+Switches on `request.kind` and posts an `InteractiveResponse` to
+`POST /api/conversations/:id/interactive/:requestId`.
 
 ### `Composer.svelte`
 
