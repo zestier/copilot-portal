@@ -501,6 +501,40 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		});
 	};
 
+	const onToolPartialResult = (e: unknown) => {
+		const ev = e as {
+			agentId?: string;
+			data?: { toolCallId?: string; partialOutput?: string };
+		};
+		if (!activeQueue) return;
+		const id = ev?.data?.toolCallId;
+		const out = ev?.data?.partialOutput;
+		if (!id || typeof out !== 'string' || out.length === 0) return;
+		activeQueue.push({
+			type: 'tool.partial_output',
+			toolCallId: id,
+			output: out,
+			parentToolCallId: parentToolCallId(ev)
+		});
+	};
+
+	const onToolProgress = (e: unknown) => {
+		const ev = e as {
+			agentId?: string;
+			data?: { toolCallId?: string; progressMessage?: string };
+		};
+		if (!activeQueue) return;
+		const id = ev?.data?.toolCallId;
+		const msg = ev?.data?.progressMessage;
+		if (!id || typeof msg !== 'string' || msg.length === 0) return;
+		activeQueue.push({
+			type: 'tool.progress',
+			toolCallId: id,
+			message: msg,
+			parentToolCallId: parentToolCallId(ev)
+		});
+	};
+
 	const onSubagentStarted = (e: unknown) => {
 		const ev = e as { agentId?: string; data?: { toolCallId?: string } };
 		if (ev.agentId && ev.data?.toolCallId) {
@@ -672,6 +706,8 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	sdkSession.on('assistant.message', onAssistantMessage);
 	sdkSession.on('tool.execution_start', onToolStart);
 	sdkSession.on('tool.execution_complete', onToolComplete);
+	sdkSession.on('tool.execution_partial_result', onToolPartialResult);
+	sdkSession.on('tool.execution_progress', onToolProgress);
 	sdkSession.on('subagent.started', onSubagentStarted);
 	sdkSession.on('subagent.completed', onSubagentEnded);
 	sdkSession.on('subagent.failed', onSubagentEnded);

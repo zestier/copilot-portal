@@ -246,3 +246,93 @@ describe('bridge.open() reasoning segmentation', () => {
 		expect(secondEndIdx).toBeLessThan(firstDeltaIdx);
 	});
 });
+
+describe('bridge.open() tool live-streaming events', () => {
+	it('forwards tool.execution_partial_result and tool.execution_progress as portal events', async () => {
+		clientStub.getSessionMetadata.mockResolvedValue(undefined);
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			const handlers = new Map<string, (e: unknown) => void>(
+				sdkSessionStub.on.mock.calls.map((c) => [c[0] as string, c[1] as (e: unknown) => void])
+			);
+			handlers.get('tool.execution_start')?.({
+				data: { toolCallId: 't1', toolName: 'bash', arguments: { command: 'echo hi' } }
+			});
+			handlers.get('tool.execution_progress')?.({
+				data: { toolCallId: 't1', progressMessage: 'Connecting…' }
+			});
+			handlers.get('tool.execution_partial_result')?.({
+				data: { toolCallId: 't1', partialOutput: 'hi\n' }
+			});
+			handlers.get('tool.execution_partial_result')?.({
+				data: { toolCallId: 't1', partialOutput: 'world\n' }
+			});
+			handlers.get('tool.execution_complete')?.({
+				data: { toolCallId: 't1', success: true, result: { content: 'hi\nworld\n' } }
+			});
+			handlers.get('session.idle')?.({});
+			return 'msg-id';
+		});
+
+		const { open } = await importBridge();
+		const session = await open(baseOpts);
+		const ac = new AbortController();
+		const events: { type: string; toolCallId?: string; output?: string; message?: string }[] = [];
+		for await (const ev of session.send('hi', ac.signal)) {
+			events.push(ev as (typeof events)[number]);
+			if (ev.type === 'done') break;
+		}
+
+		const partials = events.filter((e) => e.type === 'tool.partial_output');
+		expect(partials.map((p) => p.output)).toEqual(['hi\n', 'world\n']);
+		const progress = events.find((e) => e.type === 'tool.progress');
+		expect(progress?.message).toBe('Connecting…');
+
+		// Order: progress + partials must arrive between tool.call and tool.result.
+		const callIdx = events.findIndex((e) => e.type === 'tool.call');
+		const resultIdx = events.findIndex((e) => e.type === 'tool.result');
+		const progressIdx = events.findIndex((e) => e.type === 'tool.progress');
+		const firstPartialIdx = events.findIndex((e) => e.type === 'tool.partial_output');
+		expect(callIdx).toBeGreaterThanOrEqual(0);
+		expect(resultIdx).toBeGreaterThan(callIdx);
+		expect(progressIdx).toBeGreaterThan(callIdx);
+		expect(progressIdx).toBeLessThan(resultIdx);
+		expect(firstPartialIdx).toBeGreaterThan(progressIdx);
+		expect(firstPartialIdx).toBeLessThan(resultIdx);
+	});
+
+	it('drops empty partial_output and progress payloads', async () => {
+		clientStub.getSessionMetadata.mockResolvedValue(undefined);
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			const handlers = new Map<string, (e: unknown) => void>(
+				sdkSessionStub.on.mock.calls.map((c) => [c[0] as string, c[1] as (e: unknown) => void])
+			);
+			handlers.get('tool.execution_start')?.({
+				data: { toolCallId: 't1', toolName: 'bash', arguments: {} }
+			});
+			handlers.get('tool.execution_partial_result')?.({
+				data: { toolCallId: 't1', partialOutput: '' }
+			});
+			handlers.get('tool.execution_progress')?.({
+				data: { toolCallId: 't1', progressMessage: '' }
+			});
+			handlers.get('tool.execution_complete')?.({
+				data: { toolCallId: 't1', success: true, result: null }
+			});
+			handlers.get('session.idle')?.({});
+			return 'msg-id';
+		});
+
+		const { open } = await importBridge();
+		const session = await open(baseOpts);
+		const ac = new AbortController();
+		const events: { type: string }[] = [];
+		for await (const ev of session.send('hi', ac.signal)) {
+			events.push(ev as { type: string });
+			if (ev.type === 'done') break;
+		}
+		expect(events.find((e) => e.type === 'tool.partial_output')).toBeUndefined();
+		expect(events.find((e) => e.type === 'tool.progress')).toBeUndefined();
+	});
+});

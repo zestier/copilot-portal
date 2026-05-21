@@ -73,6 +73,11 @@ export interface ToolCallRecord {
 	// invoke their own tools; those nested calls are children of the
 	// outermost `task` tool call.
 	parentToolCallId: string | null;
+	// Ephemeral live-streaming state. Populated client-side from
+	// `tool.partial_output` and `tool.progress` events while the tool is
+	// running. Not persisted: server-side rehydrations leave these unset.
+	partialOutput?: string;
+	progressMessage?: string;
 }
 
 export interface FileEditRecord {
@@ -291,6 +296,22 @@ export type PortalEvent =
 			ok: boolean;
 			summary: string;
 			output?: unknown;
+			parentToolCallId?: string;
+	  }
+	// Ephemeral live-streaming events from the SDK during a tool's execution.
+	// Forwarded to subscribers but intentionally NOT appended to the turn's
+	// event log: reconnects pick up the authoritative final state via
+	// `tool.result` and don't need to replay stale partial chunks.
+	| {
+			type: 'tool.partial_output';
+			toolCallId: string;
+			output: string;
+			parentToolCallId?: string;
+	  }
+	| {
+			type: 'tool.progress';
+			toolCallId: string;
+			message: string;
 			parentToolCallId?: string;
 	  }
 	| { type: 'file.edit'; path: string; diff: string; parentToolCallId?: string }

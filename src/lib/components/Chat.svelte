@@ -329,7 +329,22 @@
 					tc.status = ev.ok ? 'ok' : 'error';
 					tc.resultJson = safeJson(ev.output ?? ev.summary);
 					tc.endedAt = Date.now();
+					// Drop ephemeral streaming state — final result supersedes it.
+					tc.partialOutput = undefined;
+					tc.progressMessage = undefined;
 				}
+				break;
+			}
+			case 'tool.partial_output': {
+				const m = messages[messages.length - 1];
+				const tc = m?.toolCalls?.find((t) => t.id === ev.toolCallId);
+				if (tc) tc.partialOutput = (tc.partialOutput ?? '') + ev.output;
+				break;
+			}
+			case 'tool.progress': {
+				const m = messages[messages.length - 1];
+				const tc = m?.toolCalls?.find((t) => t.id === ev.toolCallId);
+				if (tc) tc.progressMessage = ev.message;
 				break;
 			}
 			case 'interactive.request': {

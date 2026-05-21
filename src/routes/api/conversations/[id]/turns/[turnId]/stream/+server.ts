@@ -33,7 +33,10 @@ export const GET: RequestHandler = ({ params, locals, request }) => {
 	}
 
 	return sseResponse(turn.subscribe({ signal: request.signal, sinceId }), {
-		extractId: (item) => item.id,
+		// Negative ids are sentinels for ephemeral events that aren't part
+		// of the replay buffer — omit the `id:` line entirely so the
+		// browser's Last-Event-ID stays pointed at the latest persisted id.
+		extractId: (item) => (item.id < 0 ? undefined : item.id),
 		extractData: (item) => item.event
 	});
 };

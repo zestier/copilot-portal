@@ -141,6 +141,15 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	// surface an event MUST go through here so that ids stay contiguous
 	// and aligned with the replay buffer.
 	function emit(ev: PortalEvent) {
+		// Live-only events (per-tool partial output, progress messages):
+		// fan out to active subscribers but do NOT append to the event log.
+		// Reconnects don't replay them; the authoritative final state comes
+		// from `tool.result`.
+		if (ev.type === 'tool.partial_output' || ev.type === 'tool.progress') {
+			const wrapped: IdentifiedEvent = { id: -1, event: ev };
+			for (const q of subscribers) q.push(wrapped);
+			return;
+		}
 		const id = eventLog.length;
 		eventLog.push(ev);
 		const wrapped: IdentifiedEvent = { id, event: ev };

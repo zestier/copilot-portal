@@ -1,7 +1,27 @@
 <script lang="ts">
 	import type { ToolCallRecord } from '$lib/types';
+	import DiffView from './DiffView.svelte';
+	import TerminalBlock from './tool/TerminalBlock.svelte';
+	import ResultBlock from './tool/ResultBlock.svelte';
+	import { synthesizeDiff } from '$lib/client/diff-synth';
+	import { summarizeToolCall } from '$lib/client/tool-summary';
+	import { decodeToolResult } from '$lib/client/tool-result';
+
 	let { toolCall }: { toolCall: ToolCallRecord } = $props();
-	let open = $state(false);
+
+	// Auto-expand while pending so live progress / partial output is
+	// visible; auto-collapse once complete. User clicks override either
+	// direction (matches SubagentCall behavior).
+	let userToggled = $state(false);
+	let manualOpen = $state(false);
+	const pending = $derived(toolCall.status === 'pending');
+	const open = $derived(userToggled ? manualOpen : pending);
+	function onToggle(e: Event) {
+		const el = e.currentTarget as HTMLDetailsElement;
+		userToggled = true;
+		manualOpen = el.open;
+	}
+
 	function statusEmoji(s: ToolCallRecord['status']) {
 		switch (s) {
 			case 'ok':
@@ -15,102 +35,16 @@
 		}
 	}
 
-	function truncate(s: string, n = 80): string {
-		const oneLine = s.replace(/\s+/g, ' ').trim();
-		return oneLine.length > n ? oneLine.slice(0, n - 1) + '…' : oneLine;
-	}
-
-	function parseArgs(json: string): Record<string, unknown> | null {
-		try {
-			const v = JSON.parse(json);
-			return v && typeof v === 'object' && !Array.isArray(v)
-				? (v as Record<string, unknown>)
-				: null;
-		} catch {
-			return null;
-		}
-	}
-
-	function str(v: unknown): string | null {
-		return typeof v === 'string' && v.length > 0 ? v : null;
-	}
-
-	function summarize(tool: string, argsJson: string): string | null {
-		const args = parseArgs(argsJson);
-		if (!args) return null;
-		const t = tool.toLowerCase();
-		switch (t) {
-			case 'bash':
-			case 'shell':
-			case 'run': {
-				const desc = str(args.description);
-				if (desc) return desc;
-				const cmd = str(args.command) ?? str(args.cmd);
-				return cmd ? truncate(cmd, 60) : null;
-			}
-			case 'view':
-			case 'read':
-			case 'read_file':
-			case 'cat': {
-				const p = str(args.path) ?? str(args.file) ?? str(args.filename);
-				const range = Array.isArray(args.view_range) ? args.view_range : null;
-				if (p && range && range.length === 2) return `${p} [${range[0]}-${range[1]}]`;
-				return p;
-			}
-			case 'edit':
-			case 'create':
-			case 'write':
-			case 'write_file':
-				return str(args.path) ?? str(args.file) ?? str(args.filename);
-			case 'grep': {
-				const pat = str(args.pattern);
-				const glob = str(args.glob) ?? str(args.type);
-				if (pat && glob) return `${pat}  (${glob})`;
-				return pat;
-			}
-			case 'glob':
-				return str(args.pattern);
-			case 'write_bash': {
-				const input = str(args.input);
-				return input ? truncate(input, 40) : null;
-			}
-			case 'read_bash':
-			case 'stop_bash':
-				return str(args.shellId);
-			case 'task':
-				return str(args.description) ?? str(args.name);
-			case 'read_agent':
-			case 'stop_agent':
-				return str(args.agent_id);
-			case 'write_agent': {
-				const id = str(args.agent_id);
-				const input = str(args.input);
-				if (id && input) return `${id} ← ${truncate(input, 40)}`;
-				return id ?? (input ? truncate(input, 60) : null);
-			}
-			case 'list_agents':
-				return args.include_completed === false ? 'active only' : 'all agents';
-			case 'report_intent':
-				return str(args.intent);
-			case 'web_fetch':
-			case 'fetch':
-				return str(args.url);
-			case 'skill':
-				return str(args.skill);
-			case 'sql':
-			case 'session_store_sql':
-				return str(args.description) ?? (str(args.query) ? truncate(str(args.query)!, 60) : null);
-		}
-		for (const v of Object.values(args)) {
-			if (typeof v === 'string' && v.length > 0) return truncate(v, 80);
-		}
-		return null;
-	}
-
-	let summary = $derived(summarize(toolCall.tool, toolCall.argsJson));
+	const summary = $derived(summarizeToolCall(toolCall.tool, toolCall.argsJson));
+	const decoded = $derived(decodeToolResult(toolCall.resultJson));
+	// Edits/creates render as a unified diff synthesized from args. We only
+	// show the diff once the call succeeded; while pending we'd be
+	// rendering args that haven't been applied, and on error the result
+	// text usually explains the failure.
+	const synthDiff = $derived(toolCall.status === 'ok' ? synthesizeDiff(toolCall) : null);
 </script>
 
-<details class="tool" class:open bind:open>
+<details class="tool" class:open class:is-pending={pending} {open} ontoggle={onToggle}>
 	<summary>
 		<span class="emoji">{statusEmoji(toolCall.status)}</span>
 		<code>{toolCall.tool}</code>
@@ -119,13 +53,36 @@
 		{:else}
 			<span class="muted">— {toolCall.status}</span>
 		{/if}
+		{#if pending && toolCall.progressMessage}
+			<span class="progress" title={toolCall.progressMessage}>· {toolCall.progressMessage}</span>
+		{/if}
 	</summary>
 	<div class="content">
-		<div class="label">Arguments</div>
-		<pre><code>{toolCall.argsJson}</code></pre>
-		{#if toolCall.resultJson}
-			<div class="label">Result</div>
-			<pre><code>{toolCall.resultJson}</code></pre>
+		<details class="args">
+			<summary class="disclosure">Arguments</summary>
+			<pre><code>{toolCall.argsJson}</code></pre>
+		</details>
+
+		{#if pending}
+			{#if toolCall.partialOutput}
+				<TerminalBlock text={toolCall.partialOutput} streaming />
+			{:else if toolCall.progressMessage}
+				<div class="muted progress-line">{toolCall.progressMessage}</div>
+			{:else}
+				<div class="muted">Running…</div>
+			{/if}
+		{:else if toolCall.resultJson}
+			{#if synthDiff}
+				<DiffView path={synthDiff.path} diff={synthDiff.diff} />
+			{:else}
+				{#each decoded.blocks as block, i (i)}
+					<ResultBlock {block} />
+				{/each}
+			{/if}
+			<details class="raw">
+				<summary class="disclosure">Raw output</summary>
+				<pre><code>{toolCall.resultJson}</code></pre>
+			</details>
 		{/if}
 	</div>
 </details>
@@ -137,6 +94,19 @@
 		border-radius: var(--radius-md);
 		padding: var(--space-2) var(--space-3);
 		font-size: var(--fs-md);
+	}
+	.tool.is-pending {
+		border-left: 3px solid var(--accent, #7c5cff);
+		animation: tool-pulse 1.6s ease-in-out infinite;
+	}
+	@keyframes tool-pulse {
+		0%,
+		100% {
+			border-left-color: var(--accent, #7c5cff);
+		}
+		50% {
+			border-left-color: color-mix(in srgb, var(--accent, #7c5cff) 35%, transparent);
+		}
 	}
 	summary {
 		cursor: pointer;
@@ -154,14 +124,48 @@
 		font-family: var(--mono);
 		font-size: var(--fs-sm);
 	}
+	.progress {
+		margin-left: 0.5rem;
+		color: var(--text-muted);
+		font-size: var(--fs-xs);
+		font-style: italic;
+		max-width: 24em;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		display: inline-block;
+		vertical-align: bottom;
+	}
+	.progress-line {
+		font-style: italic;
+		font-size: var(--fs-sm);
+		margin: 0.4rem 0;
+	}
 	.content {
 		margin-top: 0.4rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
 	}
-	.label {
+	.disclosure {
+		cursor: pointer;
+		list-style: none;
 		font-size: 0.7em;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		color: var(--text-muted);
-		margin: 0.4rem 0 0.2rem;
+		user-select: none;
+	}
+	.disclosure::-webkit-details-marker {
+		display: none;
+	}
+	.args[open] > .disclosure,
+	.raw[open] > .disclosure {
+		margin-bottom: 0.3rem;
+	}
+	pre {
+		margin: 0;
+		max-width: 100%;
+		overflow-x: auto;
 	}
 </style>

@@ -1,0 +1,65 @@
+import { describe, it, expect } from 'vitest';
+import { synthesizeDiff } from '../src/lib/client/diff-synth';
+import { parseUnifiedDiff, diffStats } from '../src/lib/client/diff-parser';
+
+describe('synthesizeDiff', () => {
+	it('synthesizes a diff for edit-style {old_str, new_str} args', () => {
+		const r = synthesizeDiff({
+			tool: 'edit',
+			argsJson: JSON.stringify({
+				path: 'src/foo.ts',
+				old_str: 'const x = 1;\nconst y = 2;',
+				new_str: 'const x = 10;\nconst y = 20;'
+			})
+		});
+		expect(r).not.toBeNull();
+		expect(r!.path).toBe('src/foo.ts');
+		const stats = diffStats(parseUnifiedDiff(r!.diff));
+		expect(stats.added).toBe(2);
+		expect(stats.removed).toBe(2);
+	});
+
+	it('synthesizes a diff for create-style {file_text} args', () => {
+		const r = synthesizeDiff({
+			tool: 'create',
+			argsJson: JSON.stringify({
+				path: 'new.txt',
+				file_text: 'hello\nworld\n'
+			})
+		});
+		expect(r).not.toBeNull();
+		const parsed = parseUnifiedDiff(r!.diff);
+		const stats = diffStats(parsed);
+		expect(stats.added).toBe(2);
+		expect(stats.removed).toBe(0);
+	});
+
+	it('returns null when no path is present', () => {
+		const r = synthesizeDiff({
+			tool: 'edit',
+			argsJson: JSON.stringify({ old_str: 'a', new_str: 'b' })
+		});
+		expect(r).toBeNull();
+	});
+
+	it('returns null for non-mutation tools when args do not match a known shape', () => {
+		const r = synthesizeDiff({
+			tool: 'bash',
+			argsJson: JSON.stringify({ command: 'ls -la' })
+		});
+		expect(r).toBeNull();
+	});
+
+	it('handles aliases (write_file with content)', () => {
+		const r = synthesizeDiff({
+			tool: 'write_file',
+			argsJson: JSON.stringify({ filename: 'a.md', content: 'hi' })
+		});
+		expect(r).not.toBeNull();
+		expect(r!.path).toBe('a.md');
+	});
+
+	it('returns null on malformed JSON', () => {
+		expect(synthesizeDiff({ tool: 'edit', argsJson: 'not json' })).toBeNull();
+	});
+});
