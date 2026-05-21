@@ -338,7 +338,11 @@
 			case 'tool.partial_output': {
 				const m = messages[messages.length - 1];
 				const tc = m?.toolCalls?.find((t) => t.id === ev.toolCallId);
-				if (tc) tc.partialOutput = (tc.partialOutput ?? '') + ev.output;
+				// The SDK emits cumulative snapshots of the tool's stdout/stderr
+				// buffer (not deltas) so progress bars and carriage-return redraws
+				// render correctly — each event already contains everything that
+				// came before, so we replace rather than append.
+				if (tc) tc.partialOutput = ev.output;
 				break;
 			}
 			case 'tool.progress': {
