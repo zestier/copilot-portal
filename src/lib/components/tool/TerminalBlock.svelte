@@ -2,6 +2,8 @@
 	// Terminal-style output pane. Used both for the live `partialOutput`
 	// stream while a tool is running and for the final `terminal` content
 	// block returned by tools like bash.
+	import { renderTerminal } from '$lib/client/terminal-render';
+
 	let {
 		text,
 		cwd,
@@ -16,6 +18,7 @@
 		streaming?: boolean;
 	} = $props();
 
+	const rendered = $derived(renderTerminal(text));
 	const hasHeader = $derived(cwd != null || exitCode != null);
 </script>
 
@@ -29,7 +32,7 @@
 		</div>
 	{/if}
 	<pre class="body">{#if command}<span class="prompt">$ </span><span class="command">{command}</span
-			>{#if text}{'\n'}{/if}{/if}<code>{text}</code>{#if streaming}<span
+			>{#if rendered}{'\n'}{/if}{/if}<code>{rendered}</code>{#if streaming}<span
 				class="cursor"
 				aria-hidden="true">▍</span
 			>{/if}</pre>
