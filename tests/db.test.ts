@@ -63,10 +63,10 @@ describe('db migrations + repos', () => {
 		const u = users.ensureLocalUser();
 		const c = convs.create(u.id, { title: 't', workdir: '/tmp', model: null });
 		expect(settings.hasGrant(u.id, c.id, 'shell')).toBe(false);
-		settings.addGrant(u.id, c.id, 'shell');
+		settings.addGrant({ userId: u.id, conversationId: c.id, tool: 'shell' });
 		expect(settings.hasGrant(u.id, c.id, 'shell')).toBe(true);
-		// '*' wildcard
-		settings.addGrant(u.id, null, '*');
+		// '*' tool wildcard, user-global.
+		settings.addGrant({ userId: u.id, conversationId: null, tool: '*' });
 		expect(settings.hasGrant(u.id, c.id, 'read')).toBe(true);
 	});
 

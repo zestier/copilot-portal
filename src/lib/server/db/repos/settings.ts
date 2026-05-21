@@ -62,30 +62,122 @@ export function save(userId: string, s: UserSettings) {
 }
 
 // --- Permission grants ---
+//
+// Schema is `permission_grants(user_id, conversation_id, tool,
+// permission_kind, scope_pattern, decision, expires_at, granted_at)`
+// after migration 009. `conversation_id` NULL means a user-global grant.
+// All the matching precedence (deny beats allow, expiry, wildcards) lives
+// in the pure matcher module so it's testable without a DB.
 
-export function hasGrant(userId: string, conversationId: string, tool: string): boolean {
-	const db = getDb();
-	const r1 = db
-		.prepare(
-			'SELECT 1 FROM permission_grants WHERE user_id = ? AND conversation_id = ? AND (tool = ? OR tool = ?)'
-		)
-		.get(userId, conversationId, tool, '*');
-	if (r1) return true;
-	const r2 = db
-		.prepare(
-			'SELECT 1 FROM permission_grants WHERE user_id = ? AND conversation_id IS NULL AND (tool = ? OR tool = ?)'
-		)
-		.get(userId, tool, '*');
-	return !!r2;
+import {
+	matchGrants,
+	type GrantDecision,
+	type GrantRow,
+	type MatchOutcome
+} from '../../permissions/matcher';
+
+interface GrantDbRow {
+	user_id: string;
+	conversation_id: string | null;
+	tool: string;
+	permission_kind: string | null;
+	scope_pattern: string | null;
+	decision: string;
+	expires_at: number | null;
+	granted_at: number;
 }
 
-export function addGrant(userId: string, conversationId: string | null, tool: string) {
+function dbRowToGrant(r: GrantDbRow): GrantRow {
+	return {
+		tool: r.tool,
+		permissionKind: r.permission_kind,
+		scopePattern: r.scope_pattern,
+		decision: r.decision === 'deny' ? 'deny' : 'allow',
+		expiresAt: r.expires_at,
+		conversationId: r.conversation_id
+	};
+}
+
+/**
+ * Pre-filter at the SQL level: return every grant for this user that
+ * could possibly apply to (conversationId, tool). Filtering by kind /
+ * pattern / expiry happens in app code so the matcher stays pure and
+ * testable.
+ */
+function loadCandidateGrants(userId: string, conversationId: string, tool: string): GrantRow[] {
+	const rows = getDb()
+		.prepare(
+			`SELECT user_id, conversation_id, tool, permission_kind, scope_pattern,
+			        decision, expires_at, granted_at
+			 FROM permission_grants
+			 WHERE user_id = ?
+			   AND (conversation_id = ? OR conversation_id IS NULL)
+			   AND (tool = ? OR tool = '*')`
+		)
+		.all(userId, conversationId, tool) as GrantDbRow[];
+	return rows.map(dbRowToGrant);
+}
+
+/**
+ * Resolve a permission request against the user's stored grants.
+ * Returns 'allow' / 'deny' / 'none'; callers fall back to the policy
+ * table when 'none'.
+ */
+export function matchGrant(
+	userId: string,
+	conversationId: string,
+	tool: string,
+	permissionKind: string,
+	scopeKey: string | null,
+	now: number = Date.now()
+): MatchOutcome {
+	const rows = loadCandidateGrants(userId, conversationId, tool);
+	return matchGrants(rows, { tool, permissionKind, scopeKey, now });
+}
+
+/**
+ * @deprecated Backwards-compat wrapper. Returns true iff a wildcard
+ * "allow this tool for anything" grant exists. New code should call
+ * `matchGrant` with the runtime kind + scopeKey.
+ */
+export function hasGrant(userId: string, conversationId: string, tool: string): boolean {
+	// Legacy callers don't know about kinds/patterns; pretend the request
+	// is for whatever the grant covers by passing a wildcard scope.
+	return matchGrant(userId, conversationId, tool, '*', null) === 'allow';
+}
+
+export interface AddGrantOptions {
+	userId: string;
+	/** NULL = user-global. */
+	conversationId: string | null;
+	tool: string;
+	/** NULL = any kind. */
+	permissionKind?: string | null;
+	/** NULL = any scope. */
+	scopePattern?: string | null;
+	decision?: GrantDecision;
+	/** Unix ms; NULL/undefined = never expires. */
+	expiresAt?: number | null;
+}
+
+export function addGrant(opts: AddGrantOptions) {
 	getDb()
 		.prepare(
-			`INSERT OR IGNORE INTO permission_grants(user_id, conversation_id, tool, granted_at)
-			 VALUES (?, ?, ?, ?)`
+			`INSERT INTO permission_grants(
+			   user_id, conversation_id, tool, permission_kind,
+			   scope_pattern, decision, expires_at, granted_at
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		)
-		.run(userId, conversationId, tool, Date.now());
+		.run(
+			opts.userId,
+			opts.conversationId,
+			opts.tool,
+			opts.permissionKind ?? null,
+			opts.scopePattern ?? null,
+			opts.decision ?? 'allow',
+			opts.expiresAt ?? null,
+			Date.now()
+		);
 }
 
 export function recordDecision(

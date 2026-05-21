@@ -204,4 +204,42 @@ describe('interactive request registry', () => {
 		expect(recent[0].tool).toBe('shell');
 		expect(recent[0].conversationId).toBe(conversationId);
 	});
+
+	it('matchGrant honors stored deny grants over allow grants', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		settings.addGrant({
+			userId,
+			conversationId,
+			tool: 'shell'
+		});
+		settings.addGrant({
+			userId,
+			conversationId,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopePattern: 'rm *',
+			decision: 'deny'
+		});
+		expect(settings.matchGrant(userId, conversationId, 'shell', 'shell', 'rm -rf /')).toBe('deny');
+		expect(settings.matchGrant(userId, conversationId, 'shell', 'shell', 'ls -la')).toBe('allow');
+	});
+
+	it('matchGrant skips expired grants', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		settings.addGrant({
+			userId,
+			conversationId,
+			tool: 'shell',
+			expiresAt: Date.now() - 1000
+		});
+		expect(settings.matchGrant(userId, conversationId, 'shell', 'shell', 'ls')).toBe('none');
+	});
+
+	it('user-global grants apply across conversations', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const convs = await import('../src/lib/server/db/repos/conversations');
+		const other = convs.create(userId, { title: 'other', workdir: '/tmp', model: null }).id;
+		settings.addGrant({ userId, conversationId: null, tool: 'shell' });
+		expect(settings.matchGrant(userId, other, 'shell', 'shell', 'anything')).toBe('allow');
+	});
 });

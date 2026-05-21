@@ -150,7 +150,11 @@ export function resolve(requestId: string, userId: string, response: Interactive
 						tool: p.view.tool
 					});
 				} else {
-					settingsRepo.addGrant(userId, p.conversationId, p.view.tool);
+					settingsRepo.addGrant({
+						userId,
+						conversationId: p.conversationId,
+						tool: p.view.tool
+					});
 				}
 			}
 		} catch (e) {

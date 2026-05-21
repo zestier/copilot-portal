@@ -23,6 +23,7 @@ import {
 	decideByPolicy
 } from './interactive-requests';
 import * as settingsRepo from '../db/repos/settings';
+import { deriveScopeKey } from '../permissions/matcher';
 import { ulid } from 'ulid';
 import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
@@ -196,10 +197,19 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		const tool = req.toolName ?? req.kind ?? 'unknown';
 		const permissionKind = req.kind ?? 'unknown';
 		const summary = req.fullCommandText ?? req.fileName ?? tool;
+		const scopeKey = deriveScopeKey(permissionKind, req);
 
-		if (settingsRepo.hasGrant(opts.userId, opts.conversationId, tool)) {
-			return { kind: 'approve-once' } as const;
-		}
+		// Grants override policy (the user explicitly trusted/blocked this).
+		// `deny` grants beat `allow` grants; the matcher enforces precedence.
+		const grant = settingsRepo.matchGrant(
+			opts.userId,
+			opts.conversationId,
+			tool,
+			permissionKind,
+			scopeKey
+		);
+		if (grant === 'allow') return { kind: 'approve-once' } as const;
+		if (grant === 'deny') return { kind: 'reject' } as const;
 
 		const decision = decideByPolicy(opts.policy, 'permission', permissionKind);
 		if (decision === 'approved') return { kind: 'approve-once' } as const;
