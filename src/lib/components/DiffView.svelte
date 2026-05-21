@@ -115,17 +115,17 @@
 		line-height: 1.45;
 	}
 	.rows {
-		min-width: 100%;
 		width: max-content;
+		min-width: 100%;
 	}
 	.line {
 		display: grid;
-		grid-template-columns: 3.5em 1em 1fr;
+		grid-template-columns: 3.5em 1em max-content;
 		align-items: baseline;
 		white-space: pre;
 	}
 	.no-gutter .line {
-		grid-template-columns: 1em 1fr;
+		grid-template-columns: 1em max-content;
 	}
 	.gutter {
 		text-align: right;
@@ -146,7 +146,8 @@
 		overflow-wrap: anywhere;
 		white-space: pre;
 	}
-	.line.add {
+	.line.add .sign,
+	.line.add .text {
 		background: color-mix(in srgb, var(--success) 12%, transparent);
 	}
 	.line.add .text,
@@ -157,7 +158,8 @@
 		background: color-mix(in srgb, var(--success) 20%, transparent);
 		color: var(--success);
 	}
-	.line.del {
+	.line.del .sign,
+	.line.del .text {
 		background: color-mix(in srgb, var(--danger) 12%, transparent);
 	}
 	.line.del .text,
