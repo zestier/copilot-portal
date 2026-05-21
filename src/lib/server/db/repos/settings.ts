@@ -16,7 +16,7 @@ function rowToSettings(r: SettingsRow): UserSettings {
 		defaultModel: r.default_model,
 		defaultWorkdir: r.default_workdir,
 		defaultPolicy: r.default_policy as PermissionPolicy,
-		theme: r.theme === 'light' ? 'light' : 'dark'
+		theme: r.theme === 'light' ? 'light' : r.theme === 'system' ? 'system' : 'dark'
 	};
 }
 
@@ -37,7 +37,7 @@ export function defaults(): UserSettings {
 		defaultModel: null,
 		defaultWorkdir: null,
 		defaultPolicy: 'prompt',
-		theme: 'dark'
+		theme: 'system'
 	};
 }
 

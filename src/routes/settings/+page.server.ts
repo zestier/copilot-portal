@@ -7,7 +7,6 @@ import { fetchAuthStatus, fetchModels } from '$lib/server/copilot/bridge';
 import { loadConfig } from '$lib/server/config';
 import { log } from '$lib/server/log';
 import type { PermissionPolicy, UserSettings } from '$lib/types';
-
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.userId) throw redirect(302, '/login');
 	const cfg = loadConfig();
@@ -49,7 +48,7 @@ const SaveSchema = z.object({
 	defaultModel: z.string().optional(),
 	defaultWorkdir: z.string().optional(),
 	defaultPolicy: z.enum(['prompt', 'allow-readonly', 'allow-all', 'deny-all']),
-	theme: z.enum(['dark', 'light'])
+	theme: z.enum(['dark', 'light', 'system'])
 });
 
 export const actions: Actions = {

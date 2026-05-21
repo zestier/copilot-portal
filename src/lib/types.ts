@@ -95,7 +95,7 @@ export interface UserSettings {
 	defaultModel: string | null;
 	defaultWorkdir: string | null;
 	defaultPolicy: PermissionPolicy;
-	theme: 'dark' | 'light';
+	theme: 'dark' | 'light' | 'system';
 }
 
 export type PermissionPolicy = 'prompt' | 'allow-readonly' | 'allow-all' | 'deny-all';

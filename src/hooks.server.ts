@@ -3,6 +3,7 @@ import { loadConfig } from '$lib/server/config';
 import { log } from '$lib/server/log';
 import { getDb } from '$lib/server/db';
 import * as users from '$lib/server/db/repos/users';
+import * as settings from '$lib/server/db/repos/settings';
 import { read as readSession, generateCsrfToken } from '$lib/server/auth/session';
 import { perWindow } from '$lib/server/rate-limit';
 import { apiErrorResponse } from '$lib/server/http';
@@ -104,8 +105,24 @@ export const handle: Handle = async ({ event, resolve }) => {
 		}
 	}
 
+	// Resolve theme for SSR so the first paint matches the user's preference.
+	// 'system' is resolved client-side via prefers-color-scheme (see app.html).
+	// NOTE: we read settings inside transformPageChunk (not before resolve())
+	// so that form actions which mutate the theme are reflected in the same
+	// response, without requiring a page refresh.
 	const response = await resolve(event, {
-		transformPageChunk: ({ html }) => html.replace('%csrf.token%', event.locals.csrfToken)
+		transformPageChunk: ({ html }) => {
+			let themeMode: 'dark' | 'light' | 'system' = 'system';
+			if (event.locals.userId) {
+				const s = settings.get(event.locals.userId);
+				if (s) themeMode = s.theme;
+			}
+			const initialTheme = themeMode === 'light' ? 'light' : 'dark';
+			return html
+				.replace('%csrf.token%', event.locals.csrfToken)
+				.replace('%theme.initial%', initialTheme)
+				.replace('%theme.mode%', themeMode);
+		}
 	});
 
 	// Security headers.

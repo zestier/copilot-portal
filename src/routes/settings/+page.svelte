@@ -145,6 +145,7 @@
 		<label>
 			Theme
 			<select name="theme" value={s.theme}>
+				<option value="system">System</option>
 				<option value="dark">Dark</option>
 				<option value="light">Light</option>
 			</select>
