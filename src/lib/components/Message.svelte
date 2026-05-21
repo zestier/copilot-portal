@@ -2,6 +2,7 @@
 	import type { Message, ToolCallRecord, FileEditRecord, ReasoningBlockRecord } from '$lib/types';
 	import { renderMarkdown } from '$lib/client/markdown';
 	import ToolCall from './ToolCall.svelte';
+	import SubagentCall from './SubagentCall.svelte';
 	import DiffView from './DiffView.svelte';
 	import ReasoningBlock from './ReasoningBlock.svelte';
 	import Pill from '$lib/components/ui/Pill.svelte';
@@ -353,7 +354,11 @@
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 					<div class="text-part">{@html p.html}</div>
 				{:else if p.kind === 'tool'}
-					<ToolCall toolCall={p.tool} />
+					{#if p.tool.tool === 'task'}
+						<SubagentCall toolCall={p.tool} />
+					{:else}
+						<ToolCall toolCall={p.tool} />
+					{/if}
 				{:else if p.kind === 'reasoning'}
 					<ReasoningBlock
 						text={p.block.text}

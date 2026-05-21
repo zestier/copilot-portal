@@ -79,6 +79,17 @@
 				return str(args.shellId);
 			case 'task':
 				return str(args.description) ?? str(args.name);
+			case 'read_agent':
+			case 'stop_agent':
+				return str(args.agent_id);
+			case 'write_agent': {
+				const id = str(args.agent_id);
+				const input = str(args.input);
+				if (id && input) return `${id} ← ${truncate(input, 40)}`;
+				return id ?? (input ? truncate(input, 60) : null);
+			}
+			case 'list_agents':
+				return args.include_completed === false ? 'active only' : 'all agents';
 			case 'report_intent':
 				return str(args.intent);
 			case 'web_fetch':
