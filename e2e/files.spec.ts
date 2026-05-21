@@ -161,5 +161,5 @@ test('Changes tab lists modified files with +/- stats and a working diff', async
 	// At least one add and one del line are rendered with line numbers.
 	await expect(diff.locator('.line.add').first()).toBeVisible();
 	await expect(diff.locator('.line.del').first()).toBeVisible();
-	await expect(diff.locator('.line.add .gutter.new').first()).not.toHaveText('');
+	await expect(diff.locator('.line.add .gutter').first()).not.toHaveText('');
 });

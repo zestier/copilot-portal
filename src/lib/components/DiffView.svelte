@@ -25,8 +25,9 @@
 		<div class="lines" role="table" aria-label="diff lines">
 			{#each parsed as l, i (i)}
 				<div class={'line ' + l.kind} role="row">
-					<span class="gutter old" role="cell" aria-label="old line number">{fmtNo(l.oldNo)}</span>
-					<span class="gutter new" role="cell" aria-label="new line number">{fmtNo(l.newNo)}</span>
+					<span class="gutter" role="cell" aria-label="line number"
+						>{fmtNo(l.newNo ?? l.oldNo)}</span
+					>
 					<span class="sign" aria-hidden="true"
 						>{l.kind === 'add' ? '+' : l.kind === 'del' ? '-' : l.kind === 'hunk' ? '@' : ' '}</span
 					>
@@ -95,7 +96,7 @@
 	}
 	.line {
 		display: grid;
-		grid-template-columns: 3.5em 3.5em 1em 1fr;
+		grid-template-columns: 3.5em 1em 1fr;
 		align-items: baseline;
 		white-space: pre;
 	}
@@ -107,9 +108,6 @@
 		border-right: 1px solid var(--border);
 		user-select: none;
 		font-variant-numeric: tabular-nums;
-	}
-	.gutter.new {
-		border-right: 1px solid var(--border);
 	}
 	.sign {
 		text-align: center;
