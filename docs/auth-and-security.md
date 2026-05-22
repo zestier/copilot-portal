@@ -6,16 +6,40 @@ accordingly: it is **never** safe to expose unauthenticated.
 
 ## Threat model
 
-| Actor                     | Capability we must prevent                                   |
-|---------------------------|--------------------------------------------------------------|
-| Random internet stranger  | Any access (no anonymous reads, no chat).                    |
-| Someone with the URL      | Same — URL knowledge is not auth.                            |
-| Logged-in user (you)      | Bounded by Copilot CLI's own sandboxing + permission prompts.|
+| Actor                     | Capability we must prevent                                      |
+| ------------------------- | ---------------------------------------------------------------- |
+| Random internet stranger  | Any access (no anonymous reads, no chat).                       |
+| Someone with the URL      | Same — URL knowledge is not auth.                               |
+| Logged-in user (you)      | Accidental action; not host compromise by an already-trusted user. |
 | Malicious tool output     | Cannot inject HTML/script into the chat UI (sanitize all assistant markdown). |
-| XSS on `vscode.dev`-style | Mitigated by strict CSP and no inline scripts in dev/prod.   |
+| XSS on `vscode.dev`-style | Mitigated by strict CSP and no inline scripts in dev/prod.      |
 
-We are not trying to defend the *host machine* from a logged-in user — that's
-out of scope; this is single-tenant.
+## Trust model
+
+Copilot Portal is a self-hosted control surface for a trusted operator, not a
+multi-tenant sandbox. Anyone who can use a conversation can ask an agent to read
+and edit the configured workdir, request shell commands, mutate git state, start
+long-running processes, and trigger whatever external side effects the host
+allows. Permission prompts are an operator-confirmation UX and audit trail; they
+are not a security boundary between mutually distrusting portal users.
+
+The intended boundary is therefore **outside the portal**:
+
+- Bind locally, or put the app behind an authenticating proxy/tunnel such as
+  Cloudflare Access.
+- Only allow identities that you would also trust with a terminal on the host
+  and the selected `PROJECT_ROOT`.
+- Treat features such as redeploy, global permission grants, arbitrary workdir
+  selection, and same-workdir concurrent conversations as capabilities of that
+  trusted operator model, not as isolation guarantees.
+- If you need isolation between users, repositories, or experiments, run
+  separate portal instances with separate `DATA_DIR`s and `PROJECT_ROOT`s (or
+  use OS/container isolation outside the app).
+
+Security work inside the portal focuses on preventing unauthenticated access,
+cross-user credential attribution mistakes, path traversal in read-only browser
+routes, XSS, CSRF, and accidental permission broadening. It does **not** try to
+defend the host from a logged-in trusted user.
 
 ## Auth modes
 
