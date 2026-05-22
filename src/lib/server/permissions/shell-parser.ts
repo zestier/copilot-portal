@@ -185,3 +185,52 @@ const SAFE_REDIR_RE = /(?<=\s|^)(?:\d?>&(?:\d|-)|(?:\d?>>?|&>|\d?<)\s*\/dev\/nul
 function elideSafeRedirections(input: string): string {
 	return input.replace(SAFE_REDIR_RE, SAFE_REDIR_SENTINEL);
 }
+
+// Hardcoded shell misuse: shapes that are unambiguously the wrong tool
+// for the job, regardless of any user grant configuration. Detected on
+// the raw command string before `parseShellCommand` runs, so it fires
+// even when redirection would otherwise refuse the parse.
+//
+// Currently caught: `cat` / `head` / `tail` used with a write redirect
+// (`>` or `>>`). The only reason to write a file via these utilities is
+// to dump a heredoc to disk, which the structured `create` / `edit`
+// tools do correctly (with auditing and proper permission scopes). No
+// grant should ever auto-approve this and no user should ever be asked
+// about it.
+export interface ShellMisuse {
+	/** Stable identifier for tests / audit. */
+	code: 'cat-write-redirect';
+	/** Forwarded as `feedback` on the SDK reject. */
+	feedback: string;
+}
+
+const MISUSE_SEGMENT_SPLIT_RE = /&&|\|\||;|\|/;
+const MISUSE_WRITE_TOOLS = new Set(['cat', 'head', 'tail']);
+// A write redirect (`>` or `>>`) that isn't an fd-dup (`>&`) and isn't
+// preceded by `<` (so `<<EOF` heredocs don't trip it via the second `<`
+// being parsed as `<` `<`). Allow an optional single leading digit (the
+// fd, e.g. `1>file`). Must not be followed by `&` (that's a dup).
+const MISUSE_WRITE_REDIR_RE = /(?:^|[^<>&])\d?>>?(?!&)/;
+
+export function detectShellMisuse(command: string): ShellMisuse | null {
+	// Split on sequencing operators so we only flag the segment that
+	// actually contains the offending argv0. A pipeline like
+	// `git log | cat` is fine; `cat > file.ts` is not.
+	for (const raw of command.split(MISUSE_SEGMENT_SPLIT_RE)) {
+		const seg = raw.trim();
+		if (seg === '') continue;
+		const first = /^(\S+)/.exec(seg)?.[1];
+		if (!first || !MISUSE_WRITE_TOOLS.has(first)) continue;
+		if (!MISUSE_WRITE_REDIR_RE.test(seg)) continue;
+		return {
+			code: 'cat-write-redirect',
+			feedback:
+				`Using \`${first}\` with a write redirect (\`>\` or \`>>\`) to create or ` +
+				`modify a file is never appropriate in this portal. Use the structured ` +
+				`\`create\` tool to write a new file or the \`edit\` tool to modify an ` +
+				`existing one — they handle auditing, permissions, and atomic writes ` +
+				`correctly. (This refusal is hardcoded and not configurable via grants.)`
+		};
+	}
+	return null;
+}

@@ -46,6 +46,16 @@ export interface ShellRule {
 	 *                      the conversation's workspace root
 	 */
 	positionals?: PositionalsRule;
+	/**
+	 * Whether this segment must / must not be part of a shell pipeline
+	 * (i.e. connected to a neighboring command by `|`). Omitted = no
+	 * constraint. Used by the seed deny grants for commands like `cat`
+	 * / `grep` whose stdout is the human-visible output when run bare,
+	 * but which are legitimate inside `cmd | grep ...`.
+	 *   must    — this segment must be in a pipeline
+	 *   forbid  — this segment must NOT be in a pipeline
+	 */
+	pipeline?: 'must' | 'forbid';
 }
 
 export type PositionalsRule = { kind: 'none' } | { kind: 'any' } | { kind: 'workspace-paths' };

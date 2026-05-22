@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
 	matchGrants,
+	matchGrantsDetailed,
 	globToRegex,
 	deriveScopeKey,
-	type GrantRow
+	type GrantRow,
+	type MatchQuery
 } from '../src/lib/server/permissions/matcher';
 import { parseShellCommand } from '../src/lib/server/permissions/shell-parser';
 
@@ -17,6 +19,7 @@ function grant(partial: Partial<GrantRow> = {}): GrantRow {
 		scope: null,
 		decision: 'allow',
 		expiresAt: null,
+		denyReason: null,
 		conversationId: null,
 		...partial
 	};
@@ -291,5 +294,74 @@ describe('deriveScopeKey', () => {
 	it('returns null when no usable field is present', () => {
 		expect(deriveScopeKey('shell', {})).toBe(null);
 		expect(deriveScopeKey('write', { args: { other: 'x' } })).toBe(null);
+	});
+});
+
+describe('matchGrants — pipeline lever and denyReason', () => {
+	function shellQuery(command: string): MatchQuery {
+		const parsed = parseShellCommand(command);
+		if (parsed.kind !== 'parsed') throw new Error(`parse failed: ${command}`);
+		return {
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopeKey: command,
+			shellSegments: parsed.segments,
+			workspaceRoot: '/tmp',
+			now: NOW
+		};
+	}
+
+	const allowAnyGrep = grant({
+		tool: 'shell',
+		permissionKind: 'shell',
+		scope: { kind: 'shell', rule: { argv0: 'grep', positionals: { kind: 'any' } } },
+		decision: 'allow'
+	});
+	const denyBareGrep = grant({
+		tool: 'shell',
+		permissionKind: 'shell',
+		scope: { kind: 'shell', rule: { argv0: 'grep', pipeline: 'forbid' } },
+		decision: 'deny',
+		denyReason: 'Use the structured `grep` tool instead of the shell binary.'
+	});
+	const allowCat = grant({
+		tool: 'shell',
+		permissionKind: 'shell',
+		scope: { kind: 'shell', rule: { argv0: 'cat', positionals: { kind: 'any' } } },
+		decision: 'allow'
+	});
+
+	it('pipeline=forbid deny blocks bare invocation', () => {
+		const out = matchGrantsDetailed([denyBareGrep, allowAnyGrep], shellQuery('grep foo bar'));
+		expect(out.outcome).toBe('deny');
+		expect(out.denyReason).toBe('Use the structured `grep` tool instead of the shell binary.');
+	});
+
+	it('pipeline=forbid deny does not fire in pipeline; allow takes over', () => {
+		const out = matchGrantsDetailed(
+			[denyBareGrep, allowAnyGrep, allowCat],
+			shellQuery('cat foo | grep bar')
+		);
+		expect(out.outcome).toBe('allow');
+		expect(out.denyReason).toBe(null);
+	});
+
+	it('matchGrants string wrapper preserves outcome', () => {
+		expect(matchGrants([denyBareGrep, allowAnyGrep], shellQuery('grep foo'))).toBe('deny');
+		expect(matchGrants([denyBareGrep, allowAnyGrep, allowCat], shellQuery('cat | grep foo'))).toBe(
+			'allow'
+		);
+	});
+
+	it('null denyReason on the matching deny grant produces null in detailed result', () => {
+		const denyNoReason = grant({
+			tool: 'shell',
+			permissionKind: 'shell',
+			scope: { kind: 'shell', rule: { argv0: 'rm' } },
+			decision: 'deny'
+		});
+		const out = matchGrantsDetailed([denyNoReason], shellQuery('rm -rf /'));
+		expect(out.outcome).toBe('deny');
+		expect(out.denyReason).toBe(null);
 	});
 });

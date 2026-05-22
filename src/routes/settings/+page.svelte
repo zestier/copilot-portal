@@ -184,12 +184,14 @@
 
 	type GrantTool = 'shell' | 'read' | 'write' | 'edit' | 'url';
 	type ShellPositionalsKind = 'unset' | 'none' | 'any' | 'workspace-paths';
+	type ShellPipelineKind = 'unset' | 'must' | 'forbid';
 	type FsRuleKind = 'exact' | 'workspace' | 'workspace-glob' | 'prefix';
 	type UrlRuleKind = 'exact' | 'host' | 'host-suffix';
 
 	let newGrantTool = $state<GrantTool>('shell');
 	let newGrantDecision = $state<'allow' | 'deny'>('allow');
 	let newGrantExpiry = $state(''); // datetime-local string; '' = never
+	let newGrantDenyReason = $state(''); // only used when decision === 'deny'
 
 	// When non-null, the form acts as an Edit for that grant rowid
 	// (preserves conversation scope + granted_at server-side). Resets to
@@ -205,6 +207,7 @@
 	let shellArgv0 = $state('');
 	let shellSubcommands = $state(''); // comma-separated
 	let shellPositionals = $state<ShellPositionalsKind>('unset');
+	let shellPipeline = $state<ShellPipelineKind>('unset');
 	let shellFlagsDeny = $state(''); // comma-separated
 	let shellFlagsAllow = $state(''); // comma-separated
 
@@ -237,6 +240,7 @@
 				const subs = csvToList(shellSubcommands);
 				if (subs.length > 0) rule.subcommands = subs;
 				if (shellPositionals !== 'unset') rule.positionals = { kind: shellPositionals };
+				if (shellPipeline !== 'unset') rule.pipeline = shellPipeline;
 				const allow = csvToList(shellFlagsAllow);
 				const deny = csvToList(shellFlagsDeny);
 				if (allow.length > 0 || deny.length > 0) {
@@ -299,6 +303,7 @@
 			void shellArgv0;
 			void shellSubcommands;
 			void shellPositionals;
+			void shellPipeline;
 			void shellFlagsAllow;
 			void shellFlagsDeny;
 			void fsRuleKind;
@@ -342,9 +347,11 @@
 		newGrantTool = 'shell';
 		newGrantDecision = 'allow';
 		newGrantExpiry = '';
+		newGrantDenyReason = '';
 		shellArgv0 = '';
 		shellSubcommands = '';
 		shellPositionals = 'unset';
+		shellPipeline = 'unset';
 		shellFlagsDeny = '';
 		shellFlagsAllow = '';
 		fsRuleKind = 'workspace';
@@ -376,6 +383,7 @@
 		};
 		newGrantDecision = g.decision;
 		newGrantExpiry = expiryToLocalInput(g.expiresAt);
+		newGrantDenyReason = g.denyReason ?? '';
 
 		// Map stored tool back to the form's tool select. For fs grants
 		// the row's `tool` is already one of read/write/edit; shell/url
@@ -396,6 +404,7 @@
 				shellArgv0 = sc.rule.argv0;
 				shellSubcommands = (sc.rule.subcommands ?? []).join(', ');
 				shellPositionals = sc.rule.positionals?.kind ?? 'unset';
+				shellPipeline = sc.rule.pipeline ?? 'unset';
 				shellFlagsAllow = (sc.rule.flags?.allow ?? []).join(', ');
 				shellFlagsDeny = (sc.rule.flags?.deny ?? []).join(', ');
 			} else if (sc.kind === 'url') {
@@ -578,6 +587,25 @@
 					</label>
 				</div>
 
+				{#if newGrantDecision === 'deny'}
+					<label class="deny-reason">
+						Deny reason / feedback (optional)
+						<textarea
+							name="denyReason"
+							bind:value={newGrantDenyReason}
+							rows="2"
+							maxlength="500"
+							placeholder="e.g. Prefer the structured `view` tool instead of `cat`."
+						></textarea>
+						<span class="muted small"
+							>Surfaced to the agent as the SDK reject `feedback` string — explain *why* and what to
+							do instead. Max 500 chars.</span
+						>
+					</label>
+				{:else}
+					<input type="hidden" name="denyReason" value="" />
+				{/if}
+
 				{#if newGrantTool === 'shell'}
 					<fieldset class="scope-fields">
 						<legend>Shell scope</legend>
@@ -616,6 +644,23 @@
 									workspace)</option
 								>
 							</select>
+						</label>
+						<label>
+							Pipeline constraint
+							<select bind:value={shellPipeline}>
+								<option value="unset">(no constraint — matches regardless of `|` neighbours)</option
+								>
+								<option value="must"
+									>must — only matches when the command is part of a pipeline (`a | b`)</option
+								>
+								<option value="forbid"
+									>forbid — only matches when the command is NOT pipelined</option
+								>
+							</select>
+							<span class="muted small"
+								>Useful for deny grants that nudge toward structured alternatives: `pipeline=forbid`
+								lets `cmd | grep ...` keep working while rejecting bare `grep`.</span
+							>
 						</label>
 						<label>
 							Flag deny list (optional, comma-separated)
@@ -790,32 +835,47 @@
 			</form>
 		</details>
 
+		<div class="grant-bulk-actions">
+			<form method="POST" action="?/restoreSeedGrants" class="restore-seeds">
+				<button
+					class="btn small"
+					type="submit"
+					title="Re-install any default seed grants that are missing from your account (idempotent — won't touch existing rules)"
+				>
+					Restore default seed grants
+				</button>
+			</form>
+			{#if data.grants.length > 0}
+				<form
+					method="POST"
+					action="?/revokeAllGrants"
+					class="revoke-all"
+					onsubmit={(e) => {
+						if (
+							!confirm(
+								`Revoke all ${data.grants.length} saved permission grant${data.grants.length === 1 ? '' : 's'}? This cannot be undone.`
+							)
+						) {
+							e.preventDefault();
+						}
+					}}
+				>
+					<button class="btn small danger" type="submit">Revoke all grants</button>
+				</form>
+			{/if}
+		</div>
+
 		{#if data.grants.length === 0}
 			<p class="muted small">
 				No saved grants. When you click "Allow always" or "Deny always" on a tool prompt, the
-				resulting rule shows up here so you can revoke it later.
+				resulting rule shows up here so you can revoke it later. The button above re-installs the
+				built-in defaults (file/dir reads, git read-only, structured-tool nudge denies).
 			</p>
 		{:else}
 			<p class="muted small">
 				{data.grants.length} active grant{data.grants.length === 1 ? '' : 's'}. Expired grants are
 				cleared automatically when you load this page.
 			</p>
-			<form
-				method="POST"
-				action="?/revokeAllGrants"
-				class="revoke-all"
-				onsubmit={(e) => {
-					if (
-						!confirm(
-							`Revoke all ${data.grants.length} saved permission grant${data.grants.length === 1 ? '' : 's'}? This cannot be undone.`
-						)
-					) {
-						e.preventDefault();
-					}
-				}}
-			>
-				<button class="btn small danger" type="submit">Revoke all grants</button>
-			</form>
 			<ul class="grant-list">
 				{#each data.grants as g (g.id)}
 					<li class="grant-row">
@@ -832,6 +892,11 @@
 								g.expiresAt
 							)}
 						</span>
+						{#if g.decision === 'deny' && g.denyReason}
+							<span class="deny-reason-row muted small" title={g.denyReason}
+								>↳ feedback: {g.denyReason}</span
+							>
+						{/if}
 						<form method="POST" action="?/revokeGrant" class="revoke">
 							<input type="hidden" name="id" value={g.id} />
 							{#if canEditGrant(g)}
@@ -1193,7 +1258,16 @@
 		margin-left: auto;
 	}
 	.revoke-all {
+		margin: 0;
+	}
+	.grant-bulk-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
 		margin: 0.25rem 0 0.75rem;
+	}
+	.grant-bulk-actions > form {
+		margin: 0;
 	}
 	.btn.small {
 		padding: 0.2rem 0.55rem;

@@ -20,6 +20,14 @@ import { urlScopeMatches } from './predicates/url';
 export type GrantDecision = 'allow' | 'deny';
 export type MatchOutcome = 'allow' | 'deny' | 'none';
 
+export interface DetailedMatchOutcome {
+	outcome: MatchOutcome;
+	/** When `outcome === 'deny'`, the matched grant's `denyReason`
+	 * (if any). Otherwise null. Used by the bridge to populate
+	 * `feedback` on the SDK's `{kind:'reject'}` response. */
+	denyReason: string | null;
+}
+
 export interface GrantRow {
 	tool: string;
 	permissionKind: string | null;
@@ -29,6 +37,10 @@ export interface GrantRow {
 	scope: GrantScope | null;
 	decision: GrantDecision;
 	expiresAt: number | null;
+	/** Optional feedback for deny grants — surfaced to the agent via the
+	 * SDK's `PermissionDecisionReject.feedback` field. Ignored on allow
+	 * rows. NULL means no custom feedback. */
+	denyReason: string | null;
 	/**
 	 * NULL = user-global grant. Used by callers that mix conversation-scoped
 	 * and user-global rows; matchGrants does not itself filter on this.
@@ -77,6 +89,17 @@ export interface MatchQuery {
  * tail without requiring a single rule that knows about both.
  */
 export function matchGrants(rows: GrantRow[], q: MatchQuery): MatchOutcome {
+	return matchGrantsDetailed(rows, q).outcome;
+}
+
+/**
+ * Like `matchGrants`, but additionally returns the matched deny grant's
+ * `denyReason` (when one fired). For `allow` / `none` outcomes, the
+ * reason is always null. When multiple deny grants would match, the
+ * first one with a non-null reason wins (deny precedence is unchanged
+ * — we just pick a reason to surface).
+ */
+export function matchGrantsDetailed(rows: GrantRow[], q: MatchQuery): DetailedMatchOutcome {
 	if (q.permissionKind === 'shell' && q.shellSegments && q.shellSegments.length > 0) {
 		return matchShellSegments(rows, q, q.shellSegments);
 	}
@@ -84,30 +107,44 @@ export function matchGrants(rows: GrantRow[], q: MatchQuery): MatchOutcome {
 	for (const r of rows) {
 		if (!grantApplies(r, q)) continue;
 		if (!rowScopeMatches(r, q)) continue;
-		if (r.decision === 'deny') return 'deny';
+		if (r.decision === 'deny') return { outcome: 'deny', denyReason: r.denyReason };
 		sawAllow = true;
 	}
-	return sawAllow ? 'allow' : 'none';
+	return { outcome: sawAllow ? 'allow' : 'none', denyReason: null };
 }
 
 function matchShellSegments(
 	rows: GrantRow[],
 	q: MatchQuery,
 	segments: ParsedSegment[]
-): MatchOutcome {
-	const ctx = { workspaceRoot: q.workspaceRoot ?? null };
+): DetailedMatchOutcome {
 	let allAllowed = true;
-	for (const seg of segments) {
+	for (let i = 0; i < segments.length; i++) {
+		const seg = segments[i];
+		const inPipeline = segmentInPipeline(segments, i);
+		const ctx = { workspaceRoot: q.workspaceRoot ?? null, inPipeline };
 		let segAllow = false;
 		for (const r of rows) {
 			if (!grantApplies(r, q)) continue;
 			if (!rowMatchesShellSegment(r, seg, q, ctx)) continue;
-			if (r.decision === 'deny') return 'deny';
+			if (r.decision === 'deny') return { outcome: 'deny', denyReason: r.denyReason };
 			segAllow = true;
 		}
 		if (!segAllow) allAllowed = false;
 	}
-	return allAllowed ? 'allow' : 'none';
+	return { outcome: allAllowed ? 'allow' : 'none', denyReason: null };
+}
+
+/**
+ * A segment is "in a pipeline" iff it's connected to a neighbor by `|`
+ * — either it's followed by `|`, or the previous segment was followed
+ * by `|`. Used by the structured shell predicate to enforce
+ * `pipeline: 'must' | 'forbid'` on a ShellRule.
+ */
+function segmentInPipeline(segments: ParsedSegment[], i: number): boolean {
+	if (segments[i].followingOp === '|') return true;
+	if (i > 0 && segments[i - 1].followingOp === '|') return true;
+	return false;
 }
 
 function grantApplies(r: GrantRow, q: MatchQuery): boolean {
@@ -121,7 +158,7 @@ function rowMatchesShellSegment(
 	r: GrantRow,
 	seg: ParsedSegment,
 	q: MatchQuery,
-	ctx: { workspaceRoot: string | null }
+	ctx: { workspaceRoot: string | null; inPipeline: boolean }
 ): boolean {
 	if (r.scope) {
 		switch (r.scope.kind) {

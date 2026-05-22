@@ -70,10 +70,11 @@ export function save(userId: string, s: UserSettings) {
 // in the pure matcher module so it's testable without a DB.
 
 import {
-	matchGrants,
+	matchGrantsDetailed,
 	type GrantDecision,
 	type GrantRow,
-	type MatchOutcome
+	type MatchOutcome,
+	type DetailedMatchOutcome
 } from '../../permissions/matcher';
 import { decodeScope, encodeScope } from '$lib/permissions/scope-codec';
 import type { GrantScope } from '$lib/permissions/scope-types';
@@ -89,6 +90,7 @@ interface GrantDbRow {
 	decision: string;
 	expires_at: number | null;
 	granted_at: number;
+	deny_reason: string | null;
 }
 
 function dbRowToGrant(r: GrantDbRow): GrantRow {
@@ -99,6 +101,7 @@ function dbRowToGrant(r: GrantDbRow): GrantRow {
 		scope: decodeScope(r.scope_json),
 		decision: r.decision === 'deny' ? 'deny' : 'allow',
 		expiresAt: r.expires_at,
+		denyReason: r.deny_reason,
 		conversationId: r.conversation_id
 	};
 }
@@ -113,7 +116,7 @@ function loadCandidateGrants(userId: string, conversationId: string, tool: strin
 	const rows = getDb()
 		.prepare(
 			`SELECT user_id, conversation_id, tool, permission_kind, scope_pattern, scope_json,
-			        decision, expires_at, granted_at
+			        decision, expires_at, granted_at, deny_reason
 			 FROM permission_grants
 			 WHERE user_id = ?
 			   AND (conversation_id = ? OR conversation_id IS NULL)
@@ -138,7 +141,8 @@ export interface MatchGrantContext {
 /**
  * Resolve a permission request against the user's stored grants.
  * Returns 'allow' / 'deny' / 'none'; callers fall back to the policy
- * table when 'none'.
+ * table when 'none'. Drops any deny-feedback the matched row carried;
+ * callers that need it should use `matchGrantDetailed`.
  */
 export function matchGrant(
 	userId: string,
@@ -149,8 +153,27 @@ export function matchGrant(
 	ctx: MatchGrantContext = {},
 	now: number = Date.now()
 ): MatchOutcome {
+	return matchGrantDetailed(userId, conversationId, tool, permissionKind, scopeKey, ctx, now)
+		.outcome;
+}
+
+/**
+ * Same as `matchGrant`, but additionally returns the matched deny
+ * grant's `denyReason` (when one fired). Used by the bridge so it can
+ * forward the reason to the SDK as `{kind:'reject', feedback}` and the
+ * agent's tool-failure payload explains *why* the call was rejected.
+ */
+export function matchGrantDetailed(
+	userId: string,
+	conversationId: string,
+	tool: string,
+	permissionKind: string,
+	scopeKey: string | null,
+	ctx: MatchGrantContext = {},
+	now: number = Date.now()
+): DetailedMatchOutcome {
 	const rows = loadCandidateGrants(userId, conversationId, tool);
-	return matchGrants(rows, {
+	return matchGrantsDetailed(rows, {
 		tool,
 		permissionKind,
 		scopeKey,
@@ -188,6 +211,9 @@ export interface AddGrantOptions {
 	decision?: GrantDecision;
 	/** Unix ms; NULL/undefined = never expires. */
 	expiresAt?: number | null;
+	/** Optional deny-feedback surfaced to the agent (only meaningful when
+	 * `decision === 'deny'`). */
+	denyReason?: string | null;
 }
 
 export function addGrant(opts: AddGrantOptions) {
@@ -195,8 +221,8 @@ export function addGrant(opts: AddGrantOptions) {
 		.prepare(
 			`INSERT INTO permission_grants(
 			   user_id, conversation_id, tool, permission_kind,
-			   scope_pattern, scope_json, decision, expires_at, granted_at
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			   scope_pattern, scope_json, decision, expires_at, granted_at, deny_reason
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			opts.userId,
@@ -207,7 +233,8 @@ export function addGrant(opts: AddGrantOptions) {
 			opts.scope ? encodeScope(opts.scope) : null,
 			opts.decision ?? 'allow',
 			opts.expiresAt ?? null,
-			Date.now()
+			Date.now(),
+			opts.denyReason ?? null
 		);
 }
 
@@ -218,6 +245,7 @@ export interface UpdateGrantOptions {
 	scope?: GrantScope | null;
 	decision: GrantDecision;
 	expiresAt?: number | null;
+	denyReason?: string | null;
 }
 
 /**
@@ -230,7 +258,7 @@ export function updateGrant(userId: string, id: number, opts: UpdateGrantOptions
 		.prepare(
 			`UPDATE permission_grants
 			    SET tool = ?, permission_kind = ?, scope_pattern = ?, scope_json = ?,
-			        decision = ?, expires_at = ?
+			        decision = ?, expires_at = ?, deny_reason = ?
 			  WHERE rowid = ? AND user_id = ?`
 		)
 		.run(
@@ -240,6 +268,7 @@ export function updateGrant(userId: string, id: number, opts: UpdateGrantOptions
 			opts.scope ? encodeScope(opts.scope) : null,
 			opts.decision,
 			opts.expiresAt ?? null,
+			opts.denyReason ?? null,
 			id,
 			userId
 		);
@@ -257,6 +286,7 @@ export interface GrantSummary {
 	decision: GrantDecision;
 	expiresAt: number | null;
 	grantedAt: number;
+	denyReason: string | null;
 }
 
 /**
@@ -273,7 +303,7 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		.prepare(
 			`SELECT pg.rowid AS id, pg.conversation_id, c.title AS conversation_title,
 			        pg.tool, pg.permission_kind, pg.scope_pattern, pg.scope_json, pg.decision,
-			        pg.expires_at, pg.granted_at
+			        pg.expires_at, pg.granted_at, pg.deny_reason
 			 FROM permission_grants pg
 			 LEFT JOIN conversations c ON c.id = pg.conversation_id
 			 WHERE pg.user_id = ?
@@ -290,6 +320,7 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		decision: string;
 		expires_at: number | null;
 		granted_at: number;
+		deny_reason: string | null;
 	}>;
 	return rows.map((r) => ({
 		id: r.id,
@@ -301,7 +332,8 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		scope: decodeScope(r.scope_json),
 		decision: r.decision === 'deny' ? 'deny' : 'allow',
 		expiresAt: r.expires_at,
-		grantedAt: r.granted_at
+		grantedAt: r.granted_at,
+		denyReason: r.deny_reason
 	}));
 }
 

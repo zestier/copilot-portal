@@ -24,7 +24,11 @@ import {
 } from './interactive-requests';
 import * as settingsRepo from '../db/repos/settings';
 import { deriveScopeKey } from '../permissions/matcher';
-import { parseShellCommand, type ParsedSegment } from '../permissions/shell-parser';
+import {
+	parseShellCommand,
+	detectShellMisuse,
+	type ParsedSegment
+} from '../permissions/shell-parser';
 import { ulid } from 'ulid';
 import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
@@ -208,6 +212,20 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		const summary = req.fullCommandText ?? req.fileName ?? req.path ?? req.url ?? tool;
 		const scopeKey = deriveScopeKey(permissionKind, req);
 
+		// Helper to keep the audit panel honest: every silent decision is
+		// recorded as `auto-allow` / `auto-deny` so the user can see what
+		// the policy + stored grants are doing on their behalf.
+		const audit = (decision: 'auto-allow' | 'auto-deny') => {
+			try {
+				settingsRepo.recordDecision(opts.conversationId, tool, summary, decision);
+			} catch (e) {
+				log.warn('copilot.permission_audit_failed', {
+					conversationId: opts.conversationId,
+					err: String(e)
+				});
+			}
+		};
+
 		// Parse once: shared between the structured matcher (per-grant
 		// predicate) and any future audit text that wants tokenized argv.
 		// `parseShellCommand` refuses anything it can't model safely; when
@@ -216,6 +234,16 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		let shellSegments: ParsedSegment[] | null = null;
 		let shellAnalysis: import('$lib/types').ShellAnalysisView | undefined = undefined;
 		if (permissionKind === 'shell' && typeof scopeKey === 'string') {
+			// Hardcoded misuse short-circuit: unambiguously-wrong shell
+			// shapes (e.g. `cat > file`) get rejected before any grant
+			// lookup or user prompt. Not configurable by design — the
+			// portal always wants the agent to use the structured
+			// `create`/`edit` tools for these cases.
+			const misuse = detectShellMisuse(scopeKey);
+			if (misuse) {
+				audit('auto-deny');
+				return { kind: 'reject', feedback: misuse.feedback } as const;
+			}
 			const parsed = parseShellCommand(scopeKey);
 			if (parsed.kind === 'parsed') {
 				shellSegments = parsed.segments;
@@ -237,23 +265,9 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 				: null;
 		const url = permissionKind === 'url' ? scopeKey : null;
 
-		// Helper to keep the audit panel honest: every silent decision is
-		// recorded as `auto-allow` / `auto-deny` so the user can see what
-		// the policy + stored grants are doing on their behalf.
-		const audit = (decision: 'auto-allow' | 'auto-deny') => {
-			try {
-				settingsRepo.recordDecision(opts.conversationId, tool, summary, decision);
-			} catch (e) {
-				log.warn('copilot.permission_audit_failed', {
-					conversationId: opts.conversationId,
-					err: String(e)
-				});
-			}
-		};
-
 		// Grants override policy (the user explicitly trusted/blocked this).
 		// `deny` grants beat `allow` grants; the matcher enforces precedence.
-		const grant = settingsRepo.matchGrant(
+		const grant = settingsRepo.matchGrantDetailed(
 			opts.userId,
 			opts.conversationId,
 			tool,
@@ -266,12 +280,21 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 				workspaceRoot: opts.workingDirectory ?? null
 			}
 		);
-		if (grant === 'allow') {
+		if (grant.outcome === 'allow') {
 			audit('auto-allow');
 			return { kind: 'approve-once' } as const;
 		}
-		if (grant === 'deny') {
+		if (grant.outcome === 'deny') {
 			audit('auto-deny');
+			// Forward the matched deny grant's reason (when set) as
+			// `feedback` on the SDK reject. The SDK passes this through
+			// to the agent's tool-failure payload so the model can read
+			// *why* its call was rejected (e.g. "use the `grep` tool
+			// instead of bare `grep`") and pick a different approach
+			// without bothering the user.
+			if (grant.denyReason) {
+				return { kind: 'reject', feedback: grant.denyReason } as const;
+			}
 			return { kind: 'reject' } as const;
 		}
 

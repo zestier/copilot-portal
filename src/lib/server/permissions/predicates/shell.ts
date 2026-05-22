@@ -12,6 +12,13 @@ import { isPathInWorkspace } from '../workspace';
 export interface ShellMatchContext {
 	/** Conversation's workspace root. `workspace-paths` fails closed when null. */
 	workspaceRoot: string | null;
+	/** Whether the segment being evaluated is part of a shell pipeline
+	 * (connected to a neighboring command by `|`). Used by the rule's
+	 * `pipeline: 'must' | 'forbid'` lever. Defaults to false when
+	 * unspecified — callers that don't pass it are treating each segment
+	 * as standalone, which is the safe assumption for `'must'` (it'll
+	 * fail closed) and the correct one for `'forbid'`. */
+	inPipeline?: boolean;
 }
 
 /**
@@ -19,6 +26,11 @@ export interface ShellMatchContext {
  * rule. Pipelines and chains (`a && b`, `a | b`) must satisfy the same
  * rule on every segment — callers wanting different rules per segment
  * should issue separate grants and let the matcher OR them.
+ *
+ * The pipeline lever (`rule.pipeline`) is evaluated per-segment using
+ * the segment's followingOp / its predecessor's followingOp, so a rule
+ * with `pipeline: 'forbid'` rejects a multi-segment pipeline even
+ * though the rule otherwise covers each command.
  */
 export function shellRuleMatches(
 	rule: ShellRule,
@@ -26,8 +38,10 @@ export function shellRuleMatches(
 	ctx: ShellMatchContext
 ): boolean {
 	if (segments.length === 0) return false;
-	for (const seg of segments) {
-		if (!shellRuleMatchesSegment(rule, seg, ctx)) return false;
+	for (let i = 0; i < segments.length; i++) {
+		const inPipeline =
+			segments[i].followingOp === '|' || (i > 0 && segments[i - 1].followingOp === '|');
+		if (!shellRuleMatchesSegment(rule, segments[i], { ...ctx, inPipeline })) return false;
 	}
 	return true;
 }
@@ -49,6 +63,12 @@ export function shellRuleMatchesSegment(
 	const argv = seg.argv;
 	if (argv.length === 0) return false;
 	if (argv[0] !== rule.argv0) return false;
+
+	if (rule.pipeline) {
+		const inPipeline = ctx.inPipeline === true;
+		if (rule.pipeline === 'must' && !inPipeline) return false;
+		if (rule.pipeline === 'forbid' && inPipeline) return false;
+	}
 
 	if (rule.subcommands && rule.subcommands.length > 0) {
 		const sub = argv[1];

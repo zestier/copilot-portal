@@ -67,11 +67,15 @@ describe('seed grants — runtime behaviour', () => {
 		expect(shellMatch('git -C /etc status')).toBe('none');
 	});
 
-	it('cat is only allowed for workspace-relative paths', () => {
+	it('bare cat is denied (nudges toward structured read), but pipelined cat still works', () => {
 		// Workspace is /tmp; cat README.md resolves to /tmp/README.md.
-		expect(shellMatch('cat README.md', '/tmp')).toBe('allow');
-		expect(shellMatch('cat /etc/passwd', '/tmp')).toBe('none');
-		expect(shellMatch('cat ../etc/passwd', '/tmp')).toBe('none');
+		// The structured `view` tool is preferred for bare reads, so cat is denied.
+		expect(shellMatch('cat README.md', '/tmp')).toBe('deny');
+		// As part of a pipeline, cat is fine — the deny seed is `pipeline: 'forbid'`.
+		expect(shellMatch('cat README.md | grep foo', '/tmp')).toBe('allow');
+		// Escapes still fail to match the allow seed.
+		expect(shellMatch('cat /etc/passwd', '/tmp')).toBe('deny');
+		expect(shellMatch('cat ../etc/passwd', '/tmp')).toBe('deny');
 	});
 
 	it('rejects unsafe shell features even for safe-named tools', () => {
@@ -87,8 +91,11 @@ describe('seed grants — runtime behaviour', () => {
 		expect(shellMatch('curl https://example.com')).toBe('none');
 	});
 
-	it('find with -exec is rejected', () => {
-		expect(shellMatch('find . -name foo')).toBe('allow');
+	it('bare find is denied (use the glob tool); pipelined find still passes', () => {
+		expect(shellMatch('find . -name foo')).toBe('deny');
+		expect(shellMatch('find . -name foo | grep bar', '/tmp')).toBe('allow');
+		// `;` in -exec makes the parser bail (multi-segment with empty tail),
+		// so nothing matches — same as before deny seeds existed.
 		expect(shellMatch('find . -exec rm {} ;')).toBe('none');
 	});
 });

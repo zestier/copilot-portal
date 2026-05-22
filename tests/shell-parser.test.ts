@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseShellCommand } from '../src/lib/server/permissions/shell-parser';
+import { parseShellCommand, detectShellMisuse } from '../src/lib/server/permissions/shell-parser';
 
 function ok(cmd: string) {
 	const r = parseShellCommand(cmd);
@@ -234,5 +234,79 @@ describe('parseShellCommand — unsafe inputs', () => {
 		// shell-quote yields `{op: 'comment'}` for `# ...` tail.
 		const r = parseShellCommand('ls # hidden command');
 		expect(r.kind).toBe('unsafe');
+	});
+});
+
+describe('detectShellMisuse — cat/head/tail write redirects', () => {
+	it('flags `cat > file`', () => {
+		const m = detectShellMisuse('cat > out.txt');
+		expect(m?.code).toBe('cat-write-redirect');
+		expect(m?.feedback).toMatch(/cat/);
+		expect(m?.feedback).toMatch(/create.*edit|edit.*create/);
+	});
+
+	it('flags `cat >> file`', () => {
+		expect(detectShellMisuse('cat >> out.txt')?.code).toBe('cat-write-redirect');
+	});
+
+	it('flags cat-heredoc-to-file (the canonical agent-misuse case)', () => {
+		const m = detectShellMisuse("cat > src/foo.ts << 'EOF'\nbody\nEOF");
+		expect(m?.code).toBe('cat-write-redirect');
+	});
+
+	it('flags head and tail write redirects too', () => {
+		expect(detectShellMisuse('head -n 5 in.txt > out.txt')?.code).toBe('cat-write-redirect');
+		expect(detectShellMisuse('tail -f log >> mirror.log')?.code).toBe('cat-write-redirect');
+	});
+
+	it('flags `1>file` (explicit stdout fd)', () => {
+		expect(detectShellMisuse('cat 1> out.txt')?.code).toBe('cat-write-redirect');
+	});
+
+	it('does NOT flag pipelined cat (pipes are fine)', () => {
+		expect(detectShellMisuse('git log | cat')).toBeNull();
+		expect(detectShellMisuse('cat foo.txt | head -5')).toBeNull();
+	});
+
+	it('does NOT flag cat with input redirect or heredoc-only', () => {
+		// `cat < foo` and `cat << EOF` are silly but not file-writing.
+		// They get caught (or not) by the regular nudge-deny seed.
+		expect(detectShellMisuse('cat < input.txt')).toBeNull();
+		expect(detectShellMisuse("cat << 'EOF'\nhi\nEOF")).toBeNull();
+	});
+
+	it('does NOT flag fd-dup (it is a no-op, not a file write)', () => {
+		expect(detectShellMisuse('cat foo.txt 2>&1')).toBeNull();
+		// Note: `cat foo > /dev/null` IS flagged. Technically a no-op
+		// (output discarded), but the only reason to write that is to
+		// suppress output, and the agent has no reason to invoke cat for
+		// its side effects. Catching this false-positive is fine.
+	});
+
+	it('does NOT flag write redirects from other commands', () => {
+		expect(detectShellMisuse('pnpm build > build.log')).toBeNull();
+		expect(detectShellMisuse('git diff > patch.diff')).toBeNull();
+	});
+
+	it('does NOT flag substrings (cat must be the segment leader)', () => {
+		expect(detectShellMisuse('concat-files > out.txt')).toBeNull();
+		expect(detectShellMisuse('mycat > out.txt')).toBeNull();
+	});
+
+	it('only flags the offending segment in a chain', () => {
+		// `git log && cat > foo` — cat-write is in the second segment.
+		expect(detectShellMisuse('git log && cat > foo.txt')?.code).toBe('cat-write-redirect');
+		// `cat > foo || true` — cat-write is in the first segment.
+		expect(detectShellMisuse('cat > foo.txt || true')?.code).toBe('cat-write-redirect');
+	});
+
+	it('does NOT flag env-prefixed cat (acceptable miss — parser refuses anyway)', () => {
+		// `FOO=1 cat > out` — first token is the env assignment, not
+		// `cat`. We miss it here, but `parseShellCommand` refuses
+		// env-prefixed commands AND the redirect, so the request falls
+		// through to prompt without auto-approval. Documented as a
+		// known limitation; the contrived case isn't worth the parser
+		// dependency.
+		expect(detectShellMisuse('FOO=1 cat > out.txt')).toBeNull();
 	});
 });

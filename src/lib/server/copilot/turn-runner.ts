@@ -18,6 +18,8 @@ import * as usageRepo from '../db/repos/usage';
 import * as pool from './pool';
 import { deriveTitle, isDefaultTitle } from '../title';
 import * as interactiveRequests from './interactive-requests';
+import { PORTAL_PRELUDE } from './portal-prelude';
+import { isStubMode } from './bridge-stub';
 import { AsyncQueue } from './async-queue';
 import { snapshot as takeSnapshot } from '../snapshots';
 import type { BridgeOpenOptions } from './bridge';
@@ -271,9 +273,23 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		}
 	}
 
+	// Prepend a portal-context block telling the agent it's running through
+	// a permission gateway and that reject `feedback` is authoritative.
+	// The user's message itself is preserved verbatim after the block;
+	// this only changes what the agent sees, not what we persist (the raw
+	// user content was already stored by the turns route before we got
+	// here).
+	//
+	// Skip in stub mode: the deterministic test stub echoes whatever it
+	// receives, so dumping the prelude into its reply breaks tests that
+	// assert on the literal user prompt and wastes tokens against a
+	// fixed-string responder that wouldn't act on the guidance anyway.
+	const prelude = isStubMode() ? '' : PORTAL_PRELUDE;
+	const promptToSend = prelude ? `${prelude}\n\n${opts.prompt}` : opts.prompt;
+
 	turn.finishedPromise = (async () => {
 		try {
-			for await (const ev of session.send(opts.prompt, turnAc.signal)) {
+			for await (const ev of session.send(promptToSend, turnAc.signal)) {
 				dispatch(ev);
 			}
 		} catch (e) {

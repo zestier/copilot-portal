@@ -157,6 +157,73 @@ describe('GrantInputSchema — rejections', () => {
 		});
 		expect(r.success).toBe(false);
 	});
+
+	it('rejects denyReason on an allow grant', () => {
+		const r = GrantInputSchema.safeParse({
+			tool: 'shell',
+			decision: 'allow',
+			scope: { kind: 'shell', rule: { argv0: 'ls' } },
+			denyReason: 'this should not be settable on an allow'
+		});
+		expect(r.success).toBe(false);
+	});
+
+	it('rejects pipeline value that is not "must"/"forbid"', () => {
+		const r = GrantInputSchema.safeParse({
+			tool: 'shell',
+			decision: 'allow',
+			scope: { kind: 'shell', rule: { argv0: 'grep', pipeline: 'sometimes' } }
+		});
+		expect(r.success).toBe(false);
+	});
+});
+
+describe('GrantInputSchema — denyReason + pipeline', () => {
+	it('accepts denyReason on a deny grant and trims it', () => {
+		const r = GrantInputSchema.parse({
+			tool: 'shell',
+			decision: 'deny',
+			scope: { kind: 'shell', rule: { argv0: 'cat', pipeline: 'forbid' } },
+			denyReason: '  prefer the view tool  '
+		});
+		expect(r.denyReason).toBe('prefer the view tool');
+		if (r.scope.kind === 'shell') {
+			expect(r.scope.rule.pipeline).toBe('forbid');
+		}
+	});
+
+	it('normalizes empty / whitespace / undefined / null denyReason to null', () => {
+		for (const reason of [undefined, null, '', '   ']) {
+			const r = GrantInputSchema.parse({
+				tool: 'shell',
+				decision: 'deny',
+				scope: { kind: 'shell', rule: { argv0: 'rm' } },
+				denyReason: reason
+			});
+			expect(r.denyReason).toBeNull();
+		}
+	});
+
+	it('rejects denyReason over 500 chars', () => {
+		const r = GrantInputSchema.safeParse({
+			tool: 'shell',
+			decision: 'deny',
+			scope: { kind: 'shell', rule: { argv0: 'rm' } },
+			denyReason: 'x'.repeat(501)
+		});
+		expect(r.success).toBe(false);
+	});
+
+	it('accepts pipeline=must', () => {
+		const r = GrantInputSchema.parse({
+			tool: 'shell',
+			decision: 'allow',
+			scope: { kind: 'shell', rule: { argv0: 'grep', pipeline: 'must' } }
+		});
+		if (r.scope.kind === 'shell') {
+			expect(r.scope.rule.pipeline).toBe('must');
+		}
+	});
 });
 
 describe('permissionKindForTool', () => {

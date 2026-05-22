@@ -42,7 +42,8 @@ const ShellRuleSchema = z.object({
 			message: 'flags must specify at least one of allow/deny'
 		})
 		.optional(),
-	positionals: PositionalsSchema.optional()
+	positionals: PositionalsSchema.optional(),
+	pipeline: z.enum(['must', 'forbid']).optional()
 });
 
 const ShellScopeSchema = z.object({
@@ -110,7 +111,20 @@ export const GrantInputSchema = z
 			.positive()
 			.nullable()
 			.optional()
-			.transform((v) => v ?? null)
+			.transform((v) => v ?? null),
+		/**
+		 * Optional human-readable feedback surfaced to the agent when this
+		 * grant denies a request. Only meaningful when `decision === 'deny'`.
+		 * Used by the seed deny grants for `cat`/`grep`/etc. to teach the
+		 * agent which structured tool to use instead.
+		 */
+		denyReason: z
+			.string()
+			.trim()
+			.max(500, 'deny reason must be at most 500 characters')
+			.nullable()
+			.optional()
+			.transform((v) => (v === undefined || v === null || v === '' ? null : v))
 	})
 	.superRefine((val, ctx) => {
 		const expected = expectedScopeKind(val.tool);
@@ -143,6 +157,16 @@ export const GrantInputSchema = z
 				code: 'custom',
 				path: ['expiresAt'],
 				message: 'expiry must be in the future'
+			});
+		}
+
+		// denyReason only makes sense on deny grants. Don't silently drop
+		// it; better to flag the inconsistency.
+		if (val.denyReason !== null && val.decision !== 'deny') {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['denyReason'],
+				message: 'denyReason is only allowed on deny grants'
 			});
 		}
 	});

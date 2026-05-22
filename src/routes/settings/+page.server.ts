@@ -9,6 +9,7 @@ import { log } from '$lib/server/log';
 import type { PermissionPolicy, UserSettings } from '$lib/types';
 import { GrantInputSchema, permissionKindForTool } from '$lib/permissions/scope-schema';
 import { encodeScope } from '$lib/permissions/scope-codec';
+import { ensureSeedGrantsForUser } from '$lib/server/permissions/seed-grants';
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.userId) throw redirect(302, '/login');
 	const cfg = loadConfig();
@@ -102,6 +103,20 @@ export const actions: Actions = {
 	},
 
 	/**
+	 * Re-install any default seed grants that aren't already present for
+	 * this user. Idempotent: seeds the user has manually deleted will
+	 * come back, seeds they already have are skipped. Lets a user
+	 * recover after "Revoke all grants", and lets existing users
+	 * back-fill any new seeds shipped after their account was created.
+	 */
+	restoreSeedGrants: async ({ locals }) => {
+		if (!locals.userId) return fail(401, { ok: false, error: 'Not authenticated' });
+		const inserted = ensureSeedGrantsForUser(locals.userId);
+		log.info('settings.seed_grants_restored', { userId: locals.userId, inserted });
+		return { ok: true, inserted };
+	},
+
+	/**
 	 * Author a new user-global grant from the Settings form. The dialog
 	 * still owns conversation-scoped + interactive-prompt grant creation;
 	 * this action exists to cover the long tail of structured scopes
@@ -142,7 +157,8 @@ export const actions: Actions = {
 			permissionKind,
 			scope: input.scope,
 			decision: input.decision,
-			expiresAt: input.expiresAt
+			expiresAt: input.expiresAt,
+			denyReason: input.denyReason
 		});
 		log.info('settings.grant_created', {
 			userId: locals.userId,
@@ -181,7 +197,8 @@ export const actions: Actions = {
 			scopePattern: null,
 			scope: input.scope,
 			decision: input.decision,
-			expiresAt: input.expiresAt
+			expiresAt: input.expiresAt,
+			denyReason: input.denyReason
 		});
 		if (!updated) {
 			return fail(404, { ok: false, error: 'Grant not found', formId: 'updateGrant' });
@@ -224,11 +241,15 @@ function parseGrantFormData(data: FormData, formId: string): ParseGrantResult {
 		return { ok: false, failure: fail(400, { ok: false, error: 'Invalid expiry date', formId }) };
 	}
 
+	const denyReasonRaw = data.get('denyReason');
+	const denyReason = typeof denyReasonRaw === 'string' ? denyReasonRaw : null;
+
 	const parsed = GrantInputSchema.safeParse({
 		tool: data.get('tool'),
 		decision: data.get('decision'),
 		scope,
-		expiresAt
+		expiresAt,
+		denyReason
 	});
 	if (!parsed.success) {
 		const issue = parsed.error.issues[0];

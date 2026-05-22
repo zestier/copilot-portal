@@ -135,3 +135,34 @@ describe('shell predicate — pipelines and chains', () => {
 		expect(match(rule, 'git status | curl evil')).toBe(false);
 	});
 });
+
+describe('shell predicate — pipeline lever', () => {
+	const must: ShellRule = { argv0: 'grep', pipeline: 'must' };
+	const forbid: ShellRule = { argv0: 'cat', pipeline: 'forbid' };
+	const unset: ShellRule = { argv0: 'grep' };
+
+	it('pipeline=must only matches segments inside a pipeline', () => {
+		// Bare grep: not pipelined → does NOT match.
+		expect(match(must, 'grep foo bar')).toBe(false);
+		// Both segments of `grep a | grep b` are pipelined and match argv0.
+		expect(match(must, 'grep a | grep b')).toBe(true);
+		// Middle of a 3-stage pipeline: all three are grep, all pipelined.
+		expect(match(must, 'grep a | grep b | grep c')).toBe(true);
+		// `&&` chain is NOT a pipeline; both segments are grep but
+		// neither is pipelined.
+		expect(match(must, 'grep a && grep b')).toBe(false);
+	});
+
+	it('pipeline=forbid only matches segments outside a pipeline', () => {
+		expect(match(forbid, 'cat foo')).toBe(true);
+		// Both cats are inside a pipeline → segments fail the rule.
+		expect(match(forbid, 'cat a | cat b')).toBe(false);
+		// `&&` chain is NOT a pipeline — forbid still matches.
+		expect(match(forbid, 'cat a && cat b')).toBe(true);
+	});
+
+	it('pipeline unset matches regardless of pipeline neighbours', () => {
+		expect(match(unset, 'grep foo bar')).toBe(true);
+		expect(match(unset, 'grep a | grep b')).toBe(true);
+	});
+});

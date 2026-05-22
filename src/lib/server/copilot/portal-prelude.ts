@@ -1,0 +1,22 @@
+// Per-turn "portal context" block prepended to the user's message before
+// it's handed to the SDK. Goal: tell the agent that it's running through
+// a permission gateway and that reject `feedback` strings are the
+// authoritative source of "why was that denied / what should I do
+// instead". We deliberately do NOT enumerate the user's grants here —
+// the matcher's deny `feedback` self-teaches on the first rejection,
+// and dumping every rule would blow up context for no real win.
+//
+// This lives at the portal layer because the portal needs to work with
+// arbitrary agents driven through `@github/copilot-sdk` — we can't
+// assume any baked-in knowledge of how the portal mediates permissions.
+//
+// IMPORTANT: nothing here is authoritative. Allow/deny decisions are
+// enforced by the matcher in `bridge.ts`.
+
+export const PORTAL_PRELUDE = [
+	'[Portal context — auto-injected; not authored by the user]',
+	'Tool calls run through a permission gateway. On reject, the `feedback` string is',
+	'authoritative — read it and adapt. Prefer structured tools (view/edit/create/grep/glob)',
+	'over shell equivalents (cat/sed/rg/find) where available.',
+	'[/Portal context]'
+].join('\n');

@@ -424,13 +424,17 @@ describe('interactive request registry', () => {
 			]
 		});
 
-		// Each grant matches independently on its own argv0.
+		// Each grant matches independently on its own argv0. Note that the
+		// default seed grants include `pipeline: 'forbid'` deny nudges for
+		// bare `rg` (steering toward the structured `grep` tool); to verify
+		// the user's rg allow actually persisted we exercise it in pipeline
+		// position, where the deny nudge intentionally doesn't fire.
 		const gitParsed = parseShellCommand('git log --oneline');
-		const rgParsed = parseShellCommand('rg --hidden foo');
-		const unrelated = parseShellCommand('cat /etc/passwd');
+		const rgParsed = parseShellCommand('git status | rg foo');
+		const unrelated = parseShellCommand('curl https://example.com');
 		if (gitParsed.kind !== 'parsed') throw new Error('git parse');
 		if (rgParsed.kind !== 'parsed') throw new Error('rg parse');
-		if (unrelated.kind !== 'parsed') throw new Error('cat parse');
+		if (unrelated.kind !== 'parsed') throw new Error('curl parse');
 
 		expect(
 			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'git log --oneline', {
@@ -438,13 +442,13 @@ describe('interactive request registry', () => {
 			})
 		).toBe('allow');
 		expect(
-			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'rg --hidden foo', {
+			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'git status | rg foo', {
 				shellSegments: rgParsed.segments
 			})
 		).toBe('allow');
 		// A command covered by neither grant still falls through.
 		expect(
-			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'cat /etc/passwd', {
+			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'curl https://example.com', {
 				shellSegments: unrelated.segments
 			})
 		).toBe('none');

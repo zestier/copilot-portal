@@ -90,6 +90,11 @@ function validateShell(v: Record<string, unknown>): ShellScope | null {
 		out.positionals = p;
 	}
 
+	if (rule.pipeline !== undefined) {
+		if (rule.pipeline !== 'must' && rule.pipeline !== 'forbid') return null;
+		out.pipeline = rule.pipeline;
+	}
+
 	return { kind: 'shell', rule: out };
 }
 

@@ -29,6 +29,17 @@ describe('scope-codec roundtrip', () => {
 		});
 	});
 
+	it('shell with pipeline=must', () => {
+		roundtrip({ kind: 'shell', rule: { argv0: 'grep', pipeline: 'must' } });
+	});
+
+	it('shell with pipeline=forbid', () => {
+		roundtrip({
+			kind: 'shell',
+			rule: { argv0: 'cat', pipeline: 'forbid', positionals: { kind: 'any' } }
+		});
+	});
+
 	it('fs variants', () => {
 		roundtrip({ kind: 'fs', rule: { kind: 'workspace' }, perms: ['read'] });
 		roundtrip({ kind: 'fs', rule: { kind: 'exact', path: '/tmp/x' } });

@@ -7,6 +7,16 @@
 // code, was invisible to users, and ran *before* the matcher). By
 // expressing the safe behavior as real grants we get one code path
 // instead of two, and users can disable any seed they don't trust.
+//
+// Two flavors of seed:
+//   1. `allow` seeds make safe shell calls (read-only utilities, git
+//      read-only subcommands) pass without prompting.
+//   2. `deny` seeds with `denyReason` + `pipeline: 'forbid'` nudge the
+//      agent toward structured tools (view / grep / glob) for terminal
+//      reads like `cat foo`, while still allowing the same commands
+//      inside a pipeline (`cmd | grep ...`). The deny's `denyReason`
+//      is surfaced to the agent as `feedback` on the SDK reject, so
+//      the next call learns immediately without a user prompt.
 
 import type { GrantScope, ShellRule } from '$lib/permissions/scope-types';
 import { addGrant, listGrantsForUser } from '../db/repos/settings';
@@ -15,6 +25,8 @@ interface SeedSpec {
 	tool: string;
 	permissionKind: string | null;
 	scope: GrantScope;
+	decision?: 'allow' | 'deny';
+	denyReason?: string;
 }
 
 /**
@@ -102,6 +114,62 @@ function shellGrant(rule: ShellRule): SeedSpec {
 	return { tool: 'shell', permissionKind: 'shell', scope: { kind: 'shell', rule } };
 }
 
+function shellDeny(rule: ShellRule, reason: string): SeedSpec {
+	return {
+		tool: 'shell',
+		permissionKind: 'shell',
+		scope: { kind: 'shell', rule },
+		decision: 'deny',
+		denyReason: reason
+	};
+}
+
+/**
+ * Terminal-usage nudges: each entry adds a `pipeline: 'forbid'` deny
+ * for `argv0`, paired with a `denyReason` pointing the agent at the
+ * structured tool that does the job. Pipelined usage (`cmd | argv0
+ * ...`) is NOT covered by the deny and falls through to the matching
+ * allow seed (or to the user's policy / prompt). The intent is to
+ * teach via tool-failure feedback rather than via a static prelude.
+ */
+const NUDGE_DENIES: { argv0: string; reason: string }[] = [
+	{
+		argv0: 'cat',
+		reason:
+			'Bare `cat` is denied in this portal — use the structured `view` tool for file reads (supports `view_range` for slicing). Piped use (e.g. `cmd | cat -A`) is allowed.'
+	},
+	{
+		argv0: 'head',
+		reason:
+			'Bare `head` is denied — use the `view` tool with `view_range` for top-of-file reads. Piped use (e.g. `cmd | head -n 5`) is allowed.'
+	},
+	{
+		argv0: 'tail',
+		reason:
+			'Bare `tail` is denied — use the `view` tool with `view_range` for bottom-of-file reads. Piped use (`cmd | tail -n 50`) is allowed but still stalls SSE output until upstream exits; prefer redirecting to a file and reading it back.'
+	},
+	{
+		argv0: 'grep',
+		reason:
+			'Bare `grep` is denied — use the `grep` tool (ripgrep-backed, supports `glob`, `output_mode`, `head_limit`). Piped use (`cmd | grep ...`) is allowed.'
+	},
+	{
+		argv0: 'rg',
+		reason:
+			'Bare `rg` is denied — use the `grep` tool (it wraps ripgrep with structured output). Piped use is allowed.'
+	},
+	{
+		argv0: 'find',
+		reason:
+			'Bare `find` is denied — use the `glob` tool for file-pattern matching. Piped use is allowed for unusual cases.'
+	},
+	{
+		argv0: 'ls',
+		reason:
+			'Bare `ls` is denied — use the `glob` tool to enumerate files. Piped use is allowed when you genuinely need ls-specific output like permissions or symlinks.'
+	}
+];
+
 export function defaultSeedGrants(): SeedSpec[] {
 	const seeds: SeedSpec[] = [];
 
@@ -144,14 +212,24 @@ export function defaultSeedGrants(): SeedSpec[] {
 		})
 	);
 
+	// Structured-tool nudges. Each deny is `pipeline: 'forbid'`, so it
+	// fires only when the command is the *only* command of its pipeline
+	// (i.e. its stdout is what the agent wanted to read). Paired with
+	// the allow seeds above, this means `cmd | grep foo` keeps working
+	// while bare `grep foo` is rejected with feedback explaining the
+	// structured replacement.
+	for (const { argv0, reason } of NUDGE_DENIES) {
+		seeds.push(shellDeny({ argv0, pipeline: 'forbid' }, reason));
+	}
+
 	return seeds;
 }
 
 /**
  * Insert the default seed grants for `userId` iff they're not already
- * present. We key dedup on (tool, permission_kind, scope_json) — the
- * structured representation uniquely identifies the seed, so a user
- * who has manually deleted one won't see it return on next login.
+ * present. We key dedup on (tool, permission_kind, scope_json, decision)
+ * — the structured representation uniquely identifies the seed, so a
+ * user who has manually deleted one won't see it return on next login.
  *
  * Re-running this function is a no-op when the user already has all
  * seeds. To restore a deleted seed, the user re-adds it from the UI.
@@ -160,19 +238,22 @@ export function ensureSeedGrantsForUser(userId: string): number {
 	const existing = listGrantsForUser(userId);
 	const haveKey = new Set<string>();
 	for (const g of existing) {
-		if (g.scope) haveKey.add(seedKey(g.tool, g.permissionKind, g.scope));
+		if (g.scope) haveKey.add(seedKey(g.tool, g.permissionKind, g.scope, g.decision));
 	}
 
 	let inserted = 0;
 	for (const seed of defaultSeedGrants()) {
-		const key = seedKey(seed.tool, seed.permissionKind, seed.scope);
+		const decision = seed.decision ?? 'allow';
+		const key = seedKey(seed.tool, seed.permissionKind, seed.scope, decision);
 		if (haveKey.has(key)) continue;
 		addGrant({
 			userId,
 			conversationId: null,
 			tool: seed.tool,
 			permissionKind: seed.permissionKind,
-			scope: seed.scope
+			scope: seed.scope,
+			decision,
+			denyReason: seed.denyReason ?? null
 		});
 		haveKey.add(key);
 		inserted += 1;
@@ -180,6 +261,6 @@ export function ensureSeedGrantsForUser(userId: string): number {
 	return inserted;
 }
 
-function seedKey(tool: string, kind: string | null, scope: GrantScope): string {
-	return `${tool}\u0000${kind ?? ''}\u0000${JSON.stringify(scope)}`;
+function seedKey(tool: string, kind: string | null, scope: GrantScope, decision: string): string {
+	return `${tool}\u0000${kind ?? ''}\u0000${decision}\u0000${JSON.stringify(scope)}`;
 }
