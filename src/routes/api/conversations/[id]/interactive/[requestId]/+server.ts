@@ -83,7 +83,7 @@ const PermissionBody = z.object({
 
 const AutoModeSwitchBody = z.object({
 	kind: z.literal('auto_mode_switch'),
-	decision: z.enum(['yes', 'yes_always', 'no'])
+	decision: z.enum(['yes', 'no'])
 });
 
 const UserInputBody = z.object({

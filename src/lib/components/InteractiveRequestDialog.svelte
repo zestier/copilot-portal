@@ -724,15 +724,9 @@
 				onclick={() => pick({ kind: 'auto_mode_switch', decision: 'no' })}>No</button
 			>
 			<button
-				class="btn"
-				disabled={busy}
-				onclick={() => pick({ kind: 'auto_mode_switch', decision: 'yes' })}>Yes, once</button
-			>
-			<button
 				class="btn primary"
 				disabled={busy}
-				onclick={() => pick({ kind: 'auto_mode_switch', decision: 'yes_always' })}
-				>Yes, always</button
+				onclick={() => pick({ kind: 'auto_mode_switch', decision: 'yes' })}>Yes, once</button
 			>
 		</div>
 	{:else if request.kind === 'user_input'}

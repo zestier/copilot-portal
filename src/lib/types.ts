@@ -284,7 +284,7 @@ export type InteractiveResponse =
 			 */
 			applyToAllConversations?: boolean;
 	  }
-	| { kind: 'auto_mode_switch'; decision: 'yes' | 'yes_always' | 'no' }
+	| { kind: 'auto_mode_switch'; decision: 'yes' | 'no' }
 	| { kind: 'user_input'; answer: string; wasFreeform?: boolean }
 	| {
 			kind: 'elicitation';
