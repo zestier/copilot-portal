@@ -24,6 +24,7 @@ import {
 	decideByPolicy
 } from './interactive-requests';
 import * as settingsRepo from '../db/repos/settings';
+import * as conversationsRepo from '../db/repos/conversations';
 import { deriveScopeKey } from '../permissions/matcher';
 import {
 	parseShellCommand,
@@ -33,6 +34,8 @@ import {
 import { ulid } from 'ulid';
 import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
+
+type RuntimeSessionMode = 'interactive' | 'plan' | 'autopilot';
 
 let sharedClient: CopilotClient | null = null;
 let starting: Promise<CopilotClient> | null = null;
@@ -135,7 +138,7 @@ interface SdkSession {
 	 * surfaces as a compile error here rather than a runtime mystery. */
 	rpc?: {
 		mode?: {
-			set?: (params: { mode: SessionMode }) => Promise<void>;
+			set?: (params: { mode: RuntimeSessionMode }) => Promise<void>;
 		};
 		permissions?: {
 			setApproveAll?: (params: { enabled: boolean }) => Promise<{ success: boolean }>;
@@ -147,6 +150,7 @@ interface SdkSession {
 interface PermissionRequestLike {
 	kind?: string;
 	toolName?: string;
+	toolDescription?: string;
 	fileName?: string;
 	fullCommandText?: string;
 	// Newer SDK shapes use kind-specific fields instead of fileName/args:
@@ -243,8 +247,10 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	const onPermissionRequest = async (req: PermissionRequestLike) => {
 		const tool = req.toolName ?? req.kind ?? 'unknown';
 		const permissionKind = req.kind ?? 'unknown';
-		const summary = req.fullCommandText ?? req.fileName ?? req.path ?? req.url ?? tool;
+		const summary = summarizePermissionRequest(req, tool);
 		const scopeKey = deriveScopeKey(permissionKind, req);
+		const isModeSwitchToolRequest =
+			permissionKind === 'custom-tool' && req.toolName === 'request_mode_switch';
 
 		// Helper to keep the audit panel honest: every silent decision is
 		// recorded as `auto-allow` / `auto-deny` so the user can see what
@@ -354,6 +360,19 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			audit('auto-deny');
 			return { kind: 'reject' } as const;
 		}
+		if (currentMode === 'best-effort' && !isModeSwitchToolRequest) {
+			audit('auto-deny');
+			return {
+				kind: 'reject',
+				feedback: bestEffortPermissionFeedback({
+					tool,
+					permissionKind,
+					summary,
+					args: req.args ?? null,
+					shellAnalysis
+				})
+			} as const;
+		}
 
 		const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
 			'permission',
@@ -462,6 +481,55 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		model: opts.model,
 		workingDirectory: opts.workingDirectory,
 		streaming: true,
+		tools: [
+			{
+				name: 'request_mode_switch',
+				description:
+					'Request switching this conversation to interactive mode when you are blocked in best-effort mode because a needed permission keeps being denied. Use only after trying reasonable alternatives.',
+				parameters: {
+					type: 'object',
+					properties: {
+						mode: {
+							type: 'string',
+							enum: ['interactive'],
+							description: 'The target mode to switch to.'
+						},
+						reason: {
+							type: 'string',
+							description: 'Why the mode switch is needed.'
+						}
+					},
+					required: ['mode', 'reason'],
+					additionalProperties: false
+				},
+				async handler(args: unknown) {
+					const req = parseModeSwitchToolArgs(args);
+					if (currentMode === 'interactive') {
+						return 'Conversation is already in interactive mode.';
+					}
+					const persisted = conversationsRepo.updateSessionSettings(
+						opts.conversationId,
+						opts.userId,
+						{
+							mode: 'interactive'
+						}
+					);
+					if (!persisted) {
+						log.warn('copilot.request_mode_switch.persist_failed', {
+							conversationId: opts.conversationId
+						});
+					}
+					await applyMode('interactive');
+					emit({
+						type: 'session.settings',
+						conversationId: opts.conversationId,
+						mode: 'interactive',
+						source: 'agent'
+					});
+					return `Switched conversation to interactive mode. Reason: ${req.reason}`;
+				}
+			}
+		],
 		onPermissionRequest,
 		onUserInputRequest,
 		onElicitationRequest,
@@ -859,9 +927,8 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		// can call `mode.set` — that's how `exit_plan_mode` lands). Sync
 		// our cache and broadcast so the UI's mode picker tracks.
 		const raw = (e as { data?: { newMode?: string } })?.data?.newMode;
-		const next: SessionMode | null =
-			raw === 'interactive' || raw === 'plan' || raw === 'autopilot' ? raw : null;
-		if (!next || next === currentMode) return;
+		const next = isRuntimeSessionMode(raw) ? raw : null;
+		if (!next || next === toRuntimeMode(currentMode)) return;
 		currentMode = next;
 		activeQueue?.push({
 			type: 'session.settings',
@@ -899,13 +966,15 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	// itself in `onPermissionRequest`, and a missing mode RPC just means
 	// the agent runs in its default mode (still safe).
 	async function applyMode(mode: SessionMode): Promise<void> {
+		const runtimeMode = toRuntimeMode(mode);
 		try {
-			await sdkSession.rpc?.mode?.set?.({ mode });
+			await sdkSession.rpc?.mode?.set?.({ mode: runtimeMode });
 			currentMode = mode;
 		} catch (e) {
 			log.warn('copilot.session.mode_set_failed', {
 				conversationId: opts.conversationId,
 				mode,
+				runtimeMode,
 				err: (e as Error).message
 			});
 		}
@@ -1010,4 +1079,78 @@ function summarizeResult(result: unknown, error: unknown): string {
 		}
 	}
 	return 'ok';
+}
+
+function toRuntimeMode(mode: SessionMode): RuntimeSessionMode {
+	return mode === 'best-effort' ? 'autopilot' : mode;
+}
+
+function isRuntimeSessionMode(value: string | undefined): value is RuntimeSessionMode {
+	return value === 'interactive' || value === 'plan' || value === 'autopilot';
+}
+
+function bestEffortPermissionFeedback(view: {
+	tool: string;
+	permissionKind: string;
+	summary: string;
+	args: unknown;
+	shellAnalysis?: import('$lib/types').ShellAnalysisView;
+}): string {
+	const promptText = permissionPromptText(view);
+	const alternative = bestEffortAlternativeHint(view.permissionKind);
+	return (
+		'This conversation is in `best-effort` mode, so permission prompts are auto-rejected instead of shown to the user. ' +
+		`The user would have been asked to approve:\n\n${promptText}\n\n${alternative} If no workable alternative exists, stop and explain which permission is missing.`
+	);
+}
+
+function permissionPromptText(view: {
+	tool: string;
+	permissionKind: string;
+	summary: string;
+	args: unknown;
+	shellAnalysis?: import('$lib/types').ShellAnalysisView;
+}): string {
+	const lines = [`${view.tool} (${view.permissionKind})`, view.summary];
+	if (view.permissionKind === 'shell' && view.shellAnalysis?.kind === 'unsafe') {
+		lines.push(
+			`Reason: ${view.shellAnalysis.reason}. Constructs like subshells, redirection, command substitution, or variable expansion can hide arbitrary commands, so structured "always" grants won't apply here.`
+		);
+	}
+	return lines.join('\n');
+}
+
+function bestEffortAlternativeHint(permissionKind: string): string {
+	switch (permissionKind) {
+		case 'shell':
+			return 'Try a structured tool or another already-allowed approach first. If you end up blocked on permissions, call `request_mode_switch` to ask the user to switch this conversation to interactive mode.';
+		case 'read':
+			return 'Try the structured read/search tools or existing workspace context first. If you end up blocked on permissions, call `request_mode_switch` to ask the user to switch this conversation to interactive mode.';
+		case 'write':
+		case 'edit':
+			return 'Try a structured workspace edit/create workflow or another already-allowed path first. If you end up blocked on permissions, call `request_mode_switch` to ask the user to switch this conversation to interactive mode.';
+		case 'url':
+			return 'Try a local source or another non-network approach first. If you end up blocked on permissions, call `request_mode_switch` to ask the user to switch this conversation to interactive mode.';
+		default:
+			return 'Try another approach that stays within the current permission set first. If you end up blocked on permissions, call `request_mode_switch` to ask the user to switch this conversation to interactive mode.';
+	}
+}
+
+function summarizePermissionRequest(req: PermissionRequestLike, tool: string): string {
+	return req.fullCommandText ?? req.fileName ?? req.path ?? req.url ?? req.toolDescription ?? tool;
+}
+
+function parseModeSwitchToolArgs(args: unknown): { mode: 'interactive'; reason: string } {
+	if (!args || typeof args !== 'object') {
+		throw new Error('request_mode_switch requires object arguments.');
+	}
+	const mode = (args as Record<string, unknown>).mode;
+	const reason = (args as Record<string, unknown>).reason;
+	if (mode !== 'interactive') {
+		throw new Error('request_mode_switch only supports switching to interactive mode.');
+	}
+	if (typeof reason !== 'string' || reason.trim().length === 0) {
+		throw new Error('request_mode_switch requires a non-empty reason.');
+	}
+	return { mode, reason: reason.trim() };
 }

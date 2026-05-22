@@ -19,13 +19,17 @@ export interface Conversation {
 	workdir: string;
 	model: string | null;
 	/**
-	 * Agent mode for this conversation. Mirrors the SDK's `SessionMode`:
+	 * Agent mode for this conversation. Mostly mirrors the SDK's
+	 * `SessionMode`, with one portal-only extension:
 	 *   - `interactive` (default): regular chat; the agent prompts for
 	 *     permission and can call tools freely.
 	 *   - `plan`: the agent plans without executing destructive tools and
 	 *     surfaces an `exit_plan_mode` request before switching to execute.
 	 *   - `autopilot`: less-supervised mode hint — the agent is expected to
 	 *     work for long stretches with minimal user interaction.
+	 *   - `best-effort`: forwarded to the runtime as `autopilot`, but the
+	 *     portal auto-rejects prompt-worthy permission requests with
+	 *     feedback instead of asking the user.
 	 *
 	 * The mode is forwarded to the runtime each time the session is opened.
 	 */
@@ -46,10 +50,10 @@ export interface Conversation {
 	forkedFromMessageId: string | null;
 }
 
-// Mirrors the SDK's `SessionMode` (interactive / plan / autopilot). Stored
-// on the conversation row and forwarded to the runtime via
-// `session.rpc.mode.set` on every open.
-export type SessionMode = 'interactive' | 'plan' | 'autopilot';
+// Portal session modes. `best-effort` is the only portal-only extension; it
+// maps to the runtime's `autopilot` mode while keeping stricter permission
+// semantics in the bridge.
+export type SessionMode = 'interactive' | 'plan' | 'autopilot' | 'best-effort';
 
 export interface Message {
 	id: string;

@@ -7,7 +7,16 @@ const sdkSessionStub = {
 	off: vi.fn(),
 	send: vi.fn(),
 	abort: vi.fn(),
-	disconnect: vi.fn()
+	disconnect: vi.fn(),
+	rpc: {
+		mode: {
+			set: vi.fn()
+		},
+		permissions: {
+			setApproveAll: vi.fn(),
+			resetSessionApprovals: vi.fn()
+		}
+	}
 };
 
 const clientStub = {
@@ -55,7 +64,17 @@ beforeEach(async () => {
 	// implementation into the next test. Re-install default resolved
 	// values for the methods bridge expects to be promise-returning.
 	for (const fn of Object.values(clientStub)) fn.mockReset();
-	for (const fn of Object.values(sdkSessionStub)) fn.mockReset();
+	for (const fn of [
+		sdkSessionStub.on,
+		sdkSessionStub.off,
+		sdkSessionStub.send,
+		sdkSessionStub.abort,
+		sdkSessionStub.disconnect,
+		sdkSessionStub.rpc.mode.set,
+		sdkSessionStub.rpc.permissions.setApproveAll,
+		sdkSessionStub.rpc.permissions.resetSessionApprovals
+	])
+		fn.mockReset();
 	clientStub.start.mockResolvedValue(undefined);
 	clientStub.stop.mockResolvedValue(undefined);
 	clientStub.createSession.mockResolvedValue(sdkSessionStub);
@@ -65,6 +84,9 @@ beforeEach(async () => {
 	clientStub.getSessionMetadata.mockResolvedValue(undefined);
 	sdkSessionStub.abort.mockResolvedValue(undefined);
 	sdkSessionStub.disconnect.mockResolvedValue(undefined);
+	sdkSessionStub.rpc.mode.set.mockResolvedValue(undefined);
+	sdkSessionStub.rpc.permissions.setApproveAll.mockResolvedValue({ success: true });
+	sdkSessionStub.rpc.permissions.resetSessionApprovals.mockResolvedValue(undefined);
 });
 
 describe('bridge.open() session resume behavior', () => {
@@ -183,6 +205,136 @@ describe('bridge.open() context-usage event translation', () => {
 		expect(usage!.currentTokens).toBe(1234);
 		expect(usage!.tokenLimit).toBe(100_000);
 		expect(usage!.isInitial).toBe(true);
+	});
+});
+
+describe('bridge.open() session mode and permissions', () => {
+	it('injects a request_mode_switch tool', async () => {
+		const { open } = await importBridge();
+		await open({ ...baseOpts, mode: 'best-effort' });
+
+		const tools = clientStub.createSession.mock.calls[0][0].tools as Array<{
+			name: string;
+			description?: string;
+		}>;
+		expect(tools).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: 'request_mode_switch',
+					description: expect.stringContaining('interactive mode')
+				})
+			])
+		);
+	});
+
+	it('maps best-effort mode to autopilot on the runtime RPC', async () => {
+		const { open } = await importBridge();
+		const session = await open({ ...baseOpts, mode: 'best-effort' });
+
+		await session.setMode('best-effort');
+
+		expect(sdkSessionStub.rpc.mode.set).toHaveBeenCalledWith({ mode: 'autopilot' });
+	});
+
+	it('auto-rejects prompt-worthy permission requests in best-effort mode with the would-be prompt text', async () => {
+		const { open } = await importBridge();
+		await open({ ...baseOpts, mode: 'best-effort' });
+
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const result = await onPermissionRequest({
+			kind: 'shell',
+			toolName: 'shell',
+			fullCommandText: "printf 'best-effort demo\\n' > /tmp/copilot-best-effort-demo.txt"
+		});
+
+		expect(result).toEqual(
+			expect.objectContaining({
+				kind: 'reject',
+				feedback: expect.stringContaining('best-effort')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('The user would have been asked to approve:')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('shell (shell)')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining(
+					"printf 'best-effort demo\\n' > /tmp/copilot-best-effort-demo.txt"
+				)
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('Reason: redirection')
+			})
+		);
+	});
+
+	it('does not auto-deny the request_mode_switch tool in best-effort mode', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const session = await open({ ...baseOpts, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'custom-tool',
+				toolName: 'request_mode_switch',
+				toolDescription:
+					'Request switching this conversation to interactive mode when blocked by permissions.',
+				args: { mode: 'interactive', reason: 'Need extra permission to continue.' }
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'request_mode_switch',
+				permissionKind: 'custom-tool'
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('switches to interactive mode when request_mode_switch runs', async () => {
+		const { open } = await importBridge();
+		await open({ ...baseOpts, mode: 'best-effort' });
+
+		const tools = clientStub.createSession.mock.calls[0][0].tools as Array<{
+			name: string;
+			handler: (args: unknown) => Promise<unknown>;
+		}>;
+		const tool = tools.find((t) => t.name === 'request_mode_switch');
+		expect(tool).toBeTruthy();
+		sdkSessionStub.rpc.mode.set.mockClear();
+
+		const result = await tool!.handler({
+			mode: 'interactive',
+			reason: 'Need to request an additional permission.'
+		});
+
+		expect(sdkSessionStub.rpc.mode.set).toHaveBeenCalledWith({ mode: 'interactive' });
+		expect(result).toBe(
+			'Switched conversation to interactive mode. Reason: Need to request an additional permission.'
+		);
 	});
 });
 

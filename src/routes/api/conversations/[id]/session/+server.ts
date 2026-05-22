@@ -16,7 +16,7 @@ import { log } from '$lib/server/log';
 
 const PatchBody = z
 	.object({
-		mode: z.enum(['interactive', 'plan', 'autopilot']).optional(),
+		mode: z.enum(['interactive', 'plan', 'autopilot', 'best-effort']).optional(),
 		approveAllTools: z.boolean().optional()
 	})
 	.refine((b) => b.mode !== undefined || b.approveAllTools !== undefined, {

@@ -19,7 +19,10 @@ interface ConvRow {
 
 function rowToConv(r: ConvRow): Conversation {
 	const rawMode = r.mode ?? 'interactive';
-	const mode: SessionMode = rawMode === 'plan' || rawMode === 'autopilot' ? rawMode : 'interactive';
+	const mode: SessionMode =
+		rawMode === 'plan' || rawMode === 'autopilot' || rawMode === 'best-effort'
+			? rawMode
+			: 'interactive';
 	return {
 		id: r.id,
 		userId: r.user_id,

@@ -59,6 +59,13 @@ describe('db migrations + repos', () => {
 		expect(convs.get(c.id, u.id)?.title).toBe('t');
 	});
 
+	it('round-trips the best-effort session mode', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, { title: 't', workdir: '/tmp', model: null });
+		expect(convs.updateSessionSettings(c.id, u.id, { mode: 'best-effort' })).toBe(true);
+		expect(convs.get(c.id, u.id)?.mode).toBe('best-effort');
+	});
+
 	it('permission grants scope by conversation and global', () => {
 		const u = users.ensureLocalUser();
 		const c = convs.create(u.id, { title: 't', workdir: '/tmp', model: null });

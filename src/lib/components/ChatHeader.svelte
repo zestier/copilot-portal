@@ -51,6 +51,11 @@
 			value: 'autopilot',
 			label: 'Autopilot',
 			hint: 'Agent decides when to switch into less-supervised execution.'
+		},
+		{
+			value: 'best-effort',
+			label: 'Best effort',
+			hint: 'Autopilot-style execution, but permission prompts auto-reject with feedback.'
 		}
 	];
 
@@ -240,6 +245,11 @@
 						<p class="approve-warning" role="note">
 							Every tool call is auto-approved for this conversation. Audit entries still record
 							each one as <code>auto-allow</code>.
+						</p>
+					{:else if mode === 'best-effort'}
+						<p class="approve-warning" role="note">
+							Permission prompts are auto-rejected in this conversation. The agent can keep trying
+							alternatives, but it must stop once extra permission is truly required.
 						</p>
 					{/if}
 				</div>
