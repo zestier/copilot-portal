@@ -17,6 +17,9 @@ export function makeFakeSession(
 		},
 		async abort() {},
 		async dispose() {},
+		async setMode() {},
+		async setApproveAll() {},
+		async resetSessionApprovals() {},
 		lastUsed: Date.now()
 	};
 }

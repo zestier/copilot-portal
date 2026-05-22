@@ -13,7 +13,8 @@ import type {
 	InteractiveResponse,
 	ElicitationSchema,
 	PortalEvent,
-	PermissionPolicy
+	PermissionPolicy,
+	SessionMode
 } from '$lib/types';
 import { AsyncQueue } from './async-queue';
 import {
@@ -97,6 +98,11 @@ export interface BridgeOpenOptions {
 	workingDirectory: string;
 	model: string;
 	policy: PermissionPolicy;
+	/** Initial session mode. Forwarded to the runtime after open. */
+	mode?: SessionMode;
+	/** When true, every tool-permission request is auto-approved for this
+	 * session. Mirrored to the SDK via `permissions.setApproveAll`. */
+	approveAllTools?: boolean;
 	authToken?: string;
 	onEvent?: (e: PortalEvent) => void;
 }
@@ -106,6 +112,15 @@ export interface ConversationSession {
 	send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent>;
 	abort(): Promise<void>;
 	dispose(): Promise<void>;
+	/** Switch the live session's mode. Persists nothing — the caller owns
+	 * the DB row. No-op if the SDK rejects (preview / capability gap). */
+	setMode(mode: SessionMode): Promise<void>;
+	/** Toggle the in-bridge auto-approve short-circuit AND mirror the
+	 * setting to the SDK so the model can adapt. */
+	setApproveAll(enabled: boolean): Promise<void>;
+	/** Clear every session-scoped grant the SDK has accumulated. Useful
+	 * after the user turns approve-all off and wants a clean slate. */
+	resetSessionApprovals(): Promise<void>;
 	lastUsed: number;
 }
 
@@ -115,6 +130,18 @@ interface SdkSession {
 	send(args: { prompt: string }): Promise<string>;
 	abort?(): Promise<void>;
 	disconnect(): Promise<void>;
+	/** Public typed RPC surface exposed by the SDK's CopilotSession. We
+	 * narrow it to just the methods we touch so a preview-version drift
+	 * surfaces as a compile error here rather than a runtime mystery. */
+	rpc?: {
+		mode?: {
+			set?: (params: { mode: SessionMode }) => Promise<void>;
+		};
+		permissions?: {
+			setApproveAll?: (params: { enabled: boolean }) => Promise<{ success: boolean }>;
+			resetSessionApprovals?: () => Promise<unknown>;
+		};
+	};
 }
 
 interface PermissionRequestLike {
@@ -206,6 +233,13 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		});
 	}
 
+	// Mutable session-level state. Mirrors the conversation row in the
+	// DB; the /session PATCH endpoint flips these via setMode/setApproveAll
+	// on the live ConversationSession so a turn already in flight picks up
+	// the change without a recreate.
+	let approveAllTools = opts.approveAllTools === true;
+	let currentMode: SessionMode = opts.mode ?? 'interactive';
+
 	const onPermissionRequest = async (req: PermissionRequestLike) => {
 		const tool = req.toolName ?? req.kind ?? 'unknown';
 		const permissionKind = req.kind ?? 'unknown';
@@ -225,6 +259,16 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 				});
 			}
 		};
+
+		// Per-session bypass: the user enabled "approve all tool calls"
+		// for this conversation. Short-circuit before anything else (grants,
+		// policy, dialog) so the audit log records a clean `auto-allow`
+		// row tagged to the live setting, even if the SDK's own
+		// `setApproveAll` call failed or isn't supported by this runtime.
+		if (approveAllTools) {
+			audit('auto-allow');
+			return { kind: 'approve-once' } as const;
+		}
 
 		// Parse once: shared between the structured matcher (per-grant
 		// predicate) and any future audit text that wants tokenized argv.
@@ -810,6 +854,23 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		if (d?.requestId) dismissInfoRequest(d.requestId);
 	};
 
+	const onModeChanged = (e: unknown) => {
+		// The runtime can flip mode out from under us (the agent itself
+		// can call `mode.set` — that's how `exit_plan_mode` lands). Sync
+		// our cache and broadcast so the UI's mode picker tracks.
+		const raw = (e as { data?: { newMode?: string } })?.data?.newMode;
+		const next: SessionMode | null =
+			raw === 'interactive' || raw === 'plan' || raw === 'autopilot' ? raw : null;
+		if (!next || next === currentMode) return;
+		currentMode = next;
+		activeQueue?.push({
+			type: 'session.settings',
+			conversationId: opts.conversationId,
+			mode: next,
+			source: 'agent'
+		});
+	};
+
 	sdkSession.on('assistant.message_delta', onDelta);
 	sdkSession.on('assistant.reasoning_delta', onReasoningDelta);
 	sdkSession.on('assistant.message', onAssistantMessage);
@@ -830,6 +891,43 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	sdkSession.on('mcp.oauth_completed', onMcpOauthCompleted);
 	sdkSession.on('external_tool.requested', onExternalToolRequested);
 	sdkSession.on('external_tool.completed', onExternalToolCompleted);
+	sdkSession.on('mode.changed', onModeChanged);
+
+	// Push initial mode + approve-all to the runtime. Best-effort: the
+	// `rpc` surface is preview API and may be missing on stub clients;
+	// skipping the call is fine because the bridge enforces approve-all
+	// itself in `onPermissionRequest`, and a missing mode RPC just means
+	// the agent runs in its default mode (still safe).
+	async function applyMode(mode: SessionMode): Promise<void> {
+		try {
+			await sdkSession.rpc?.mode?.set?.({ mode });
+			currentMode = mode;
+		} catch (e) {
+			log.warn('copilot.session.mode_set_failed', {
+				conversationId: opts.conversationId,
+				mode,
+				err: (e as Error).message
+			});
+		}
+	}
+	async function applyApproveAll(enabled: boolean): Promise<void> {
+		approveAllTools = enabled;
+		try {
+			await sdkSession.rpc?.permissions?.setApproveAll?.({ enabled });
+		} catch (e) {
+			log.warn('copilot.session.set_approve_all_failed', {
+				conversationId: opts.conversationId,
+				enabled,
+				err: (e as Error).message
+			});
+		}
+	}
+	// Fire-and-forget: callers don't need to await initialization. A turn
+	// posted before these resolve will still see the cached `approveAllTools`
+	// value (we set it synchronously above) and a worst-case slightly-late
+	// mode change which the agent will pick up on the next message.
+	if (currentMode !== 'interactive') void applyMode(currentMode);
+	if (approveAllTools) void applyApproveAll(true);
 
 	const session: ConversationSession = {
 		conversationId: opts.conversationId,
@@ -869,6 +967,22 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		},
 		async abort() {
 			if (sdkSession.abort) await sdkSession.abort();
+		},
+		async setMode(mode: SessionMode) {
+			await applyMode(mode);
+		},
+		async setApproveAll(enabled: boolean) {
+			await applyApproveAll(enabled);
+		},
+		async resetSessionApprovals() {
+			try {
+				await sdkSession.rpc?.permissions?.resetSessionApprovals?.();
+			} catch (e) {
+				log.warn('copilot.session.reset_session_approvals_failed', {
+					conversationId: opts.conversationId,
+					err: (e as Error).message
+				});
+			}
 		},
 		async dispose() {
 			try {

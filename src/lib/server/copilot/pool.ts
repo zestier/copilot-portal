@@ -46,6 +46,16 @@ export async function acquire(opts: BridgeOpenOptions): Promise<ConversationSess
 	return session;
 }
 
+/**
+ * Return the live session for a conversation iff one is currently cached.
+ * Used by the /session PATCH endpoint to push mode/approve-all changes to a
+ * running SDK session without spinning a fresh one (which would require
+ * an auth token, working directory, etc. the endpoint doesn't have at hand).
+ */
+export function getActive(conversationId: string): ConversationSession | null {
+	return sessions.get(conversationId)?.session ?? null;
+}
+
 export function touch(conversationId: string) {
 	const e = sessions.get(conversationId);
 	if (e) e.lastUsed = Date.now();

@@ -11,6 +11,19 @@
 	const s = $derived(data.settings);
 	const copilot = $derived(data.copilot);
 
+	function formatContextWindow(tokens: number | undefined): string {
+		if (!tokens || !Number.isFinite(tokens)) return 'context size unknown';
+		if (tokens >= 1_000_000) {
+			const m = tokens / 1_000_000;
+			const str = m >= 10 ? m.toFixed(0) : m.toFixed(1).replace(/\.0$/, '');
+			return `${str}M ctx`;
+		}
+		if (tokens >= 1_000) {
+			return `${Math.round(tokens / 1_000)}K ctx`;
+		}
+		return `${tokens} ctx`;
+	}
+
 	type RedeployEvent =
 		| { type: 'step'; label: string; cmd: string }
 		| { type: 'log'; stream: 'stdout' | 'stderr'; text: string }
@@ -488,7 +501,9 @@
 				<select name="defaultModel" value={s.defaultModel ?? ''}>
 					<option value="">(use server default)</option>
 					{#each copilot.models as m (m.id)}
-						<option value={m.id}>{m.name} — {m.id}</option>
+						<option value={m.id}
+							>{m.name} — {m.id} ({formatContextWindow(m.maxContextWindowTokens)})</option
+						>
 					{/each}
 				</select>
 			{:else}

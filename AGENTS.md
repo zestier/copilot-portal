@@ -2,6 +2,26 @@
 
 Notes for AI coding agents (Copilot CLI, Claude, etc.) working in this repo.
 
+## Common commands — prefer the package scripts
+
+Always reach for the `package.json` scripts instead of invoking the underlying
+binaries via `pnpm exec` / `npx`. The portal's permission gateway tends to
+auto-approve the well-known script names and prompt for raw `pnpm exec` calls,
+so this is both faster and less noisy for the user.
+
+| Want to…          | Use                             | Not                            |
+| ----------------- | ------------------------------- | ------------------------------ |
+| Format the repo   | `pnpm format`                   | `pnpm exec prettier --write .` |
+| Check formatting  | `pnpm lint`                     | `pnpm exec prettier --check .` |
+| Typecheck         | `pnpm check`                    | `pnpm exec svelte-check ...`   |
+| Run unit tests    | `pnpm test`                     | `pnpm exec vitest run`         |
+| Run a single test | `pnpm test <path>`              | `pnpm exec vitest run <path>`  |
+| E2E tests         | `pnpm test:e2e`                 | `pnpm exec playwright test`    |
+| Dev server        | `pnpm dev:isolated` (see below) | `pnpm dev`                     |
+
+If you genuinely need a flag the script doesn't pass through, it's fine to fall
+back to `pnpm exec` — but check `package.json` first; the script usually exists.
+
 ## Local testing — use an isolated data dir
 
 **Do not** run `pnpm dev` against the default `./data` when doing exploratory

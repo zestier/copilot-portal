@@ -78,6 +78,20 @@ class StubSession {
 		return reply;
 	}
 
+	// Stub equivalents of the SDK's typed RPC surface used by bridge.ts.
+	// No-ops: the stub doesn't model the runtime's permission/mode state
+	// machine, so all the bridge needs from us is "don't blow up".
+	rpc = {
+		mode: { set: async (_args: { mode: string }): Promise<void> => void _args },
+		permissions: {
+			setApproveAll: async (_args: { enabled: boolean }) => {
+				void _args;
+				return { success: true };
+			},
+			resetSessionApprovals: async (): Promise<void> => undefined
+		}
+	};
+
 	private async fireTriggers(prompt: string) {
 		// Run each trigger in sequence so the test sees deterministic order.
 		if (prompt.includes('@trigger-permission')) {

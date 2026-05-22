@@ -1,6 +1,6 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
-import type { Conversation } from '$lib/types';
+import type { Conversation, SessionMode } from '$lib/types';
 
 interface ConvRow {
 	id: string;
@@ -13,15 +13,21 @@ interface ConvRow {
 	archived_at: number | null;
 	forked_from_conversation_id: string | null;
 	forked_from_message_id: string | null;
+	mode: string | null;
+	approve_all_tools: number | null;
 }
 
 function rowToConv(r: ConvRow): Conversation {
+	const rawMode = r.mode ?? 'interactive';
+	const mode: SessionMode = rawMode === 'plan' || rawMode === 'autopilot' ? rawMode : 'interactive';
 	return {
 		id: r.id,
 		userId: r.user_id,
 		title: r.title,
 		workdir: r.workdir,
 		model: r.model,
+		mode,
+		approveAllTools: r.approve_all_tools === 1,
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
 		archivedAt: r.archived_at,
@@ -104,6 +110,8 @@ export function create(userId: string, input: CreateInput): Conversation {
 		title: input.title,
 		workdir: input.workdir,
 		model: input.model,
+		mode: 'interactive',
+		approveAllTools: false,
 		createdAt: now,
 		updatedAt: now,
 		archivedAt: null,
@@ -116,6 +124,38 @@ export function rename(id: string, userId: string, title: string): boolean {
 	const r = getDb()
 		.prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?')
 		.run(title, Date.now(), id, userId);
+	return r.changes > 0;
+}
+
+/**
+ * Update per-conversation session settings (mode and/or approve-all bypass).
+ * Returns true iff a row was modified. The bridge reads these on each
+ * `pool.acquire` so a recreated session inherits the latest values; the
+ * /session PATCH endpoint additionally pushes them to the live SDK session
+ * via `session.setMode` / `session.setApproveAll`.
+ */
+export function updateSessionSettings(
+	id: string,
+	userId: string,
+	patch: { mode?: SessionMode; approveAllTools?: boolean }
+): boolean {
+	const sets: string[] = [];
+	const args: Array<string | number> = [];
+	if (patch.mode !== undefined) {
+		sets.push('mode = ?');
+		args.push(patch.mode);
+	}
+	if (patch.approveAllTools !== undefined) {
+		sets.push('approve_all_tools = ?');
+		args.push(patch.approveAllTools ? 1 : 0);
+	}
+	if (sets.length === 0) return false;
+	sets.push('updated_at = ?');
+	args.push(Date.now());
+	args.push(id, userId);
+	const r = getDb()
+		.prepare(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`)
+		.run(...args);
 	return r.changes > 0;
 }
 

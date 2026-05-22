@@ -39,6 +39,8 @@
 
 	let messages = $state<Message[]>([]);
 	let title = $state<string>(untrack(() => conversation.title));
+	let sessionMode = $state<Conversation['mode']>(untrack(() => conversation.mode));
+	let approveAllTools = $state<boolean>(untrack(() => conversation.approveAllTools));
 	let usage = $state<ConversationUsage | null>(untrack(() => initialUsage));
 	let recentCompaction = $state<{ tokensRemoved?: number; messagesRemoved?: number } | null>(null);
 	let compactionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -79,6 +81,8 @@
 			closeStream();
 			messages = [...initialMessages];
 			title = conversation.title;
+			sessionMode = conversation.mode;
+			approveAllTools = conversation.approveAllTools;
 			usage = initialUsage;
 			recentCompaction = null;
 			pinnedToBottom = true;
@@ -416,6 +420,15 @@
 				}
 				break;
 			}
+			case 'session.settings': {
+				// Server-driven settings change (typically the agent flipping
+				// itself out of plan mode via exit-plan-mode). Mirror it into
+				// our local state so the header reflects reality without a
+				// page refresh.
+				if (ev.mode !== undefined) sessionMode = ev.mode;
+				if (ev.approveAllTools !== undefined) approveAllTools = ev.approveAllTools;
+				break;
+			}
 			case 'context.usage': {
 				usage = {
 					conversationId: conversation.id,
@@ -555,7 +568,19 @@
 </script>
 
 <div class="chat">
-	<ChatHeader {title} {conversation} {parent} {usage} {recentCompaction} />
+	<ChatHeader
+		{title}
+		{conversation}
+		{parent}
+		{usage}
+		{recentCompaction}
+		mode={sessionMode}
+		{approveAllTools}
+		onSettingsChange={(patch) => {
+			if (patch.mode !== undefined) sessionMode = patch.mode;
+			if (patch.approveAllTools !== undefined) approveAllTools = patch.approveAllTools;
+		}}
+	/>
 
 	<div class="messages-wrap">
 		<div class="messages" bind:this={scrollEl} onscroll={onMessagesScroll}>

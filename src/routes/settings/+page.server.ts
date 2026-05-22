@@ -22,7 +22,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	let copilot: {
 		auth: { isAuthenticated: boolean; authType?: string; login?: string; statusMessage?: string };
-		models: { id: string; name: string }[];
+		models: { id: string; name: string; maxContextWindowTokens?: number }[];
 		error?: string;
 	};
 	try {
@@ -34,7 +34,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 				login: auth.login,
 				statusMessage: auth.statusMessage
 			},
-			models: models.map((m) => ({ id: m.id, name: m.name }))
+			models: models.map((m) => ({
+				id: m.id,
+				name: m.name,
+				maxContextWindowTokens: m.capabilities?.limits?.max_context_window_tokens
+			}))
 		};
 	} catch (e) {
 		log.warn('settings.copilot_status_failed', { err: String(e) });

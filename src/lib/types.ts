@@ -18,6 +18,25 @@ export interface Conversation {
 	title: string;
 	workdir: string;
 	model: string | null;
+	/**
+	 * Agent mode for this conversation. Mirrors the SDK's `SessionMode`:
+	 *   - `interactive` (default): regular chat; the agent prompts for
+	 *     permission and can call tools freely.
+	 *   - `plan`: the agent plans without executing destructive tools and
+	 *     surfaces an `exit_plan_mode` request before switching to execute.
+	 *   - `autopilot`: less-supervised mode hint — the agent is expected to
+	 *     work for long stretches with minimal user interaction.
+	 *
+	 * The mode is forwarded to the runtime each time the session is opened.
+	 */
+	mode: SessionMode;
+	/**
+	 * Per-conversation bypass: when true, every tool-permission request is
+	 * auto-approved (an `auto-allow` audit row is still written). The flag
+	 * is also mirrored to the SDK via `permissions.setApproveAll` so the
+	 * model knows it's running in a less-supervised context.
+	 */
+	approveAllTools: boolean;
 	createdAt: number;
 	updatedAt: number;
 	archivedAt: number | null;
@@ -26,6 +45,11 @@ export interface Conversation {
 	/** The message in the source conversation whose edit produced this fork. */
 	forkedFromMessageId: string | null;
 }
+
+// Mirrors the SDK's `SessionMode` (interactive / plan / autopilot). Stored
+// on the conversation row and forwarded to the runtime via
+// `session.rpc.mode.set` on every open.
+export type SessionMode = 'interactive' | 'plan' | 'autopilot';
 
 export interface Message {
 	id: string;
@@ -396,6 +420,15 @@ export type PortalEvent =
 	  }
 	| { type: 'file.edit'; path: string; diff: string; parentToolCallId?: string }
 	| { type: 'conversation.update'; conversationId: string; title?: string }
+	| {
+			type: 'session.settings';
+			conversationId: string;
+			mode?: SessionMode;
+			approveAllTools?: boolean;
+			// Free-form source label so the UI can show "Agent switched to
+			// plan mode" vs "You enabled autopilot" in a future iteration.
+			source?: 'user' | 'agent' | 'system';
+	  }
 	| { type: 'reasoning.summary'; text: string }
 	| {
 			type: 'context.usage';
