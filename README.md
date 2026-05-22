@@ -112,6 +112,16 @@ If you need real isolation, run separate portal instances with separate
 `PROJECT_ROOT`s (and ideally separate `DATA_DIR`s) — e.g. one per repo
 you want to work on concurrently.
 
+## Trust model
+
+The portal is designed for a trusted self-hosted operator, not for mutually
+distrusting tenants. Anyone allowed to use it should be someone you would trust
+with a terminal in the configured `PROJECT_ROOT`: agents can request shell
+commands, edit files, mutate git state, and perform external side effects. Use
+loopback binding or an authenticating proxy/tunnel as the real access boundary;
+inside the portal, permission prompts are confirmation and audit UX, not a
+host-sandbox guarantee. See [docs/auth-and-security.md](docs/auth-and-security.md).
+
 ## Document index
 
 1. [docs/architecture.md](docs/architecture.md) — Components and data flow.
