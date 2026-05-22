@@ -1,11 +1,27 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
 	import Chat from '$lib/components/Chat.svelte';
 	import FileBrowser from '$lib/components/FileBrowser.svelte';
 	import type { PageData } from './$types';
 	let { data }: { data: PageData } = $props();
 
 	type Tab = 'chat' | 'changes' | 'files' | 'commits';
-	let tab = $state<Tab>('chat');
+	const tabs: Tab[] = ['chat', 'changes', 'files', 'commits'];
+
+	function readTab(value: string | null): Tab {
+		return value && tabs.includes(value as Tab) ? (value as Tab) : 'chat';
+	}
+
+	const tab = $derived(readTab($page.url.searchParams.get('tab')));
+
+	async function selectTab(nextTab: Tab) {
+		if (nextTab === tab) return;
+		const nextUrl = new URL($page.url);
+		if (nextTab === 'chat') nextUrl.searchParams.delete('tab');
+		else nextUrl.searchParams.set('tab', nextTab);
+		await goto(nextUrl, { keepFocus: true, noScroll: true, replaceState: true });
+	}
 </script>
 
 <svelte:head>
@@ -18,7 +34,7 @@
 			role="tab"
 			aria-selected={tab === 'chat'}
 			class:active={tab === 'chat'}
-			onclick={() => (tab = 'chat')}
+			onclick={() => selectTab('chat')}
 		>
 			Chat
 		</button>
@@ -26,7 +42,7 @@
 			role="tab"
 			aria-selected={tab === 'changes'}
 			class:active={tab === 'changes'}
-			onclick={() => (tab = 'changes')}
+			onclick={() => selectTab('changes')}
 		>
 			Changes
 		</button>
@@ -34,7 +50,7 @@
 			role="tab"
 			aria-selected={tab === 'files'}
 			class:active={tab === 'files'}
-			onclick={() => (tab = 'files')}
+			onclick={() => selectTab('files')}
 		>
 			Files
 		</button>
@@ -42,7 +58,7 @@
 			role="tab"
 			aria-selected={tab === 'commits'}
 			class:active={tab === 'commits'}
-			onclick={() => (tab = 'commits')}
+			onclick={() => selectTab('commits')}
 		>
 			Commits
 		</button>

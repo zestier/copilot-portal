@@ -22,6 +22,7 @@ test('settings page loads with no client-side errors', async ({ page }) => {
 	);
 
 	await page.getByRole('tab', { name: /Permissions/ }).click();
+	await expect(page).toHaveURL('/settings?tab=permissions');
 	await expect(page.getByRole('heading', { name: 'Saved permission grants' })).toBeVisible();
 	await expect(page.getByRole('tabpanel', { name: /Permissions/ })).toBeVisible();
 
@@ -70,6 +71,24 @@ test('settings tabs isolate activity from general settings', async ({ page }) =>
 	await expect(page.getByRole('heading', { name: 'Recent permission decisions' })).toBeHidden();
 
 	await page.getByRole('tab', { name: 'Activity' }).click();
+	await expect(page).toHaveURL('/settings?tab=activity');
 	await expect(page.getByRole('heading', { name: 'Recent permission decisions' })).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'General', exact: true })).toBeHidden();
+});
+
+test('settings tab selection survives reload and deep links', async ({ page }) => {
+	await page.goto('/settings?tab=permissions');
+	await expect(page.getByRole('tab', { name: /Permissions/ })).toHaveAttribute(
+		'aria-selected',
+		'true'
+	);
+	await expect(page.getByRole('heading', { name: 'Saved permission grants' })).toBeVisible();
+
+	await page.reload();
+	await expect(page).toHaveURL('/settings?tab=permissions');
+	await expect(page.getByRole('tab', { name: /Permissions/ })).toHaveAttribute(
+		'aria-selected',
+		'true'
+	);
+	await expect(page.getByRole('heading', { name: 'Saved permission grants' })).toBeVisible();
 });
