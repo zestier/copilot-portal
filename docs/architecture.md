@@ -18,9 +18,8 @@ A server-side module (`$lib/server/copilot/`) that wraps
 [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk).
 Responsible for:
 
-- Spawning and managing a single `CopilotClient` subprocess (shared
-  across conversations), and opening a per-conversation **session** on
-  top of it.
+- Spawning and managing one `CopilotClient` subprocess per portal user,
+  and opening a per-conversation **session** on top of it.
 - Translating SDK events (token deltas, tool calls, permission prompts,
   file edits, context-window usage) into a normalized event stream the
   frontend understands.
@@ -45,6 +44,12 @@ default to `PROJECT_ROOT`, but can override it; the Copilot SDK, turn
 snapshots, and the file/git routes all resolve from that conversation row.
 Legacy `DATA_DIR/workspaces/<id>/` paths still fold back to `PROJECT_ROOT`
 via `src/lib/server/workdir.ts`.
+
+The `workdir` is a real directory, not a sandbox clone. Conversations that
+point at the same path share one filesystem, git repository, package cache,
+database files, and long-lived side effects. The portal records per-message
+snapshots for inspection, but it does not isolate or transactionally roll back
+the working tree per conversation.
 
 ### 5. Cloudflare Tunnel (optional, deployment-time)
 
@@ -114,6 +119,11 @@ discriminated `{ kind, ... }` body. The legacy
 - **One SDK session per conversation**, kept alive until idle for N
   minutes (configurable, default 15) or explicitly closed. Held in a
   small in-memory `Map<conversationId, Session>` (`copilot/pool.ts`).
+- **Concurrency is scoped by conversation id, not workdir.** The turns API
+  rejects a second running turn for the same conversation, but two different
+  conversations that reference the same `workdir` can run at the same time and
+  interleave filesystem/git side effects. Treat same-workdir conversations like
+  separate chat transcripts sharing one keyboard.
 - Idle reaper runs every minute. On shutdown, all sessions are closed
   and the shared client is stopped cleanly.
 - New messages to an idle/closed conversation transparently respawn the

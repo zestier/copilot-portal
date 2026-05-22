@@ -117,6 +117,10 @@ first after process boot.
   the conversation-scoped file/git routes both resolve from that same
   row. Legacy stored paths under `DATA_DIR/workspaces/<id>/` still fold
   back to `PROJECT_ROOT` via `src/lib/server/workdir.ts`.
+- The workdir is not a per-conversation sandbox. Any conversations that point
+  at the same path share the same files, git state, running services, caches,
+  and external side effects; permission prompts and snapshots do not make that
+  state transactional.
 - No allowlist is enforced. The portal is a single-trusted-user app;
   if you can log in, you can already make the agent run shell
   commands, so policing the chosen directory adds no real defence.

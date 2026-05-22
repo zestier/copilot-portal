@@ -91,10 +91,10 @@ volumes:
 
 The portal and your devcontainer both bind-mount the same host
 directory, at the same absolute path inside each container. The portal
-does not need to talk to the devcontainer; both processes operate
-independently on the shared tree, and the portal's per-message git
-snapshots capture every change the agent makes regardless of which
-process touched the files.
+does not need to talk to the devcontainer; both processes operate on the same
+shared tree. Portal snapshots are point-in-time git refs captured around turns,
+not a concurrency control mechanism, so avoid running portal turns and manual
+devcontainer edits that touch the same files at the same time.
 
 ```
 host:

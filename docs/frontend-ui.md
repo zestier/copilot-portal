@@ -76,13 +76,15 @@ clicking the path copies it to clipboard.
 
 ### `FileBrowser.svelte`
 
-Read-only, git-aware file browser rooted at the **server process's working
-directory** (resolved to its realpath at startup). The conversation id in
-the API URL is used only for ownership/auth; every conversation in a given
-deployment browses the same workspace root. Surfaced as three top-level
-tabs on `/conversations/[id]` — **Changes**, **Files**, **Commits** —
-sitting alongside **Chat**. The component is driven by a `pane` prop (one
-of those three values) and shares a two-pane layout: a left rail whose
+Read-only, git-aware file browser rooted at the selected conversation's
+persisted `workdir` (resolved to its realpath on the server). New conversations
+default to `PROJECT_ROOT`, so most conversations in a deployment browse the
+same live tree unless the user explicitly chooses different workdirs. The
+conversation id in the API URL is used for ownership/auth and to pick that
+workdir; it does not create a private filesystem. Surfaced as three top-level
+tabs on `/conversations/[id]` — **Changes**, **Files**, **Commits** — sitting
+alongside **Chat**. The component is driven by a `pane` prop (one of those
+three values) and shares a two-pane layout: a left rail whose
 contents depend on the active tab (changed-file list, hierarchical file
 tree with per-entry git status badges and roll-ups plus hidden/ignored
 toggles, or recent commit log with branch / ahead-behind header and "Load

@@ -117,8 +117,9 @@ CREATE TABLE schema_migrations (
 
 ## Turn snapshots (edit-and-rerun)
 
-Added in migration `005_turn_snapshots.sql`. Backs the "edit an earlier
-message and rewind the workdir" feature.
+Added in migration `005_turn_snapshots.sql`. Backs edit/retry forks by storing
+manual restore points for the workdir. It does **not** make conversations
+transactional or automatically rewind files.
 
 ```sql
 CREATE TABLE turn_snapshots (
@@ -158,8 +159,8 @@ When a user edits a previous message, the portal:
    the assistant target and appends nothing).
 4. Starts a brand-new SDK session under the new conversation id. No
    prior conversation events are seeded into the SDK in v1 — the agent
-   starts fresh from the edited turn. The cloned message rows exist for
-   UI continuity only.
+   starts fresh from the next prompt, using the live shared workdir. The
+   cloned message rows exist for UI continuity only.
 
 Limitations (v1):
 
@@ -169,6 +170,8 @@ Limitations (v1):
   other in-flight work. The snapshot ref is left in the repo so the
   user can `git diff`/`git restore` against it manually if they want
   to reproduce the prior state.
+- A conversation boundary is a transcript/session boundary only. It is not a
+  filesystem, git, process, network, or database isolation boundary.
 - Side effects outside the workdir (DB writes, network calls) are not
   rolled back. Snapshots track files only.
 - Submodule/LFS state is out of scope.

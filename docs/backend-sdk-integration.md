@@ -237,7 +237,8 @@ does it snapshot the workdir. Both layers are owned by the portal:
 
 - **Workdir snapshots**: see `docs/persistence.md` — every user turn gets
   a `pre` snapshot, every assistant turn a `post` snapshot, stored as git
-  commits under `refs/portal/turns/*` in the conversation's own workdir.
+  commits under `refs/portal/turns/*` in the conversation's workdir. These are
+  restore/diff references, not automatic rollbacks or isolation boundaries.
 - **Conversation forking**: editing a user message — or retrying from
   an assistant message — creates a new conversation
   (`src/lib/server/fork.ts`). We spin up a brand-new SDK session keyed
@@ -254,10 +255,11 @@ covers both:
 | `{content}`   | `user`      | `pre`         | strictly before target | yes (edited content)  |
 | `{}`          | `assistant` | `post`        | up to and incl. target | no                    |
 
-"Edit-and-rerun" reproduces the file state from when the original user
-message was first sent and lets the user reword it. "Retry-from-here"
-reproduces the file state immediately after an assistant turn finished
-and lets the user pick the conversation up with a different follow-up.
+"Edit-and-rerun" creates a new transcript from the selected point and lets the
+user reword it. "Retry-from-here" creates a new transcript after the selected
+assistant turn and lets the user pick up with a different follow-up. Neither
+mode rewinds the live files automatically; the snapshot named in the table is a
+manual restore/diff reference.
 
 ### Discovering forks
 
@@ -269,9 +271,10 @@ on load.
 
 ### SDK history seeding
 
-In v1 the forked SDK session starts with **no seeded history**. Prior
-messages are cloned into SQLite for UI continuity, but the agent itself
-has no memory of them — it picks up cold from the edited message.
+In v1 the forked SDK session starts with **no seeded history**. Prior messages
+are cloned into SQLite for UI continuity, but the agent itself has no memory of
+them — it picks up cold from the next user prompt, against the current live
+workdir unless the user manually restores a snapshot first.
 
 This is a deliberate trade-off:
 
@@ -279,9 +282,9 @@ This is a deliberate trade-off:
   generated and not part of the SDK's public surface.
 - It avoids inflating the first prompt with a synthesized preamble that
   would burn context tokens on every fork.
-- It matches the user's intent for the common case ("rewind the code and
-  let me re-ask"): the file state is what mattered, and the user is
-  about to re-establish whatever context they need anyway.
+- It avoids implying a transactional rewind. The fork preserves a transcript
+  branch and exposes snapshot refs so the user can inspect or manually restore
+  file state when that matters.
 
 If/when the SDK exposes a supported way to seed conversation history,
 the fork service can opt into it without changing the table schema.
