@@ -54,6 +54,7 @@
 			initialUsage={data.contextUsage}
 			parent={data.parent}
 			initialActiveTurnId={data.activeTurnId}
+			initialPendingInteractive={data.pendingInteractive}
 		/>
 	</div>
 	{#if tab !== 'chat'}

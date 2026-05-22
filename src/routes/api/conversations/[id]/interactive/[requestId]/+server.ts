@@ -10,15 +10,68 @@ import type { InteractiveResponse } from '$lib/types';
 // route to the right shape; the server-side registry then verifies the kind
 // matches the pending request before applying any side effects.
 
+// Structured FsScope wire shape mirrors `FsScope` in
+// $lib/permissions/scope-types. Keep narrow: the dialog only emits
+// `exact` and `prefix` (workspace / workspace-glob come from seeds, not
+// dialog responses). Defense-in-depth: re-validate at the server-side
+// codec layer too.
+const FsRuleSchema = z.discriminatedUnion('kind', [
+	z.object({ kind: z.literal('exact'), path: z.string().min(1).max(4096) }),
+	z.object({ kind: z.literal('prefix'), path: z.string().min(1).max(4096) })
+]);
+
+// Structured ShellScope wire shape mirrors `ShellScope` in
+// $lib/permissions/scope-types. The shell picker only emits the
+// argv0-anchored shapes (with optional subcommands and a coarse
+// positionals rule); free-form flag allow/deny lists come from
+// Settings / seeds, not dialog responses. The shape is re-validated by
+// the codec on the way to the DB.
+const ShellRuleSchema = z.object({
+	argv0: z
+		.string()
+		.min(1)
+		.max(128)
+		.refine((s) => !s.includes('/') && !s.startsWith('.'), {
+			message: 'argv0 must be a bare command name'
+		}),
+	subcommands: z.array(z.string().min(1).max(128)).max(32).optional(),
+	positionals: z
+		.object({
+			kind: z.enum(['none', 'any', 'workspace-paths'])
+		})
+		.optional()
+});
+
+const StructuredScopeSchema = z.discriminatedUnion('kind', [
+	z.object({
+		kind: z.literal('fs'),
+		perms: z
+			.array(z.enum(['read', 'write', 'edit']))
+			.max(3)
+			.optional(),
+		rule: FsRuleSchema
+	}),
+	z.object({
+		kind: z.literal('shell'),
+		rule: ShellRuleSchema
+	})
+]);
+
 const PermissionScope = z.object({
 	permissionKind: z.string().min(1).max(64).nullable().optional(),
-	pattern: z.string().max(1024).nullable().optional()
+	pattern: z.string().max(1024).nullable().optional(),
+	scope: StructuredScopeSchema.optional()
 });
 
 const PermissionBody = z.object({
 	kind: z.literal('permission'),
 	decision: z.enum(['allow-once', 'allow-always', 'deny', 'deny-always']),
 	scope: PermissionScope.optional(),
+	// Multi-grant payload. The shell picker may persist several
+	// per-argv0 grants from one click; we cap the array to keep abuse
+	// surface tiny. Each entry is validated as a full PermissionScope.
+	additionalScopes: z.array(PermissionScope).max(16).optional(),
+	applyToAllConversations: z.boolean().optional(),
 	// Cap at 30 days to keep "time-limited" meaningful.
 	expiresInMs: z
 		.number()

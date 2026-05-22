@@ -24,6 +24,7 @@ import {
 } from './interactive-requests';
 import * as settingsRepo from '../db/repos/settings';
 import { deriveScopeKey } from '../permissions/matcher';
+import { parseShellCommand, type ParsedSegment } from '../permissions/shell-parser';
 import { ulid } from 'ulid';
 import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
@@ -117,6 +118,14 @@ interface PermissionRequestLike {
 	toolName?: string;
 	fileName?: string;
 	fullCommandText?: string;
+	// Newer SDK shapes use kind-specific fields instead of fileName/args:
+	//   - read:  { path, intention }
+	//   - url:   { url, intention }
+	// We accept them here so deriveScopeKey / summary / workspace
+	// auto-approval all work without forcing a translation layer.
+	path?: string;
+	url?: string;
+	intention?: string;
 	args?: unknown;
 }
 
@@ -196,8 +205,51 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	const onPermissionRequest = async (req: PermissionRequestLike) => {
 		const tool = req.toolName ?? req.kind ?? 'unknown';
 		const permissionKind = req.kind ?? 'unknown';
-		const summary = req.fullCommandText ?? req.fileName ?? tool;
+		const summary = req.fullCommandText ?? req.fileName ?? req.path ?? req.url ?? tool;
 		const scopeKey = deriveScopeKey(permissionKind, req);
+
+		// Parse once: shared between the structured matcher (per-grant
+		// predicate) and any future audit text that wants tokenized argv.
+		// `parseShellCommand` refuses anything it can't model safely; when
+		// it rejects, structured shell grants can't match and we fall
+		// through to legacy patterns / policy / interactive prompt.
+		let shellSegments: ParsedSegment[] | null = null;
+		let shellAnalysis: import('$lib/types').ShellAnalysisView | undefined = undefined;
+		if (permissionKind === 'shell' && typeof scopeKey === 'string') {
+			const parsed = parseShellCommand(scopeKey);
+			if (parsed.kind === 'parsed') {
+				shellSegments = parsed.segments;
+				shellAnalysis = {
+					kind: 'parsed',
+					segments: parsed.segments.map((s) => ({
+						argv: s.argv,
+						followingOp: s.followingOp
+					}))
+				};
+			} else {
+				shellAnalysis = { kind: 'unsafe', reason: parsed.reason };
+			}
+		}
+
+		const target =
+			permissionKind === 'read' || permissionKind === 'write' || permissionKind === 'edit'
+				? scopeKey
+				: null;
+		const url = permissionKind === 'url' ? scopeKey : null;
+
+		// Helper to keep the audit panel honest: every silent decision is
+		// recorded as `auto-allow` / `auto-deny` so the user can see what
+		// the policy + stored grants are doing on their behalf.
+		const audit = (decision: 'auto-allow' | 'auto-deny') => {
+			try {
+				settingsRepo.recordDecision(opts.conversationId, tool, summary, decision);
+			} catch (e) {
+				log.warn('copilot.permission_audit_failed', {
+					conversationId: opts.conversationId,
+					err: String(e)
+				});
+			}
+		};
 
 		// Grants override policy (the user explicitly trusted/blocked this).
 		// `deny` grants beat `allow` grants; the matcher enforces precedence.
@@ -206,14 +258,35 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			opts.conversationId,
 			tool,
 			permissionKind,
-			scopeKey
+			scopeKey,
+			{
+				shellSegments,
+				target,
+				url,
+				workspaceRoot: opts.workingDirectory ?? null
+			}
 		);
-		if (grant === 'allow') return { kind: 'approve-once' } as const;
-		if (grant === 'deny') return { kind: 'reject' } as const;
+		if (grant === 'allow') {
+			audit('auto-allow');
+			return { kind: 'approve-once' } as const;
+		}
+		if (grant === 'deny') {
+			audit('auto-deny');
+			return { kind: 'reject' } as const;
+		}
 
-		const decision = decideByPolicy(opts.policy, 'permission', permissionKind);
-		if (decision === 'approved') return { kind: 'approve-once' } as const;
-		if (decision === 'denied') return { kind: 'reject' } as const;
+		const decision = decideByPolicy(opts.policy, 'permission', permissionKind, {
+			scopeKey,
+			workspaceRoot: opts.workingDirectory
+		});
+		if (decision === 'approved') {
+			audit('auto-allow');
+			return { kind: 'approve-once' } as const;
+		}
+		if (decision === 'denied') {
+			audit('auto-deny');
+			return { kind: 'reject' } as const;
+		}
 
 		const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
 			'permission',
@@ -222,7 +295,9 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 				tool,
 				permissionKind,
 				summary,
-				args: req.args ?? null
+				args: req.args ?? null,
+				userPolicy: opts.policy,
+				shellAnalysis
 			}
 		);
 		if (response.decision === 'deny' || response.decision === 'deny-always')

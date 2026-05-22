@@ -84,7 +84,10 @@ class StubSession {
 			await this.handlers.onPermissionRequest?.({
 				kind: 'shell',
 				toolName: 'shell',
-				fullCommandText: 'echo hello'
+				// Pick a command that the default seed grants don't cover so
+				// the dialog always renders. `npm` is not on the seed list,
+				// so this exercises the real interactive path.
+				fullCommandText: 'npm install left-pad'
 			});
 		}
 		if (prompt.includes('@trigger-user-input')) {

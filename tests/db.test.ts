@@ -88,10 +88,17 @@ describe('db migrations + repos', () => {
 		});
 		settings.addGrant({ userId: other.id, conversationId: null, tool: 'shell' });
 
-		// Each user only sees their own grants.
-		const mine = settings.listGrantsForUser(u.id);
+		// Each user only sees their own grants. Filter out the structured
+		// seed grants that ensureLocalUser / upsertGithub install — this
+		// test exercises the legacy `addGrant` path, not the seeded set.
+		const mine = settings.listGrantsForUser(u.id).filter((g) => g.scope === null);
 		expect(mine.map((g) => g.tool).sort()).toEqual(['read', 'shell']);
-		expect(settings.listGrantsForUser(other.id).map((g) => g.tool)).toEqual(['shell']);
+		expect(
+			settings
+				.listGrantsForUser(other.id)
+				.filter((g) => g.scope === null)
+				.map((g) => g.tool)
+		).toEqual(['shell']);
 
 		// Conversation title comes through the join for conversation-scoped rows.
 		const shellGrant = mine.find((g) => g.tool === 'shell')!;
@@ -101,15 +108,76 @@ describe('db migrations + repos', () => {
 		// Pruning drops the expired global 'read' grant, nothing else.
 		const purged = settings.pruneExpiredGrants();
 		expect(purged).toBe(1);
-		expect(settings.listGrantsForUser(u.id).map((g) => g.tool)).toEqual(['shell']);
+		expect(
+			settings
+				.listGrantsForUser(u.id)
+				.filter((g) => g.scope === null)
+				.map((g) => g.tool)
+		).toEqual(['shell']);
 
 		// Revoke is scoped to the owner — another user can't delete my row.
-		const target = settings.listGrantsForUser(u.id)[0];
+		const target = settings.listGrantsForUser(u.id).filter((g) => g.scope === null)[0];
 		expect(settings.revokeGrant(other.id, target.id)).toBe(false);
 		expect(settings.revokeGrant(u.id, target.id)).toBe(true);
-		expect(settings.listGrantsForUser(u.id)).toEqual([]);
+		expect(settings.listGrantsForUser(u.id).filter((g) => g.scope === null)).toEqual([]);
 		// Idempotent.
 		expect(settings.revokeGrant(u.id, target.id)).toBe(false);
+	});
+
+	it('updateGrant edits matchable fields in place, scoped to owner', () => {
+		const u = users.ensureLocalUser();
+		const other = users.upsertGithub({
+			githubLogin: 'rival2',
+			githubId: 11,
+			displayName: null,
+			avatarUrl: null
+		});
+		settings.addGrant({
+			userId: u.id,
+			conversationId: null,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scope: { kind: 'shell', rule: { argv0: 'ls' } },
+			decision: 'allow'
+		});
+		const grant = settings.listGrantsForUser(u.id).find((g) => g.tool === 'shell')!;
+		const grantedAt = grant.grantedAt;
+
+		// Foreign users can't edit my row.
+		expect(
+			settings.updateGrant(other.id, grant.id, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scope: { kind: 'shell', rule: { argv0: 'cat' } },
+				decision: 'deny'
+			})
+		).toBe(false);
+
+		// Owner can. granted_at is preserved, matchable fields change.
+		expect(
+			settings.updateGrant(u.id, grant.id, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scope: { kind: 'shell', rule: { argv0: 'cat' } },
+				decision: 'deny',
+				expiresAt: Date.now() + 60_000
+			})
+		).toBe(true);
+		const after = settings.listGrantsForUser(u.id).find((g) => g.id === grant.id)!;
+		expect(after.decision).toBe('deny');
+		expect(after.scope).toEqual({ kind: 'shell', rule: { argv0: 'cat' } });
+		expect(after.expiresAt).not.toBeNull();
+		expect(after.grantedAt).toBe(grantedAt);
+
+		// Missing rowid returns false rather than throwing.
+		expect(
+			settings.updateGrant(u.id, 999_999, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scope: { kind: 'shell', rule: { argv0: 'x' } },
+				decision: 'allow'
+			})
+		).toBe(false);
 	});
 
 	it('archives and unarchives conversations and filters list accordingly', () => {

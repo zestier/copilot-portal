@@ -34,7 +34,16 @@ import type {
 	PortalEvent
 } from '$lib/types';
 
-const DEFAULT_TIMEOUT_MS = 10 * 60_000;
+// Default = no timeout. We used to default to 10 minutes "so a forgotten
+// dialog doesn't pin the session forever", but in headless mode (where
+// the portal IS the only UI for the agent) a missed window manifested as
+// an indistinguishable "user denied", which was worse than the resource
+// leak. Turn abort (`cancelConversation`) still cancels every pending
+// prompt for the conversation, so the only thing left holding a request
+// is a literal "user hasn't clicked yet" — which is fine to wait on.
+//
+// Callers can still pass an explicit `timeoutMs` if they want one.
+const DEFAULT_TIMEOUT_MS = 0;
 
 export interface PendingInteractive {
 	requestId: string;
@@ -107,6 +116,20 @@ export function get(requestId: string): PendingInteractive | undefined {
 }
 
 /**
+ * Snapshot every prompt still outstanding for a conversation. Used by
+ * the conversation GET endpoint so a page load (or a stream-reconnect
+ * after a blip) can rehydrate `pendingInteractive` without waiting for
+ * the original `interactive.request` event to be re-emitted.
+ */
+export function listForConversation(conversationId: string): InteractiveRequestView[] {
+	const out: InteractiveRequestView[] = [];
+	for (const p of pending.values()) {
+		if (p.conversationId === conversationId) out.push(p.view);
+	}
+	return out;
+}
+
+/**
  * Resolve a pending request with the given response. Returns true if the
  * request existed and was resolved. The response shape must match the
  * registered kind; mismatched responses are rejected with `kind_mismatch`.
@@ -137,6 +160,19 @@ export function resolve(requestId: string, userId: string, response: Interactive
 			const isAlways = response.decision === 'allow-always' || response.decision === 'deny-always';
 			if (isAlways) {
 				const grantDecision = response.decision === 'allow-always' ? 'allow' : 'deny';
+				const targetConversationId = response.applyToAllConversations ? null : p.conversationId;
+				const expiresAt =
+					typeof response.expiresInMs === 'number' ? Date.now() + response.expiresInMs : null;
+
+				// Build the list of grants to persist: the primary `scope`
+				// plus any `additionalScopes` (shell picker emits several
+				// when the user checks per-argv0 boxes for a pipeline).
+				// `undefined` entries fall back to `{}` (the legacy
+				// "any kind / any pattern" grant) so the existing
+				// single-scope code path is preserved exactly.
+				const scopes: Array<typeof response.scope> = [response.scope];
+				if (response.additionalScopes) scopes.push(...response.additionalScopes);
+
 				// Defense in depth: if the user's current policy is deny-all,
 				// don't persist a positive grant that would silently override
 				// it on the next call. Deny grants are always safe to record.
@@ -150,28 +186,32 @@ export function resolve(requestId: string, userId: string, response: Interactive
 							tool: p.view.tool
 						});
 					} else {
-						settingsRepo.addGrant({
-							userId,
-							conversationId: p.conversationId,
-							tool: p.view.tool,
-							permissionKind: response.scope?.permissionKind ?? null,
-							scopePattern: response.scope?.pattern ?? null,
-							decision: 'allow',
-							expiresAt:
-								typeof response.expiresInMs === 'number' ? Date.now() + response.expiresInMs : null
-						});
+						for (const scope of scopes) {
+							settingsRepo.addGrant({
+								userId,
+								conversationId: targetConversationId,
+								tool: p.view.tool,
+								permissionKind: scope?.permissionKind ?? null,
+								scopePattern: scope?.pattern ?? null,
+								scope: scope?.scope ?? null,
+								decision: 'allow',
+								expiresAt
+							});
+						}
 					}
 				} else {
-					settingsRepo.addGrant({
-						userId,
-						conversationId: p.conversationId,
-						tool: p.view.tool,
-						permissionKind: response.scope?.permissionKind ?? null,
-						scopePattern: response.scope?.pattern ?? null,
-						decision: 'deny',
-						expiresAt:
-							typeof response.expiresInMs === 'number' ? Date.now() + response.expiresInMs : null
-					});
+					for (const scope of scopes) {
+						settingsRepo.addGrant({
+							userId,
+							conversationId: targetConversationId,
+							tool: p.view.tool,
+							permissionKind: scope?.permissionKind ?? null,
+							scopePattern: scope?.pattern ?? null,
+							scope: scope?.scope ?? null,
+							decision: 'deny',
+							expiresAt
+						});
+					}
 				}
 			}
 		} catch (e) {
@@ -200,6 +240,13 @@ export function resolve(requestId: string, userId: string, response: Interactive
 /**
  * Cancel a pending request, defaulting to a "deny / decline" response
  * appropriate for the kind. Used when the turn is aborted or times out.
+ *
+ * The `interactive.resolved` event carries `cancelled: true` + the
+ * provided `reason` so the UI / audit log can distinguish a cancel
+ * (timeout, turn-abort, browser disconnect) from a user-driven deny. For
+ * permission requests we also write an `auto-deny` audit row so it shows
+ * up on the settings page; the SDK still sees `{ kind: 'reject' }` either
+ * way, but downstream debugging is much cleaner.
  */
 export function cancel(requestId: string, reason: string = 'cancelled') {
 	const p = pending.get(requestId);
@@ -213,10 +260,24 @@ export function cancel(requestId: string, reason: string = 'cancelled') {
 			type: 'interactive.resolved',
 			requestId: p.requestId,
 			kind: p.kind,
-			outcome: fallback
+			outcome: fallback,
+			cancelled: true,
+			cancelReason: reason
 		});
 	} catch {
 		/* non-fatal */
+	}
+	if (p.kind === 'permission' && p.view.kind === 'permission') {
+		try {
+			settingsRepo.recordDecision(
+				p.conversationId,
+				p.view.tool,
+				typeof p.view.summary === 'string' ? p.view.summary : '',
+				'auto-deny'
+			);
+		} catch (e) {
+			log.warn('interactive.cancel_audit_failed', { requestId, err: String(e) });
+		}
 	}
 	log.info('interactive.cancelled', { requestId, kind: p.kind, reason });
 	p.resolve(fallback);
@@ -260,13 +321,37 @@ function defaultDenial(kind: InteractiveKind): InteractiveResponse {
 // the legacy policy applied to). Other kinds always 'ask' — auto-mode-switch
 // in particular is a billing / quota decision that should never be silently
 // approved.
+//
+// Under the default 'prompt' policy we auto-allow:
+//   - `read` / `write` / `edit`: only when the target path resolves
+//     (via realpath, with parent-fallback for not-yet-existing targets)
+//     inside the conversation's working directory. Symlinks that escape
+//     the workspace fail the check; reads of `~/.ssh`, writes to `/etc`,
+//     edits in a sibling repo, etc. will still prompt.
+//
+// URL fetches are NOT auto-approved: the URL itself is attacker-controlled
+// content under prompt injection (exfiltration via query string, SSRF to
+// loopback / cloud metadata, etc.), so we always surface a dialog.
+//
+// If the caller can't supply a workspace root or scope key, the file-system
+// kinds fall back to 'ask' (safer default).
 
-const READ_ONLY_PERMISSION_KINDS = new Set(['read', 'url']);
+import { isPathInWorkspace } from '../permissions/workspace';
+
+const FILESYSTEM_PERMISSION_KINDS = new Set(['read', 'write', 'edit']);
+
+export interface PolicyContext {
+	/** The runtime scope key (file path / command / URL) for this request. */
+	scopeKey?: string | null;
+	/** The conversation's absolute working directory. */
+	workspaceRoot?: string | null;
+}
 
 export function decideByPolicy(
 	policy: PermissionPolicy,
 	kind: InteractiveKind,
-	permissionKind?: string
+	permissionKind?: string,
+	ctx?: PolicyContext
 ): 'approved' | 'denied' | 'ask' {
 	if (kind !== 'permission') return 'ask';
 	const pk = permissionKind ?? '';
@@ -277,7 +362,13 @@ export function decideByPolicy(
 			return 'denied';
 		case 'prompt':
 		default:
-			return READ_ONLY_PERMISSION_KINDS.has(pk) ? 'approved' : 'ask';
+			if (FILESYSTEM_PERMISSION_KINDS.has(pk)) {
+				const root = ctx?.workspaceRoot;
+				const target = ctx?.scopeKey;
+				if (root && target && isPathInWorkspace(target, root)) return 'approved';
+				return 'ask';
+			}
+			return 'ask';
 	}
 }
 

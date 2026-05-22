@@ -21,7 +21,8 @@
 		initialMessages,
 		initialUsage = null,
 		parent = null,
-		initialActiveTurnId = null
+		initialActiveTurnId = null,
+		initialPendingInteractive = []
 	}: {
 		conversation: Conversation;
 		initialMessages: Message[];
@@ -33,6 +34,7 @@
 			messageIndex: number | null;
 		} | null;
 		initialActiveTurnId?: string | null;
+		initialPendingInteractive?: InteractiveRequestView[];
 	} = $props();
 
 	let messages = $state<Message[]>([]);
@@ -82,6 +84,7 @@
 			pinnedToBottom = true;
 			hasNewBelow = false;
 			forksByMessage = {};
+			pendingInteractive = [...initialPendingInteractive];
 			if (compactionTimer) {
 				clearTimeout(compactionTimer);
 				compactionTimer = null;
@@ -101,7 +104,9 @@
 	// `onPermissionRequest` callbacks concurrently (parallel tool calls),
 	// so we must surface them all — a single slot would let later events
 	// clobber earlier ones, stranding the earlier requests on the server.
-	let pendingInteractive = $state<InteractiveRequestView[]>([]);
+	let pendingInteractive = $state<InteractiveRequestView[]>(
+		untrack(() => [...initialPendingInteractive])
+	);
 	// Active EventSource for the in-flight turn (if any). null when idle.
 	// Holding a reference here lets `stop()` close it on user-cancel and
 	// lets the conversation-prop $effect tear it down on navigation.
@@ -215,11 +220,16 @@
 			const data = (await r.json()) as {
 				messages: Message[];
 				activeTurnId: string | null;
+				pendingInteractive?: InteractiveRequestView[];
 			};
 			messages = data.messages;
-			// A completed turn means any outstanding permission prompt was
-			// resolved server-side; clear them so we don't strand a dialog.
-			pendingInteractive = [];
+			// Rehydrate outstanding prompts from the authoritative server
+			// list. Previously we cleared this unconditionally, which meant
+			// any transient SSE drop stranded the dialog even though the
+			// server's `pending` map still held the request — and the agent
+			// would only see a response after the (formerly 10-minute)
+			// timeout fired. Now we just snap to whatever the server says.
+			pendingInteractive = data.pendingInteractive ?? [];
 			await scrollToBottom();
 			// If a new turn became active between events (unlikely but
 			// possible from another tab), attach to it.

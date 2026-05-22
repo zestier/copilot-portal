@@ -1,5 +1,7 @@
 // Shared types used by both client and server.
 
+import type { GrantScope } from './permissions/scope-types';
+
 export type Role = 'user' | 'assistant' | 'system';
 export type MessageStatus = 'complete' | 'streaming' | 'interrupted' | 'error';
 
@@ -98,11 +100,12 @@ export interface UserSettings {
 	theme: 'dark' | 'light' | 'system';
 }
 
-// 'prompt' is the default: auto-approves read-only permission kinds
-// (`read`, `url`) and asks the user for everything else. 'allow-all' and
-// 'deny-all' are escape hatches. A previous 'allow-readonly' value was
-// dropped because it behaved identically to 'prompt'; migration 008
-// rewrites existing rows.
+// 'prompt' is the default: auto-approves `url` requests and file-system
+// requests (`read`, `write`, `edit`) whose target path resolves inside
+// the conversation's working directory; everything else asks the user.
+// 'allow-all' and 'deny-all' are escape hatches. A previous
+// 'allow-readonly' value was dropped because it behaved identically to
+// 'prompt'; migration 008 rewrites existing rows.
 export type PermissionPolicy = 'prompt' | 'allow-all' | 'deny-all';
 
 // --- Interactive requests ---
@@ -131,6 +134,35 @@ export interface InteractivePermissionView {
 	permissionKind: string;
 	summary: string;
 	args: unknown;
+	/**
+	 * The user's current default permission policy at the time the request
+	 * was raised. Exposed so the dialog can disable / explain options that
+	 * would otherwise be silently dropped (e.g. "Allow always" under
+	 * `deny-all`, which `interactive-requests.ts` refuses to persist).
+	 */
+	userPolicy?: PermissionPolicy;
+	/**
+	 * For `shell` permissions: the server-side parser's verdict on the
+	 * command. `parsed` means we tokenized it into segments split on
+	 * `&&`/`||`/`;`/`|`; the dialog uses this to break the pipeline out
+	 * and offer per-argv0 grants. `unsafe` means the command contains
+	 * constructs (subshells, redirection, var expansion, ...) we refused
+	 * to model; structured grants can't apply, so the dialog warns the
+	 * user and downgrades the grant picker. Omitted for non-shell kinds.
+	 */
+	shellAnalysis?: ShellAnalysisView;
+}
+
+export type ShellAnalysisView =
+	| { kind: 'parsed'; segments: ShellAnalysisSegment[] }
+	| { kind: 'unsafe'; reason: string };
+
+export interface ShellAnalysisSegment {
+	argv: string[];
+	/** Operator that follows this segment in the pipeline. `null` on the
+	 * final segment. Mirrors `ParsedSegment.followingOp` from the server
+	 * parser. */
+	followingOp: '&&' | '||' | ';' | '|' | null;
 }
 
 export interface InteractiveAutoModeSwitchView {
@@ -197,13 +229,27 @@ export type InteractiveRequestView = { requestId: string } & InteractiveRequestV
 export type InteractiveResponse =
 	| {
 			kind: 'permission';
-			decision: PermissionDecision;
+			decision: InteractivePermissionDecision;
 			/** Optional narrow scope for *-always decisions. Omitted scope means
 			 * "any kind, any args" (backwards-compatible with the original
 			 * coarse "Allow always for this tool" grant). */
 			scope?: PermissionGrantScope;
+			/**
+			 * Additional grants to persist alongside `scope` on *-always
+			 * decisions. Used by the shell picker when the user checks
+			 * multiple per-argv0 scopes for one pipeline (e.g. a pipeline
+			 * `git status | rg foo` can persist "any `git`" and "any `rg`"
+			 * in one click). Each entry is stored as its own grant row;
+			 * the matcher ORs them at decision time.
+			 */
+			additionalScopes?: PermissionGrantScope[];
 			/** Optional TTL for *-always decisions, in milliseconds. */
 			expiresInMs?: number;
+			/**
+			 * When true, an *-always grant is stored user-global (matches the
+			 * tool in every conversation). Default false → conversation-scoped.
+			 */
+			applyToAllConversations?: boolean;
 	  }
 	| { kind: 'auto_mode_switch'; decision: 'yes' | 'yes_always' | 'no' }
 	| { kind: 'user_input'; answer: string; wasFreeform?: boolean }
@@ -228,6 +274,11 @@ export interface PermissionGrantScope {
 	permissionKind?: string | null;
 	/** Tiny glob (`*` matches any run). NULL/omitted = any scope. */
 	pattern?: string | null;
+	/** Structured grant scope. When set, the matcher uses this and
+	 * ignores `pattern`. The dialog emits this for typed kinds (fs
+	 * exact/prefix, etc.); legacy plain-pattern paths remain for shell
+	 * and URL until they get their own structured pickers. */
+	scope?: GrantScope;
 }
 
 export interface ElicitationSchema {
@@ -310,6 +361,14 @@ export type PortalEvent =
 			// shape mirrors InteractiveResponse but is intentionally `unknown`
 			// here so the SSE consumer can replay it without re-parsing.
 			outcome: unknown;
+			/**
+			 * True when the resolution came from `cancel()` (turn-abort,
+			 * timeout, server shutdown) rather than a user click. The outcome
+			 * is still a default-denial so the SDK can move on, but the UI /
+			 * audit log can distinguish the two cases.
+			 */
+			cancelled?: boolean;
+			cancelReason?: string;
 	  }
 	| {
 			type: 'tool.result';
@@ -372,7 +431,22 @@ export interface ConversationUsage {
 	updatedAt: number;
 }
 
-export type PermissionDecision = 'allow-once' | 'allow-always' | 'deny' | 'deny-always';
+// Subset of `PermissionDecision` that the client can produce via the
+// dialog. The `auto-*` values are server-only audit records.
+export type InteractivePermissionDecision = 'allow-once' | 'allow-always' | 'deny' | 'deny-always';
+
+// `auto-allow` / `auto-deny` are recorded by the server when the user's
+// default policy (or a stored grant) settled the request without a
+// dialog. They never appear in `InteractiveResponse` — the dialog only
+// ever surfaces the four interactive decisions — but they show up in the
+// settings page audit so the user can see what got approved silently.
+export type PermissionDecision =
+	| 'allow-once'
+	| 'allow-always'
+	| 'deny'
+	| 'deny-always'
+	| 'auto-allow'
+	| 'auto-deny';
 
 // --- File browser / git response shapes (shared by client & server) ---
 

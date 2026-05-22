@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
 	decideByPolicy,
 	register,
@@ -19,6 +22,16 @@ import type {
 import { setupLocalEnv } from './helpers/env';
 
 describe('decideByPolicy', () => {
+	let wsRoot: string;
+	beforeAll(() => {
+		wsRoot = realpathSync(mkdtempSync(join(tmpdir(), 'portal-policy-ws-')));
+		mkdirSync(join(wsRoot, 'src'));
+		writeFileSync(join(wsRoot, 'src', 'a.ts'), 'x');
+	});
+	afterAll(() => {
+		rmSync(wsRoot, { recursive: true, force: true });
+	});
+
 	it('only auto-approves the permission kind', () => {
 		// Non-permission kinds are user-facing decisions; never silently apply.
 		expect(decideByPolicy('allow-all', 'auto_mode_switch')).toBe('ask');
@@ -30,8 +43,40 @@ describe('decideByPolicy', () => {
 		expect(decideByPolicy('allow-all', 'permission', 'shell')).toBe('approved');
 		expect(decideByPolicy('deny-all', 'permission', 'read')).toBe('denied');
 		expect(decideByPolicy('prompt', 'permission', 'shell')).toBe('ask');
-		expect(decideByPolicy('prompt', 'permission', 'read')).toBe('approved');
-		expect(decideByPolicy('prompt', 'permission', 'url')).toBe('approved');
+		expect(decideByPolicy('prompt', 'permission', 'shell', { scopeKey: 'ls -la' })).toBe('ask');
+		expect(decideByPolicy('prompt', 'permission', 'url')).toBe('ask');
+	});
+	it('prompt policy auto-allows file ops only inside the workspace', () => {
+		const ctx = { workspaceRoot: wsRoot, scopeKey: join(wsRoot, 'src', 'a.ts') };
+		expect(decideByPolicy('prompt', 'permission', 'read', ctx)).toBe('approved');
+		expect(decideByPolicy('prompt', 'permission', 'write', ctx)).toBe('approved');
+		expect(decideByPolicy('prompt', 'permission', 'edit', ctx)).toBe('approved');
+	});
+	it('prompt policy auto-allows not-yet-existing files inside the workspace', () => {
+		const ctx = { workspaceRoot: wsRoot, scopeKey: join(wsRoot, 'src', 'new.ts') };
+		expect(decideByPolicy('prompt', 'permission', 'write', ctx)).toBe('approved');
+	});
+	it('prompt policy prompts for file ops outside the workspace', () => {
+		expect(
+			decideByPolicy('prompt', 'permission', 'read', {
+				workspaceRoot: wsRoot,
+				scopeKey: '/etc/passwd'
+			})
+		).toBe('ask');
+		expect(
+			decideByPolicy('prompt', 'permission', 'write', {
+				workspaceRoot: wsRoot,
+				scopeKey: '../other/x'
+			})
+		).toBe('ask');
+		// Missing context falls back to ask (safer default).
+		expect(decideByPolicy('prompt', 'permission', 'read')).toBe('ask');
+		expect(decideByPolicy('prompt', 'permission', 'write')).toBe('ask');
+	});
+	it('allow-all / deny-all ignore workspace context', () => {
+		const ctx = { workspaceRoot: wsRoot, scopeKey: '/etc/passwd' };
+		expect(decideByPolicy('allow-all', 'permission', 'write', ctx)).toBe('approved');
+		expect(decideByPolicy('deny-all', 'permission', 'read', ctx)).toBe('denied');
 	});
 });
 
@@ -268,7 +313,7 @@ describe('interactive request registry', () => {
 		});
 		expect(settings.matchGrant(userId, conversationId, 'shell', 'shell', 'ls')).toBe('allow');
 		expect(
-			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'ls', Date.now() + 120_000)
+			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'ls', {}, Date.now() + 120_000)
 		).toBe('none');
 	});
 
@@ -288,5 +333,120 @@ describe('interactive request registry', () => {
 		});
 		// Recording a deny grant under deny-all is fine — it's never less safe.
 		expect(settings.matchGrant(userId, conversationId, 'shell', 'shell', 'x')).toBe('deny');
+	});
+
+	it('allow-always with applyToAllConversations writes a user-global grant', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const convsRepo = await import('../src/lib/server/db/repos/conversations');
+		const other = convsRepo.create(userId, { title: 'other', workdir: '/tmp', model: null }).id;
+		const requestId = newRequestId();
+		makePending('permission', permView(requestId), undefined);
+		resolve(requestId, userId, {
+			kind: 'permission',
+			decision: 'allow-always',
+			applyToAllConversations: true
+		});
+		expect(settings.matchGrant(userId, other, 'shell', 'shell', 'whatever')).toBe('allow');
+	});
+
+	it('allow-always with a structured fs prefix scope persists and matches descendants', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'portal-fs-prefix-grant-')));
+		try {
+			mkdirSync(join(tmp, 'sub'));
+			writeFileSync(join(tmp, 'sub', 'a.txt'), 'x');
+
+			// Mimic the dialog: a `read` permission for `cat ~/.config/foo`
+			// where the user picked "anywhere under this directory".
+			const fsPermView: InteractiveRequestView = {
+				requestId: newRequestId(),
+				kind: 'permission',
+				tool: 'cat',
+				permissionKind: 'read',
+				summary: join(tmp, 'sub', 'a.txt'),
+				args: { path: join(tmp, 'sub', 'a.txt') }
+			};
+			makePending('permission', fsPermView, undefined);
+			resolve(fsPermView.requestId, userId, {
+				kind: 'permission',
+				decision: 'allow-always',
+				scope: {
+					permissionKind: 'read',
+					scope: { kind: 'fs', perms: ['read'], rule: { kind: 'prefix', path: tmp } }
+				}
+			});
+
+			// Descendants match; sibling-with-shared-prefix and a path outside don't.
+			const target = join(tmp, 'sub', 'a.txt');
+			expect(settings.matchGrant(userId, conversationId, 'cat', 'read', target, { target })).toBe(
+				'allow'
+			);
+			expect(
+				settings.matchGrant(userId, conversationId, 'cat', 'read', '/etc/passwd', {
+					target: '/etc/passwd'
+				})
+			).toBe('none');
+			expect(
+				settings.matchGrant(userId, conversationId, 'cat', 'read', `${tmp}-evil/file`, {
+					target: `${tmp}-evil/file`
+				})
+			).toBe('none');
+			// Write under the same prefix is NOT granted — perms filter restricts to read.
+			expect(settings.matchGrant(userId, conversationId, 'cat', 'write', target, { target })).toBe(
+				'none'
+			);
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('allow-always with additionalScopes persists each as its own grant', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const { parseShellCommand } = await import('../src/lib/server/permissions/shell-parser');
+		const requestId = newRequestId();
+		makePending('permission', permView(requestId), undefined);
+		// Mimic the dialog's shell branch: the user ticked "any git" and
+		// "any rg" on a `git status | rg foo` prompt and clicked Allow
+		// always. The first scope rides in `scope`; the rest in
+		// `additionalScopes`.
+		resolve(requestId, userId, {
+			kind: 'permission',
+			decision: 'allow-always',
+			scope: {
+				permissionKind: 'shell',
+				scope: { kind: 'shell', rule: { argv0: 'git', positionals: { kind: 'any' } } }
+			},
+			additionalScopes: [
+				{
+					permissionKind: 'shell',
+					scope: { kind: 'shell', rule: { argv0: 'rg', positionals: { kind: 'any' } } }
+				}
+			]
+		});
+
+		// Each grant matches independently on its own argv0.
+		const gitParsed = parseShellCommand('git log --oneline');
+		const rgParsed = parseShellCommand('rg --hidden foo');
+		const unrelated = parseShellCommand('cat /etc/passwd');
+		if (gitParsed.kind !== 'parsed') throw new Error('git parse');
+		if (rgParsed.kind !== 'parsed') throw new Error('rg parse');
+		if (unrelated.kind !== 'parsed') throw new Error('cat parse');
+
+		expect(
+			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'git log --oneline', {
+				shellSegments: gitParsed.segments
+			})
+		).toBe('allow');
+		expect(
+			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'rg --hidden foo', {
+				shellSegments: rgParsed.segments
+			})
+		).toBe('allow');
+		// A command covered by neither grant still falls through.
+		expect(
+			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'cat /etc/passwd', {
+				shellSegments: unrelated.segments
+			})
+		).toBe('none');
 	});
 });

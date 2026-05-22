@@ -4,6 +4,7 @@ import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
 import * as usage from '$lib/server/db/repos/usage';
 import { getTurn } from '$lib/server/copilot/turn-runner';
+import { listForConversation as listPendingInteractive } from '$lib/server/copilot/interactive-requests';
 
 export const load: PageServerLoad = ({ params, locals }) => {
 	if (!locals.userId) throw error(401);
@@ -17,6 +18,11 @@ export const load: PageServerLoad = ({ params, locals }) => {
 	// still-cached turns would just replay then immediately yield `done`.
 	const turn = getTurn(conv.id);
 	const activeTurnId = turn && turn.status === 'running' ? turn.id : null;
+
+	// Snapshot any prompts currently waiting on a user response so a fresh
+	// page load shows them immediately, without waiting for the SSE stream
+	// to (re-)emit the `interactive.request` event.
+	const pendingInteractive = listPendingInteractive(conv.id);
 
 	// If this conversation was forked, surface parent info for a
 	// breadcrumb. Resolves silently to null if the parent was deleted or
@@ -45,5 +51,12 @@ export const load: PageServerLoad = ({ params, locals }) => {
 		}
 	}
 
-	return { conversation: conv, messages: msgs, contextUsage, parent, activeTurnId };
+	return {
+		conversation: conv,
+		messages: msgs,
+		contextUsage,
+		parent,
+		activeTurnId,
+		pendingInteractive
+	};
 };
