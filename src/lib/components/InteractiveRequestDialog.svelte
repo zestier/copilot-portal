@@ -544,6 +544,16 @@
 				</div>
 			{/if}
 
+			{#if request.escalationReason}
+				<div class="shell-unsafe" role="note">
+					<strong>Escalation requested.</strong>
+					<div>{request.escalationReason}</div>
+					<div class="muted small">
+						This request can only be allowed once. Persistent decisions are disabled.
+					</div>
+				</div>
+			{/if}
+
 			{#if formatArgs(request.args)}
 				<details class="args">
 					<summary>Arguments</summary>

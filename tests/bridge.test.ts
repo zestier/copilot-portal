@@ -217,7 +217,7 @@ describe('bridge.open() context-usage event translation', () => {
 });
 
 describe('bridge.open() session mode and permissions', () => {
-	it('injects a request_mode_switch tool', async () => {
+	it('injects portal tools', async () => {
 		const { open } = await importBridge();
 		await open({ ...baseOpts, mode: 'best-effort' });
 
@@ -227,6 +227,11 @@ describe('bridge.open() session mode and permissions', () => {
 		}>;
 		expect(tools).toEqual(
 			expect.arrayContaining([
+				expect.objectContaining({ name: 'git_status' }),
+				expect.objectContaining({ name: 'git_diff' }),
+				expect.objectContaining({ name: 'git_log' }),
+				expect.objectContaining({ name: 'git_show_commit' }),
+				expect.objectContaining({ name: 'git_show_file' }),
 				expect.objectContaining({
 					name: 'request_mode_switch',
 					description: expect.stringContaining('interactive mode')
@@ -283,6 +288,233 @@ describe('bridge.open() session mode and permissions', () => {
 		expect(result).toEqual(
 			expect.objectContaining({
 				feedback: expect.stringContaining('Reason: redirection')
+			})
+		);
+	});
+
+	it('auto-rejects shell git commands with structured-tool feedback', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		await open({ ...baseOpts, userId: user.id });
+
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const result = await onPermissionRequest({
+			kind: 'shell',
+			toolName: 'shell',
+			fullCommandText: 'git status --short',
+			args: { command: 'git status --short' }
+		});
+
+		expect(result).toEqual(
+			expect.objectContaining({
+				kind: 'reject',
+				feedback: expect.stringContaining('git_status')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('forcePermissionPrompt')
+			})
+		);
+	});
+
+	it('raises a one-time prompt for shell git escalation even in best-effort mode', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const reason =
+			'Structured Git tools do not expose reflog expiration, and this exact command is needed for cleanup.';
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'shell',
+				toolName: 'shell',
+				fullCommandText: 'git reflog expire --expire=now --all',
+				args: {
+					command: 'git reflog expire --expire=now --all',
+					forcePermissionPrompt: reason
+				}
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'shell',
+				permissionKind: 'shell',
+				canPersistDecision: false,
+				escalationReason: reason
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('recognizes top-level forcePermissionPrompt for escalation', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const reason =
+			'User explicitly requested a commit; structured Git tools cannot commit changes.';
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'shell',
+				toolName: 'shell',
+				fullCommandText: 'git commit -m x',
+				forcePermissionPrompt: reason,
+				args: { command: 'git commit -m x' }
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'shell',
+				permissionKind: 'shell',
+				canPersistDecision: false,
+				escalationReason: reason
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('recognizes forcePermissionPrompt from original tool args via toolCallId', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const reason =
+			'User explicitly requested committing these reviewed local changes; structured Git tools cannot commit.';
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			const event = {
+				data: {
+					toolCallId: 'git-commit-tool',
+					toolName: 'shell',
+					arguments: {
+						command: 'git commit -m x',
+						forcePermissionPrompt: reason
+					}
+				}
+			};
+			for (const [eventName, handler] of sdkSessionStub.on.mock.calls as Array<
+				[string, (e: unknown) => void]
+			>) {
+				if (eventName === 'tool.execution_start') handler(event);
+			}
+			void onPermissionRequest({
+				kind: 'shell',
+				toolName: 'shell',
+				toolCallId: 'git-commit-tool',
+				fullCommandText: 'git commit -m x',
+				args: { command: 'git commit -m x' }
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		let seen: Awaited<ReturnType<typeof iter.next>> | null = null;
+		for (let i = 0; i < 5; i++) {
+			const next = await iter.next();
+			if (next.value?.type === 'interactive.request') {
+				seen = next;
+				break;
+			}
+		}
+		expect(seen?.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'shell',
+				permissionKind: 'shell',
+				canPersistDecision: false,
+				escalationReason: reason
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('forgets original tool args after tool completion', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const reason =
+			'User explicitly requested committing these reviewed local changes; structured Git tools cannot commit.';
+
+		const eventStart = {
+			data: {
+				toolCallId: 'git-commit-tool',
+				toolName: 'shell',
+				arguments: {
+					command: 'git commit -m x',
+					forcePermissionPrompt: reason
+				}
+			}
+		};
+		const eventComplete = {
+			data: {
+				toolCallId: 'git-commit-tool',
+				success: true,
+				result: ''
+			}
+		};
+		for (const [eventName, handler] of sdkSessionStub.on.mock.calls as Array<
+			[string, (e: unknown) => void]
+		>) {
+			if (eventName === 'tool.execution_start') handler(eventStart);
+			if (eventName === 'tool.execution_complete') handler(eventComplete);
+		}
+
+		const result = await onPermissionRequest({
+			kind: 'shell',
+			toolName: 'shell',
+			toolCallId: 'git-commit-tool',
+			fullCommandText: 'git commit -m x',
+			args: { command: 'git commit -m x' }
+		});
+
+		expect(result).toEqual(
+			expect.objectContaining({
+				kind: 'reject',
+				feedback: expect.stringContaining('git_status')
 			})
 		);
 	});

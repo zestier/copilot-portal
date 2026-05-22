@@ -18,7 +18,7 @@
 //      is surfaced to the agent as `feedback` on the SDK reject, so
 //      the next call learns immediately without a user prompt.
 
-import type { GrantScope, ShellRule, ShellOptionSpec } from '$lib/permissions/scope-types';
+import type { GrantScope, ShellRule } from '$lib/permissions/scope-types';
 import { addGrant, listGrantsForUser } from '../db/repos/settings';
 
 interface SeedSpec {
@@ -73,60 +73,12 @@ const FS_READ_TOOLS = [
 	'sha256sum'
 ];
 
-/** git subcommands we consider read-only. */
-const GIT_READ_SUBCOMMANDS = [
-	'status',
-	'log',
-	'diff',
-	'show',
-	'rev-parse',
-	'ls-files',
-	'ls-tree',
-	'cat-file',
-	'blame',
-	'shortlog',
-	'describe',
-	'branch',
-	'tag',
-	'remote',
-	'config',
-	'stash',
-	'reflog',
-	'symbolic-ref',
-	'for-each-ref'
-];
-
-/** git options that redirect operations to another repo or run external
- * helpers. Always denied on the seed git grant — users who genuinely
- * need them can grant a broader rule. */
-const GIT_DANGEROUS_FLAGS = [
-	'--git-dir',
-	'--work-tree',
-	'--namespace',
-	'-C',
-	'--exec-path',
-	'--man-path',
-	'--info-path',
-	'--super-prefix'
-];
-
-const GIT_PRE_SUBCOMMAND_ALLOW: ShellOptionSpec[] = [
-	{ name: '--paginate', kind: 'flag' },
-	{ name: '--no-pager', kind: 'flag' },
-	{ name: '--bare', kind: 'flag' },
-	{ name: '--no-replace-objects', kind: 'flag' },
-	{ name: '--literal-pathspecs', kind: 'flag' },
-	{ name: '--glob-pathspecs', kind: 'flag' },
-	{ name: '--noglob-pathspecs', kind: 'flag' },
-	{ name: '--icase-pathspecs', kind: 'flag' },
-	{ name: '--no-lazy-fetch', kind: 'flag' },
-	{ name: '--no-optional-locks', kind: 'flag' },
-	{ name: '-c', kind: 'option', value: { kind: 'any' } },
-	{ name: '-C', kind: 'option', value: { kind: 'any' } },
-	{ name: '--git-dir', kind: 'option', value: { kind: 'any' } },
-	{ name: '--work-tree', kind: 'option', value: { kind: 'any' } },
-	{ name: '--namespace', kind: 'option', value: { kind: 'any' } },
-	{ name: '--config-env', kind: 'option', value: { kind: 'any' } }
+const GIT_STRUCTURED_TOOLS = [
+	'git_status',
+	'git_diff',
+	'git_log',
+	'git_show_commit',
+	'git_show_file'
 ];
 
 function shellGrant(rule: ShellRule): SeedSpec {
@@ -154,38 +106,31 @@ function shellDeny(rule: ShellRule, reason: string): SeedSpec {
 const NUDGE_DENIES: { argv0: string; reason: string }[] = [
 	{
 		argv0: 'cat',
-		reason:
-			'Bare `cat` is denied in this portal — use the structured `view` tool for file reads (supports `view_range` for slicing). Piped use (e.g. `cmd | cat -A`) is allowed.'
+		reason: 'Bare `cat` is denied. Use `view` for file reads. Piped `cat` is allowed.'
 	},
 	{
 		argv0: 'head',
-		reason:
-			'Bare `head` is denied — use the `view` tool with `view_range` for top-of-file reads. Piped use (e.g. `cmd | head -n 5`) is allowed.'
+		reason: 'Bare `head` is denied. Use `view` with `view_range`. Piped `head` is allowed.'
 	},
 	{
 		argv0: 'tail',
-		reason:
-			'Bare `tail` is denied — use the `view` tool with `view_range` for bottom-of-file reads. Piped use (`cmd | tail -n 50`) is allowed but still stalls SSE output until upstream exits; prefer redirecting to a file and reading it back.'
+		reason: 'Bare `tail` is denied. Use `view` with `view_range`. Piped `tail` is allowed.'
 	},
 	{
 		argv0: 'grep',
-		reason:
-			'Bare `grep` is denied — use the `grep` tool (ripgrep-backed, supports `glob`, `output_mode`, `head_limit`). Piped use (`cmd | grep ...`) is allowed.'
+		reason: 'Bare `grep` is denied. Use the structured `grep` tool. Piped `grep` is allowed.'
 	},
 	{
 		argv0: 'rg',
-		reason:
-			'Bare `rg` is denied — use the `grep` tool (it wraps ripgrep with structured output). Piped use is allowed.'
+		reason: 'Bare `rg` is denied. Use the structured `grep` tool. Piped `rg` is allowed.'
 	},
 	{
 		argv0: 'find',
-		reason:
-			'Bare `find` is denied — use the `glob` tool for file-pattern matching. Piped use is allowed for unusual cases.'
+		reason: 'Bare `find` is denied. Use `glob` for file-pattern matching. Piped `find` is allowed.'
 	},
 	{
 		argv0: 'ls',
-		reason:
-			'Bare `ls` is denied — use the `glob` tool to enumerate files. Piped use is allowed when you genuinely need ls-specific output like permissions or symlinks.'
+		reason: 'Bare `ls` is denied. Use `glob` to enumerate files. Piped `ls` is allowed.'
 	}
 ];
 
@@ -198,15 +143,19 @@ export function defaultSeedGrants(): SeedSpec[] {
 	for (const argv0 of FS_READ_TOOLS) {
 		seeds.push(shellGrant({ argv0, positionals: { kind: 'workspace-paths' } }));
 	}
+	for (const tool of GIT_STRUCTURED_TOOLS) {
+		seeds.push({ tool, permissionKind: 'custom-tool', scope: { kind: 'any' } });
+	}
 
-	// git read-only — no positional containment (refs / commit hashes are
-	// not paths) but flag-deny prevents `--git-dir=/etc`.
 	seeds.push(
-		shellGrant({
-			argv0: 'git',
-			subcommands: GIT_READ_SUBCOMMANDS,
-			preSubcommandOptions: { allow: GIT_PRE_SUBCOMMAND_ALLOW, deny: GIT_DANGEROUS_FLAGS }
-		})
+		shellDeny(
+			{ argv0: 'git' },
+			[
+				'Shell `git` is denied by default.',
+				'Use git_status/git_diff/git_log/git_show_commit/git_show_file.',
+				'Escalate sparingly with `forcePermissionPrompt` only if no Git tool fits.'
+			].join(' ')
+		)
 	);
 
 	// rg / grep / find: read-only by default, but their command-running

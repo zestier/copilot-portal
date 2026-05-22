@@ -181,6 +181,11 @@ export interface InteractivePermissionView {
 	 */
 	canPersistDecision?: boolean;
 	/**
+	 * Set when an otherwise auto-rejected request intentionally escalates to
+	 * a human prompt after a feedback-bearing deny grant.
+	 */
+	escalationReason?: string;
+	/**
 	 * For `shell` permissions: the server-side parser's verdict on the
 	 * command. `parsed` means we tokenized it into segments split on
 	 * `&&`/`||`/`;`/`|`; the dialog uses this to break the pipeline out

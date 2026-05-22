@@ -1,64 +1,80 @@
 <script lang="ts">
+	import { splitUnifiedDiffByFile } from '$lib/client/diff-synth';
 	import { parseUnifiedDiff, diffStats } from '$lib/client/diff-parser';
 
 	let {
-		path,
+		path = 'diff',
 		diff,
 		showLineNumbers = true
-	}: { path: string; diff: string; showLineNumbers?: boolean } = $props();
-	const parsed = $derived(parseUnifiedDiff(diff));
-	const stats = $derived(diffStats(parsed));
-	const empty = $derived(parsed.length === 0 || parsed.every((l) => l.kind === 'meta'));
+	}: { path?: string; diff: string; showLineNumbers?: boolean } = $props();
+
+	const chunks = $derived.by(() => {
+		const split = splitUnifiedDiffByFile(diff, path);
+		return split.length > 0 ? split : [{ path, diff }];
+	});
 
 	function fmtNo(n: number | null): string {
 		return n == null ? '' : String(n);
 	}
 </script>
 
-<div class="diff">
-	<div class="path-bar">
-		<code class="path">{path}</code>
-		<span class="stats">
-			<span class="added">+{stats.added}</span>
-			<span class="removed">−{stats.removed}</span>
-		</span>
-	</div>
-	{#if empty}
-		<div class="empty">No textual diff (file may be binary, empty, or unchanged).</div>
-	{:else}
-		<div class="lines" class:no-gutter={!showLineNumbers} role="table" aria-label="diff lines">
-			<div class="rows">
-				{#each parsed as l, i (i)}
-					{#if l.kind === 'hunk' && !showLineNumbers}
-						<!-- Suppress the @@ -L,N +L,N @@ header when we don't trust the
-						     line ranges (e.g. for diffs synthesized from edit args
-						     without full-file context). -->
-					{:else}
-						<div class={'line ' + l.kind} role="row">
-							{#if showLineNumbers}
-								<span class="gutter" role="cell" aria-label="line number"
-									>{fmtNo(l.newNo ?? l.oldNo)}</span
-								>
-							{/if}
-							<span class="sign" aria-hidden="true"
-								>{l.kind === 'add'
-									? '+'
-									: l.kind === 'del'
-										? '-'
-										: l.kind === 'hunk'
-											? '@'
-											: ' '}</span
-							>
-							<span class="text" role="cell">{l.text}</span>
-						</div>
-					{/if}
-				{/each}
+<div class="diff-set">
+	{#each chunks as chunk, chunkIndex (chunk.path + ':' + chunkIndex)}
+		{@const parsed = parseUnifiedDiff(chunk.diff)}
+		{@const stats = diffStats(parsed)}
+		{@const empty = parsed.length === 0 || parsed.every((l) => l.kind === 'meta')}
+		<div class="diff">
+			<div class="path-bar">
+				<code class="path">{chunk.path}</code>
+				<span class="stats">
+					<span class="added">+{stats.added}</span>
+					<span class="removed">−{stats.removed}</span>
+				</span>
 			</div>
+			{#if empty}
+				<div class="empty">No textual diff (file may be binary, empty, or unchanged).</div>
+			{:else}
+				<div class="lines" class:no-gutter={!showLineNumbers} role="table" aria-label="diff lines">
+					<div class="rows">
+						{#each parsed as l, i (i)}
+							{#if l.kind === 'hunk' && !showLineNumbers}
+								<!-- Suppress the @@ -L,N +L,N @@ header when we don't trust the
+								     line ranges (e.g. for diffs synthesized from edit args
+								     without full-file context). -->
+							{:else}
+								<div class={'line ' + l.kind} role="row">
+									{#if showLineNumbers}
+										<span class="gutter" role="cell" aria-label="line number"
+											>{fmtNo(l.newNo ?? l.oldNo)}</span
+										>
+									{/if}
+									<span class="sign" aria-hidden="true"
+										>{l.kind === 'add'
+											? '+'
+											: l.kind === 'del'
+												? '-'
+												: l.kind === 'hunk'
+													? '@'
+													: ' '}</span
+									>
+									<span class="text" role="cell">{l.text}</span>
+								</div>
+							{/if}
+						{/each}
+					</div>
+				</div>
+			{/if}
 		</div>
-	{/if}
+	{/each}
 </div>
 
 <style>
+	.diff-set {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		min-height: 0;
+	}
 	.diff {
 		display: flex;
 		flex-direction: column;

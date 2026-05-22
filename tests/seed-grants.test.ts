@@ -43,6 +43,9 @@ describe('seed grants — runtime behaviour', () => {
 			workspaceRoot
 		});
 	}
+	function customToolMatch(tool: string) {
+		return settings.matchGrant(userId, 'conv-x', tool, 'custom-tool', null);
+	}
 
 	it('auto-approves pure utilities without paths', () => {
 		expect(shellMatch('echo hello')).toBe('allow');
@@ -50,23 +53,36 @@ describe('seed grants — runtime behaviour', () => {
 		expect(shellMatch('whoami')).toBe('allow');
 	});
 
-	it('auto-approves git read-only subcommands', () => {
-		expect(shellMatch('git status')).toBe('allow');
-		expect(shellMatch('git --no-pager status')).toBe('allow');
-		expect(shellMatch('git -c color.ui=always status')).toBe('allow');
-		expect(shellMatch('git log -n 5')).toBe('allow');
-		expect(shellMatch('git diff HEAD')).toBe('allow');
+	it('auto-approves structured git tools by default', () => {
+		expect(customToolMatch('git_status')).toBe('allow');
+		expect(customToolMatch('git_diff')).toBe('allow');
+		expect(customToolMatch('git_log')).toBe('allow');
+		expect(customToolMatch('git_show_commit')).toBe('allow');
+		expect(customToolMatch('git_show_file')).toBe('allow');
 	});
 
-	it('rejects git write subcommands', () => {
-		expect(shellMatch('git push')).toBe('none');
-		expect(shellMatch('git commit -m x')).toBe('none');
+	it('denies git commands with feedback to use structured tools by default', () => {
+		expect(shellMatch('git status')).toBe('deny');
+		expect(shellMatch('git --no-pager status')).toBe('deny');
+		expect(shellMatch('git -c color.ui=always status')).toBe('deny');
+		expect(shellMatch('git log -n 5')).toBe('deny');
+		expect(shellMatch('git diff HEAD')).toBe('deny');
+	});
+
+	it('denies mutating git subcommands instead of auto-approving them', () => {
+		expect(shellMatch('git push')).toBe('deny');
+		expect(shellMatch('git commit -m x')).toBe('deny');
+		expect(shellMatch('git config user.email test@example.com')).toBe('deny');
+		expect(shellMatch('git stash push')).toBe('deny');
+		expect(shellMatch('git branch -D feature')).toBe('deny');
+		expect(shellMatch('git tag -d v1')).toBe('deny');
+		expect(shellMatch('git remote set-url origin https://example.com/repo.git')).toBe('deny');
 	});
 
 	it('rejects --git-dir / -C escape attempts', () => {
-		expect(shellMatch('git --git-dir=/etc status')).toBe('none');
-		expect(shellMatch('git --git-dir /etc status')).toBe('none');
-		expect(shellMatch('git -C /etc status')).toBe('none');
+		expect(shellMatch('git --git-dir=/etc status')).toBe('deny');
+		expect(shellMatch('git --git-dir /etc status')).toBe('deny');
+		expect(shellMatch('git -C /etc status')).toBe('deny');
 	});
 
 	it('bare cat is denied (nudges toward structured read), but pipelined cat still works', () => {

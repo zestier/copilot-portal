@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { synthesizeDiff, synthesizeDiffs } from '../src/lib/client/diff-synth';
+import {
+	splitUnifiedDiffByFile,
+	synthesizeDiff,
+	synthesizeDiffs
+} from '../src/lib/client/diff-synth';
 import { parseUnifiedDiff, diffStats } from '../src/lib/client/diff-parser';
 
 describe('synthesizeDiff', () => {
@@ -119,5 +123,40 @@ describe('synthesizeDiff', () => {
 		expect(r!.path).toBe('src/old.ts -> src/new.ts');
 		expect(r!.diff).toContain('rename from src/old.ts');
 		expect(r!.diff).toContain('rename to src/new.ts');
+	});
+});
+
+describe('splitUnifiedDiffByFile', () => {
+	it('splits a multi-file git diff into DiffView-ready chunks', () => {
+		const diff = [
+			'diff --git a/a.txt b/a.txt',
+			'index 1..2 100644',
+			'--- a/a.txt',
+			'+++ b/a.txt',
+			'@@ -1 +1 @@',
+			'-old',
+			'+new',
+			'diff --git a/src/old.ts b/src/new.ts',
+			'similarity index 88%',
+			'rename from src/old.ts',
+			'rename to src/new.ts',
+			'--- a/src/old.ts',
+			'+++ b/src/new.ts',
+			'@@ -1 +1 @@',
+			'-x',
+			'+y'
+		].join('\n');
+
+		const chunks = splitUnifiedDiffByFile(diff);
+
+		expect(chunks).toHaveLength(2);
+		expect(chunks[0].path).toBe('a.txt');
+		expect(chunks[0].diff).toContain('@@ -1 +1 @@');
+		expect(chunks[1].path).toBe('src/old.ts -> src/new.ts');
+		expect(chunks[1].diff).toContain('rename from src/old.ts');
+	});
+
+	it('returns no chunks for non-diff text', () => {
+		expect(splitUnifiedDiffByFile('(no diff)')).toEqual([]);
 	});
 });

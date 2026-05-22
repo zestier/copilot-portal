@@ -426,8 +426,8 @@ describe('interactive request registry', () => {
 		const { parseShellCommand } = await import('../src/lib/server/permissions/shell-parser');
 		const requestId = newRequestId();
 		makePending('permission', permView(requestId), undefined);
-		// Mimic the dialog's shell branch: the user ticked "any git" and
-		// "any rg" on a `git status | rg foo` prompt and clicked Allow
+		// Mimic the dialog's shell branch: the user ticked "any node" and
+		// "any rg" on a `node --version | rg v` prompt and clicked Allow
 		// always. The first scope rides in `scope`; the rest in
 		// `additionalScopes`.
 		resolve(requestId, userId, {
@@ -435,7 +435,7 @@ describe('interactive request registry', () => {
 			decision: 'allow-always',
 			scope: {
 				permissionKind: 'shell',
-				scope: { kind: 'shell', rule: { argv0: 'git', positionals: { kind: 'any' } } }
+				scope: { kind: 'shell', rule: { argv0: 'node', positionals: { kind: 'any' } } }
 			},
 			additionalScopes: [
 				{
@@ -450,20 +450,20 @@ describe('interactive request registry', () => {
 		// bare `rg` (steering toward the structured `grep` tool); to verify
 		// the user's rg allow actually persisted we exercise it in pipeline
 		// position, where the deny nudge intentionally doesn't fire.
-		const gitParsed = parseShellCommand('git log --oneline');
-		const rgParsed = parseShellCommand('git status | rg foo');
+		const nodeParsed = parseShellCommand('node --version');
+		const rgParsed = parseShellCommand('node --version | rg v');
 		const unrelated = parseShellCommand('curl https://example.com');
-		if (gitParsed.kind !== 'parsed') throw new Error('git parse');
+		if (nodeParsed.kind !== 'parsed') throw new Error('node parse');
 		if (rgParsed.kind !== 'parsed') throw new Error('rg parse');
 		if (unrelated.kind !== 'parsed') throw new Error('curl parse');
 
 		expect(
-			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'git log --oneline', {
-				shellSegments: gitParsed.segments
+			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'node --version', {
+				shellSegments: nodeParsed.segments
 			})
 		).toBe('allow');
 		expect(
-			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'git status | rg foo', {
+			settings.matchGrant(userId, conversationId, 'shell', 'shell', 'node --version | rg v', {
 				shellSegments: rgParsed.segments
 			})
 		).toBe('allow');

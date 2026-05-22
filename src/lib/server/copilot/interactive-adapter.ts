@@ -25,12 +25,14 @@ import { log } from '../log';
 interface PermissionRequestLike {
 	kind?: string;
 	toolName?: string;
+	toolCallId?: string;
 	toolDescription?: string;
 	fileName?: string;
 	fullCommandText?: string;
 	path?: string;
 	url?: string;
 	intention?: string;
+	forcePermissionPrompt?: unknown;
 	args?: unknown;
 }
 
@@ -42,6 +44,7 @@ interface InteractiveAdapterOptions {
 	emit(ev: PortalEvent): void;
 	getApproveAll(): boolean;
 	getMode(): SessionMode;
+	getToolArgs?(toolCallId: string): unknown;
 }
 
 export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
@@ -84,11 +87,6 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			}
 		};
 
-		if (opts.getApproveAll()) {
-			audit('auto-allow');
-			return { kind: 'approve-once' } as const;
-		}
-
 		let shellSegments: ParsedSegment[] | null = null;
 		let shellAnalysis: import('$lib/types').ShellAnalysisView | undefined = undefined;
 		if (permissionKind === 'shell' && typeof scopeKey === 'string') {
@@ -110,6 +108,11 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			} else {
 				shellAnalysis = { kind: 'unsafe', reason: parsed.reason };
 			}
+		}
+
+		if (opts.getApproveAll()) {
+			audit('auto-allow');
+			return { kind: 'approve-once' } as const;
 		}
 
 		const target =
@@ -136,6 +139,33 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			return { kind: 'approve-once' } as const;
 		}
 		if (grant.outcome === 'deny') {
+			const escalationReason = grant.denyReason ? readForcePermissionPrompt(req, opts) : null;
+			if (escalationReason) {
+				const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
+					'permission',
+					{
+						kind: 'permission',
+						tool,
+						permissionKind,
+						summary,
+						args: req.args ?? null,
+						userPolicy: opts.policy,
+						canPersistDecision: false,
+						escalationReason,
+						shellAnalysis
+					}
+				);
+				if (response.decision === 'deny' || response.decision === 'deny-always') {
+					audit('auto-deny');
+					return {
+						kind: 'reject',
+						feedback:
+							'Escalation denied. Use structured tools or stop and explain what capability is missing.'
+					} as const;
+				}
+				audit('auto-allow');
+				return { kind: 'approve-once' } as const;
+			}
 			audit('auto-deny');
 			if (grant.denyReason) return { kind: 'reject', feedback: grant.denyReason } as const;
 			return { kind: 'reject' } as const;
@@ -268,6 +298,29 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 		onExitPlanMode,
 		onAutoModeSwitch
 	};
+}
+
+function readForcePermissionPrompt(
+	req: PermissionRequestLike,
+	opts: Pick<InteractiveAdapterOptions, 'getToolArgs'>
+): string | null {
+	const raw =
+		typeof req.forcePermissionPrompt === 'string'
+			? req.forcePermissionPrompt
+			: (readArgString(req.args, 'forcePermissionPrompt') ??
+				(typeof req.toolCallId === 'string'
+					? readArgString(opts.getToolArgs?.(req.toolCallId), 'forcePermissionPrompt')
+					: null));
+	const reason = raw?.trim();
+	if (!reason) return null;
+	if (reason.length < 20) return null;
+	return reason;
+}
+
+function readArgString(args: unknown, key: string): string | null {
+	if (!args || typeof args !== 'object') return null;
+	const v = (args as Record<string, unknown>)[key];
+	return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
 function bestEffortPermissionFeedback(view: {

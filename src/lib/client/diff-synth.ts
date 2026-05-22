@@ -99,3 +99,40 @@ export function synthesizeDiffs(input: SynthDiffInput): SynthDiff[] {
 export function synthesizeDiff(input: SynthDiffInput): SynthDiff | null {
 	return synthesizeDiffs(input)[0] ?? null;
 }
+
+export function splitUnifiedDiffByFile(diff: string, fallbackPath = 'git diff'): SynthDiff[] {
+	if (!looksLikeUnifiedDiff(diff)) return [];
+	const lines = diff.split('\n');
+	const chunks: string[][] = [];
+	let current: string[] = [];
+	for (const line of lines) {
+		if (line.startsWith('diff --git ') && current.length > 0) {
+			chunks.push(current);
+			current = [];
+		}
+		current.push(line);
+	}
+	if (current.length > 0) chunks.push(current);
+	return chunks
+		.map((chunk) => {
+			const text = chunk.join('\n').replace(/\n$/, '');
+			return { path: pathFromDiffChunk(chunk) ?? fallbackPath, diff: text };
+		})
+		.filter((chunk) => chunk.diff.length > 0);
+}
+
+function looksLikeUnifiedDiff(diff: string): boolean {
+	return diff.includes('\n@@ ') || diff.startsWith('diff --git ') || diff.includes('\n--- ');
+}
+
+function pathFromDiffChunk(lines: string[]): string | null {
+	for (const line of lines) {
+		const m = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+		if (m) return m[1] === m[2] ? m[2] : `${m[1]} -> ${m[2]}`;
+	}
+	for (const line of lines) {
+		if (line.startsWith('+++ b/')) return line.slice('+++ b/'.length);
+		if (line === '+++ /dev/null') return '/dev/null';
+	}
+	return null;
+}

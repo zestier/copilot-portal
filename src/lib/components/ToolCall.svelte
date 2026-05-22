@@ -50,6 +50,9 @@
 	// rendering args that haven't been applied, and on error the result
 	// text usually explains the failure.
 	const renderedDiffs = $derived(toolCall.status === 'ok' ? synthesizeDiffs(toolCall) : []);
+	const gitDiffText = $derived(
+		toolCall.status === 'ok' && toolCall.tool === 'git_diff' ? decoded.fallbackText : null
+	);
 	// For shell-style tools, surface the actual command so a viewer
 	// doesn't have to expand "Arguments" to see what ran. We thread it
 	// into the terminal pane (both live partial output and final result)
@@ -105,7 +108,9 @@
 				<div class="muted">Running…</div>
 			{/if}
 		{:else if toolCall.resultJson}
-			{#if renderedDiffs.length > 0}
+			{#if gitDiffText}
+				<DiffView diff={gitDiffText} />
+			{:else if renderedDiffs.length > 0}
 				{#each renderedDiffs as synthDiff, i (synthDiff.path + ':' + i)}
 					<DiffView path={synthDiff.path} diff={synthDiff.diff} showLineNumbers={false} />
 				{/each}
