@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import Chat from '$lib/components/Chat.svelte';
+	import ChangesTabIndicator from '$lib/components/ChangesTabIndicator.svelte';
 	import FileBrowser from '$lib/components/FileBrowser.svelte';
 	import type { PageData } from './$types';
 	let { data }: { data: PageData } = $props();
@@ -44,7 +45,10 @@
 			class:active={tab === 'changes'}
 			onclick={() => selectTab('changes')}
 		>
-			Changes
+			<span class="tab-label">
+				<span>Changes</span>
+				<ChangesTabIndicator conversationId={data.conversation.id} />
+			</span>
 		</button>
 		<button
 			role="tab"
@@ -108,6 +112,11 @@
 		padding: var(--space-2) var(--space-4);
 		cursor: pointer;
 		font: inherit;
+	}
+	.tab-label {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
 	}
 	.tabs button.active {
 		color: var(--text);

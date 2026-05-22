@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import type { HeadStatus } from '$lib/client/file-browser';
+	import { fetchHeadStatus, type HeadStatus } from '$lib/client/file-browser';
 
 	let {
 		conversationId,
@@ -18,9 +18,7 @@
 		loading = true;
 		error = null;
 		try {
-			const res = await fetch(`/api/conversations/${conversationId}/git/status`);
-			if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-			head = (await res.json()).status;
+			head = await fetchHeadStatus(conversationId);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {

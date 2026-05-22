@@ -35,6 +35,12 @@ export interface HeadInfo {
 }
 export type HeadStatus = HeadInfo | { initialized: false };
 
+export async function fetchHeadStatus(conversationId: string): Promise<HeadStatus> {
+	const res = await fetch(`/api/conversations/${conversationId}/git/status`);
+	if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+	return ((await res.json()) as { status: HeadStatus }).status;
+}
+
 export interface LogEntry {
 	sha: string;
 	shortSha: string;
