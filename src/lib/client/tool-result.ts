@@ -23,6 +23,19 @@ export interface DecodedResult {
 	fallbackText: string | null;
 }
 
+const markdownResultTools = new Set([
+	'ask_user',
+	'exit_plan_mode',
+	'read_agent',
+	'report_intent',
+	'request_mode_switch',
+	'task_complete'
+]);
+
+export function shouldRenderToolResultAsMarkdown(tool: string): boolean {
+	return markdownResultTools.has(tool.toLowerCase());
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
 	return v != null && typeof v === 'object' && !Array.isArray(v);
 }

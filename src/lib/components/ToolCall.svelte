@@ -5,7 +5,7 @@
 	import ResultBlock from './tool/ResultBlock.svelte';
 	import { synthesizeDiffs } from '$lib/client/diff-synth';
 	import { summarizeToolCall } from '$lib/client/tool-summary';
-	import { decodeToolResult } from '$lib/client/tool-result';
+	import { decodeToolResult, shouldRenderToolResultAsMarkdown } from '$lib/client/tool-result';
 
 	let { toolCall }: { toolCall: ToolCallRecord } = $props();
 
@@ -43,6 +43,7 @@
 
 	const summary = $derived(summarizeToolCall(toolCall.tool, toolCall.argsJson));
 	const decoded = $derived(decodeToolResult(toolCall.resultJson));
+	const markdownResult = $derived(shouldRenderToolResultAsMarkdown(toolCall.tool));
 	const pending = $derived(toolCall.status === 'pending');
 	// Edits/creates render as a unified diff synthesized from args. We only
 	// show the diff once the call succeeded; while pending we'd be
@@ -110,7 +111,11 @@
 				{/each}
 			{:else}
 				{#each decoded.blocks as block, i (i)}
-					<ResultBlock {block} command={i === 0 && shellCommand ? shellCommand : undefined} />
+					<ResultBlock
+						{block}
+						command={i === 0 && shellCommand ? shellCommand : undefined}
+						markdown={markdownResult}
+					/>
 				{/each}
 			{/if}
 			<details class="raw">

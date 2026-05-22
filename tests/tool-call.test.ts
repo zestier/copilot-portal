@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { summarizeToolCall } from '../src/lib/client/tool-summary';
-import { decodeToolResult } from '../src/lib/client/tool-result';
+import { decodeToolResult, shouldRenderToolResultAsMarkdown } from '../src/lib/client/tool-result';
 
 describe('summarizeToolCall', () => {
 	it('uses description over command for bash', () => {
@@ -119,5 +119,27 @@ describe('decodeToolResult', () => {
 		);
 		expect(r.blocks).toEqual([{ kind: 'text', text: 'ok' }]);
 		expect(r.fallbackText).toBe('fallback');
+	});
+});
+
+describe('shouldRenderToolResultAsMarkdown', () => {
+	it('uses markdown for human-facing prose tools', () => {
+		for (const tool of [
+			'ask_user',
+			'exit_plan_mode',
+			'read_agent',
+			'report_intent',
+			'request_mode_switch',
+			'task_complete'
+		]) {
+			expect(shouldRenderToolResultAsMarkdown(tool)).toBe(true);
+			expect(shouldRenderToolResultAsMarkdown(tool.toUpperCase())).toBe(true);
+		}
+	});
+
+	it('keeps data and command output in the existing plain renderer', () => {
+		for (const tool of ['bash', 'view', 'rg', 'sql', 'session_store_sql']) {
+			expect(shouldRenderToolResultAsMarkdown(tool)).toBe(false);
+		}
 	});
 });
