@@ -55,6 +55,10 @@ export interface Conversation {
 // semantics in the bridge.
 export type SessionMode = 'interactive' | 'plan' | 'autopilot' | 'best-effort';
 
+export function normalizeSessionMode(raw: string | null | undefined): SessionMode {
+	return raw === 'plan' || raw === 'autopilot' || raw === 'best-effort' ? raw : 'interactive';
+}
+
 export interface Message {
 	id: string;
 	conversationId: string;
@@ -124,6 +128,7 @@ export interface FileEditRecord {
 export interface UserSettings {
 	defaultModel: string | null;
 	defaultWorkdir: string | null;
+	defaultConversationMode: SessionMode;
 	defaultPolicy: PermissionPolicy;
 	theme: 'dark' | 'light' | 'system';
 }

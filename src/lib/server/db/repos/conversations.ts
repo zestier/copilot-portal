@@ -1,6 +1,6 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
-import type { Conversation, SessionMode } from '$lib/types';
+import { normalizeSessionMode, type Conversation, type SessionMode } from '$lib/types';
 
 interface ConvRow {
 	id: string;
@@ -18,11 +18,7 @@ interface ConvRow {
 }
 
 function rowToConv(r: ConvRow): Conversation {
-	const rawMode = r.mode ?? 'interactive';
-	const mode: SessionMode =
-		rawMode === 'plan' || rawMode === 'autopilot' || rawMode === 'best-effort'
-			? rawMode
-			: 'interactive';
+	const mode = normalizeSessionMode(r.mode);
 	return {
 		id: r.id,
 		userId: r.user_id,
@@ -80,6 +76,7 @@ export interface CreateInput {
 	title: string;
 	workdir: string;
 	model: string | null;
+	mode?: SessionMode;
 	id?: string;
 	forkedFromConversationId?: string | null;
 	forkedFromMessageId?: string | null;
@@ -99,21 +96,22 @@ export function create(userId: string, input: CreateInput): Conversation {
 	const now = Date.now();
 	const forkConv = input.forkedFromConversationId ?? null;
 	const forkMsg = input.forkedFromMessageId ?? null;
+	const mode = input.mode ?? 'interactive';
 	getDb()
 		.prepare(
 			`INSERT INTO conversations(
-			   id, user_id, title, workdir, model, created_at, updated_at,
+			   id, user_id, title, workdir, model, mode, created_at, updated_at,
 			   forked_from_conversation_id, forked_from_message_id
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
-		.run(id, userId, input.title, input.workdir, input.model, now, now, forkConv, forkMsg);
+		.run(id, userId, input.title, input.workdir, input.model, mode, now, now, forkConv, forkMsg);
 	return {
 		id,
 		userId,
 		title: input.title,
 		workdir: input.workdir,
 		model: input.model,
-		mode: 'interactive',
+		mode,
 		approveAllTools: false,
 		createdAt: now,
 		updatedAt: now,

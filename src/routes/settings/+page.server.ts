@@ -6,7 +6,7 @@ import * as tokens from '$lib/server/db/repos/tokens';
 import { fetchAuthStatus, fetchModels } from '$lib/server/copilot/bridge';
 import { loadConfig } from '$lib/server/config';
 import { log } from '$lib/server/log';
-import type { PermissionPolicy, UserSettings } from '$lib/types';
+import type { PermissionPolicy, SessionMode, UserSettings } from '$lib/types';
 import { GrantInputSchema, permissionKindForTool } from '$lib/permissions/scope-schema';
 import { encodeScope } from '$lib/permissions/scope-codec';
 import { ensureSeedGrantsForUser } from '$lib/server/permissions/seed-grants';
@@ -61,6 +61,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 const SaveSchema = z.object({
 	defaultModel: z.string().optional(),
 	defaultWorkdir: z.string().optional(),
+	defaultConversationMode: z.enum(['interactive', 'plan', 'autopilot', 'best-effort']),
 	defaultPolicy: z.enum(['prompt', 'allow-all', 'deny-all']),
 	theme: z.enum(['dark', 'light', 'system'])
 });
@@ -72,6 +73,7 @@ export const actions: Actions = {
 		const parsed = SaveSchema.safeParse({
 			defaultModel: (data.get('defaultModel') as string) || undefined,
 			defaultWorkdir: (data.get('defaultWorkdir') as string) || undefined,
+			defaultConversationMode: data.get('defaultConversationMode'),
 			defaultPolicy: data.get('defaultPolicy'),
 			theme: data.get('theme')
 		});
@@ -85,6 +87,7 @@ export const actions: Actions = {
 		const next: UserSettings = {
 			defaultModel: parsed.data.defaultModel ?? null,
 			defaultWorkdir: parsed.data.defaultWorkdir ?? null,
+			defaultConversationMode: parsed.data.defaultConversationMode as SessionMode,
 			defaultPolicy: parsed.data.defaultPolicy as PermissionPolicy,
 			theme: parsed.data.theme
 		};

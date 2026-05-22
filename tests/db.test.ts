@@ -61,7 +61,13 @@ describe('db migrations + repos', () => {
 
 	it('round-trips the best-effort session mode', () => {
 		const u = users.ensureLocalUser();
-		const c = convs.create(u.id, { title: 't', workdir: '/tmp', model: null });
+		const c = convs.create(u.id, {
+			title: 't',
+			workdir: '/tmp',
+			model: null,
+			mode: 'autopilot'
+		});
+		expect(convs.get(c.id, u.id)?.mode).toBe('autopilot');
 		expect(convs.updateSessionSettings(c.id, u.id, { mode: 'best-effort' })).toBe(true);
 		expect(convs.get(c.id, u.id)?.mode).toBe('best-effort');
 	});
@@ -231,12 +237,14 @@ describe('db migrations + repos', () => {
 		settings.save(u.id, {
 			defaultModel: 'claude',
 			defaultWorkdir: null,
+			defaultConversationMode: 'best-effort',
 			defaultPolicy: 'allow-all',
 			theme: 'light'
 		});
 		expect(settings.get(u.id)).toEqual({
 			defaultModel: 'claude',
 			defaultWorkdir: null,
+			defaultConversationMode: 'best-effort',
 			defaultPolicy: 'allow-all',
 			theme: 'light'
 		});
@@ -247,6 +255,7 @@ describe('db migrations + repos', () => {
 		settings.save(u.id, {
 			defaultModel: null,
 			defaultWorkdir: null,
+			defaultConversationMode: 'interactive',
 			defaultPolicy: 'prompt',
 			theme: 'dark'
 		});

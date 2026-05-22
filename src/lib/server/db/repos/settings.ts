@@ -1,11 +1,12 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
-import type { UserSettings, PermissionPolicy } from '$lib/types';
+import { normalizeSessionMode, type UserSettings, type PermissionPolicy } from '$lib/types';
 
 interface SettingsRow {
 	user_id: string;
 	default_model: string | null;
 	default_workdir: string | null;
+	default_mode: string | null;
 	default_policy: string;
 	theme: string;
 	updated_at: number;
@@ -20,6 +21,7 @@ function rowToSettings(r: SettingsRow): UserSettings {
 	return {
 		defaultModel: r.default_model,
 		defaultWorkdir: r.default_workdir,
+		defaultConversationMode: normalizeSessionMode(r.default_mode),
 		defaultPolicy: policy,
 		theme: r.theme === 'light' ? 'light' : r.theme === 'system' ? 'system' : 'dark'
 	};
@@ -41,6 +43,7 @@ export function defaults(): UserSettings {
 	return {
 		defaultModel: null,
 		defaultWorkdir: null,
+		defaultConversationMode: 'interactive',
 		defaultPolicy: 'prompt',
 		theme: 'system'
 	};
@@ -49,16 +52,27 @@ export function defaults(): UserSettings {
 export function save(userId: string, s: UserSettings) {
 	getDb()
 		.prepare(
-			`INSERT INTO user_settings(user_id, default_model, default_workdir, default_policy, theme, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?)
+			`INSERT INTO user_settings(
+			   user_id, default_model, default_workdir, default_mode, default_policy, theme, updated_at
+			 )
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(user_id) DO UPDATE SET
 			   default_model = excluded.default_model,
 			   default_workdir = excluded.default_workdir,
+			   default_mode = excluded.default_mode,
 			   default_policy = excluded.default_policy,
 			   theme = excluded.theme,
 			   updated_at = excluded.updated_at`
 		)
-		.run(userId, s.defaultModel, s.defaultWorkdir, s.defaultPolicy, s.theme, Date.now());
+		.run(
+			userId,
+			s.defaultModel,
+			s.defaultWorkdir,
+			s.defaultConversationMode,
+			s.defaultPolicy,
+			s.theme,
+			Date.now()
+		);
 }
 
 // --- Permission grants ---

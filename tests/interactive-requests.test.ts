@@ -227,6 +227,7 @@ describe('interactive request registry', () => {
 		settings.save(userId, {
 			defaultModel: null,
 			defaultWorkdir: null,
+			defaultConversationMode: 'interactive',
 			defaultPolicy: 'deny-all',
 			theme: 'dark'
 		});
@@ -322,6 +323,7 @@ describe('interactive request registry', () => {
 		settings.save(userId, {
 			defaultModel: null,
 			defaultWorkdir: null,
+			defaultConversationMode: 'interactive',
 			defaultPolicy: 'deny-all',
 			theme: 'dark'
 		});

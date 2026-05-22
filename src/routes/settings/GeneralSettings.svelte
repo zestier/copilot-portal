@@ -6,6 +6,30 @@
 		type FormResult,
 		type SettingsData
 	} from './settings-types';
+	import type { SessionMode } from '$lib/types';
+
+	const MODE_OPTIONS: { value: SessionMode; label: string; hint: string }[] = [
+		{
+			value: 'interactive',
+			label: 'Interactive',
+			hint: 'Normal chat; tools prompt for permission.'
+		},
+		{
+			value: 'plan',
+			label: 'Plan',
+			hint: 'Plan-only; destructive tools stay blocked until the agent exits plan mode.'
+		},
+		{
+			value: 'autopilot',
+			label: 'Autopilot',
+			hint: 'The agent can work for longer stretches with less supervision.'
+		},
+		{
+			value: 'best-effort',
+			label: 'Best effort',
+			hint: 'Autopilot-style execution, but permission prompts auto-reject with feedback.'
+		}
+	];
 
 	let {
 		settings,
@@ -79,6 +103,19 @@
 				value={settings.defaultWorkdir ?? ''}
 				placeholder="(blank = PROJECT_ROOT)"
 			/>
+		</label>
+		<label>
+			Default conversation mode
+			<select name="defaultConversationMode" value={settings.defaultConversationMode}>
+				{#each MODE_OPTIONS as opt (opt.value)}
+					<option value={opt.value}>{opt.label}</option>
+				{/each}
+			</select>
+			<span class="muted small">
+				Applies to newly created conversations. Existing conversations keep their current mode.
+				<br />
+				{MODE_OPTIONS.find((opt) => opt.value === settings.defaultConversationMode)?.hint}
+			</span>
 		</label>
 		<label>
 			Permission policy
