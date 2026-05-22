@@ -237,6 +237,25 @@ describe('interactive request registry', () => {
 		expect(settings.hasGrant(userId, conversationId, 'shell')).toBe(false);
 	});
 
+	it('does not persist always grants for non-persistable permission prompts', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const requestId = newRequestId();
+		const view = permView(requestId);
+		if (view.kind !== 'permission') throw new Error('expected permission view');
+		makePending(
+			'permission',
+			{
+				...view,
+				tool: 'request_mode_switch',
+				permissionKind: 'custom-tool',
+				canPersistDecision: false
+			},
+			undefined
+		);
+		resolve(requestId, userId, { kind: 'permission', decision: 'allow-always' });
+		expect(settings.hasGrant(userId, conversationId, 'request_mode_switch')).toBe(false);
+	});
+
 	it('lists recent permission decisions for the user', async () => {
 		const settings = await import('../src/lib/server/db/repos/settings');
 		for (const decision of ['allow-once', 'deny', 'allow-always'] as const) {

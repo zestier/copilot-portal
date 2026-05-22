@@ -129,6 +129,14 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const body = (await parseBody(request, Body)) as InteractiveResponse;
 	const pending = interactive.get(params.requestId!);
 	if (!pending || pending.conversationId !== conv.id) throw error(404);
+	if (
+		pending.view.kind === 'permission' &&
+		pending.view.canPersistDecision === false &&
+		body.kind === 'permission' &&
+		(body.decision === 'allow-always' || body.decision === 'deny-always')
+	) {
+		throw error(400, 'persistent decisions are not allowed for this request');
+	}
 
 	const ok = interactive.resolve(params.requestId!, conv.userId, body);
 	if (!ok) throw error(409, 'kind mismatch or already resolved');

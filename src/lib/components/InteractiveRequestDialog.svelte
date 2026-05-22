@@ -142,6 +142,10 @@
 		request.kind === 'permission' && request.userPolicy === 'deny-all'
 	);
 
+	const canPersistDecision = $derived(
+		request.kind === 'permission' && request.canPersistDecision !== false
+	);
+
 	function parentDirOf(p: string): string | null {
 		if (!p || !p.startsWith('/')) return null;
 		const i = p.lastIndexOf('/');
@@ -373,6 +377,7 @@
 	}
 
 	function pickAlways(decision: 'allow-always' | 'deny-always') {
+		if (!canPersistDecision) return;
 		if (decision === 'allow-always' && denyAllPolicy) return;
 		// Shell branch: structured per-argv0 grants from the checkbox
 		// picker take precedence over the legacy scope/pattern flow.
@@ -487,6 +492,7 @@
 			e.preventDefault();
 			pick({ kind: 'permission', decision: 'deny' });
 		} else if (e.key === 'Enter' && e.shiftKey) {
+			if (!canPersistDecision) return;
 			if (denyAllPolicy) return;
 			e.preventDefault();
 			pickAlways('allow-always');
@@ -545,119 +551,124 @@
 				</details>
 			{/if}
 
-			<details class="grant-scope">
-				<summary>Remember this decision (optional)</summary>
-				<div class="scope-body">
-					{#if isShellWithAnalysis}
-						<fieldset class="scope-group">
-							<legend>Persist grants for</legend>
-							{#if shellOptions.length === 0}
-								<div class="muted small">
-									No persistable scopes derivable from this command (all argv[0]s were
-									path-qualified or otherwise unsafe to anchor a grant on).
-								</div>
-							{:else}
-								<div class="muted small">
-									Check every scope you want to remember. Each becomes its own grant and is combined
-									at decision time — covering more invocations than this exact pipeline.
-								</div>
-								{#each shellOptions as opt (opt.id)}
+			{#if canPersistDecision}
+				<details class="grant-scope">
+					<summary>Remember this decision (optional)</summary>
+					<div class="scope-body">
+						{#if isShellWithAnalysis}
+							<fieldset class="scope-group">
+								<legend>Persist grants for</legend>
+								{#if shellOptions.length === 0}
+									<div class="muted small">
+										No persistable scopes derivable from this command (all argv[0]s were
+										path-qualified or otherwise unsafe to anchor a grant on).
+									</div>
+								{:else}
+									<div class="muted small">
+										Check every scope you want to remember. Each becomes its own grant and is
+										combined at decision time — covering more invocations than this exact pipeline.
+									</div>
+									{#each shellOptions as opt (opt.id)}
+										<label class="scope-option">
+											<input
+												type="checkbox"
+												checked={!!shellChecked[opt.id]}
+												onchange={(e) =>
+													(shellChecked[opt.id] = (e.currentTarget as HTMLInputElement).checked)}
+											/>
+											{opt.label}
+										</label>
+									{/each}
+								{/if}
+							</fieldset>
+						{:else if isShellUnsafe}
+							<div class="muted small">
+								Structured grants are unavailable for commands the parser can't model. Use Settings
+								→ Permissions to add a coarse "any shell from this tool" grant if you really want
+								one.
+							</div>
+						{:else}
+							<fieldset class="scope-group">
+								<legend>Scope</legend>
+								{#each scopeChoices as choice (choice)}
+									{@const c = choice as typeof scopeChoice}
 									<label class="scope-option">
 										<input
-											type="checkbox"
-											checked={!!shellChecked[opt.id]}
-											onchange={(e) =>
-												(shellChecked[opt.id] = (e.currentTarget as HTMLInputElement).checked)}
+											type="radio"
+											name="perm-scope"
+											value={c}
+											checked={scopeChoice === c}
+											disabled={(c === 'this-exact' && !permissionScopeKey) ||
+												(c === 'this-directory' && !fsParentDir)}
+											onchange={() => (scopeChoice = c)}
 										/>
-										{opt.label}
+										{scopeOptionLabel(c)}
 									</label>
 								{/each}
-							{/if}
-						</fieldset>
-					{:else if isShellUnsafe}
-						<div class="muted small">
-							Structured grants are unavailable for commands the parser can't model. Use Settings →
-							Permissions to add a coarse "any shell from this tool" grant if you really want one.
-						</div>
-					{:else}
+								{#if scopeChoice === 'this-exact' && permissionScopeKey}
+									<div class="muted small">
+										Matches pattern: <code>{permissionScopeKey}</code>
+									</div>
+								{:else if scopeChoice === 'this-directory' && fsParentDir}
+									<div class="muted small">
+										Matches any path resolving inside <code>{fsParentDir}/</code> (symlinks followed).
+									</div>
+								{/if}
+							</fieldset>
+						{/if}
 						<fieldset class="scope-group">
-							<legend>Scope</legend>
-							{#each scopeChoices as choice (choice)}
-								{@const c = choice as typeof scopeChoice}
-								<label class="scope-option">
-									<input
-										type="radio"
-										name="perm-scope"
-										value={c}
-										checked={scopeChoice === c}
-										disabled={(c === 'this-exact' && !permissionScopeKey) ||
-											(c === 'this-directory' && !fsParentDir)}
-										onchange={() => (scopeChoice = c)}
-									/>
-									{scopeOptionLabel(c)}
-								</label>
-							{/each}
-							{#if scopeChoice === 'this-exact' && permissionScopeKey}
-								<div class="muted small">
-									Matches pattern: <code>{permissionScopeKey}</code>
-								</div>
-							{:else if scopeChoice === 'this-directory' && fsParentDir}
-								<div class="muted small">
-									Matches any path resolving inside <code>{fsParentDir}/</code> (symlinks followed).
-								</div>
-							{/if}
+							<legend>Applies to</legend>
+							<label class="scope-option">
+								<input
+									type="radio"
+									name="perm-applies"
+									value="this-conversation"
+									checked={appliesTo === 'this-conversation'}
+									onchange={() => (appliesTo = 'this-conversation')}
+								/>
+								Just this conversation
+							</label>
+							<label class="scope-option">
+								<input
+									type="radio"
+									name="perm-applies"
+									value="all-conversations"
+									checked={appliesTo === 'all-conversations'}
+									onchange={() => (appliesTo = 'all-conversations')}
+								/>
+								Every conversation (global)
+							</label>
 						</fieldset>
-					{/if}
-					<fieldset class="scope-group">
-						<legend>Applies to</legend>
-						<label class="scope-option">
-							<input
-								type="radio"
-								name="perm-applies"
-								value="this-conversation"
-								checked={appliesTo === 'this-conversation'}
-								onchange={() => (appliesTo = 'this-conversation')}
-							/>
-							Just this conversation
+						<label class="expiry">
+							Expires:
+							<select
+								value={expiryChoice}
+								onchange={(e) =>
+									(expiryChoice = (e.currentTarget as HTMLSelectElement).value as
+										| 'forever'
+										| '1h'
+										| '1d')}
+							>
+								<option value="forever">Never</option>
+								<option value="1h">In 1 hour</option>
+								<option value="1d">In 1 day</option>
+							</select>
 						</label>
-						<label class="scope-option">
-							<input
-								type="radio"
-								name="perm-applies"
-								value="all-conversations"
-								checked={appliesTo === 'all-conversations'}
-								onchange={() => (appliesTo = 'all-conversations')}
-							/>
-							Every conversation (global)
-						</label>
-					</fieldset>
-					<label class="expiry">
-						Expires:
-						<select
-							value={expiryChoice}
-							onchange={(e) =>
-								(expiryChoice = (e.currentTarget as HTMLSelectElement).value as
-									| 'forever'
-									| '1h'
-									| '1d')}
-						>
-							<option value="forever">Never</option>
-							<option value="1h">In 1 hour</option>
-							<option value="1d">In 1 day</option>
-						</select>
-					</label>
-				</div>
-			</details>
+					</div>
+				</details>
+			{/if}
 		</div>
 		<div class="actions">
-			<button
-				class="btn"
-				disabled={busy || (isShellRequest && !isShellWithAnalysis ? false : false)}
-				onclick={() => pickAlways('deny-always')}
-				title={isShellWithAnalysis
-					? previewShellAlways('deny-always')
-					: previewAlways('deny-always')}>Deny always</button
-			>
+			{#if canPersistDecision}
+				<button
+					class="btn"
+					disabled={busy || (isShellRequest && !isShellWithAnalysis ? false : false)}
+					onclick={() => pickAlways('deny-always')}
+					title={isShellWithAnalysis
+						? previewShellAlways('deny-always')
+						: previewAlways('deny-always')}>Deny always</button
+				>
+			{/if}
 			<button
 				class="btn"
 				disabled={busy}
@@ -670,41 +681,45 @@
 				onclick={() => pick({ kind: 'permission', decision: 'allow-once' })}
 				title="Enter">Allow once</button
 			>
-			<button
-				class="btn primary"
-				disabled={busy ||
-					denyAllPolicy ||
-					isShellUnsafe ||
-					(isShellWithAnalysis && shellCheckedCount === 0)}
-				onclick={() => pickAlways('allow-always')}
-				title={denyAllPolicy
-					? 'Your default policy is "Deny all" — change it in Settings before saving Allow grants.'
-					: isShellUnsafe
-						? 'Structured grants unavailable for unparseable commands. Use "Allow once" or add a grant from Settings.'
-						: isShellWithAnalysis && shellCheckedCount === 0
-							? 'Check at least one scope above to remember this allow.'
-							: `${isShellWithAnalysis ? previewShellAlways('allow-always') : previewAlways('allow-always')}  (Shift+Enter)`}
-				>Allow always</button
-			>
-		</div>
-		<div class="preview muted small" aria-live="polite">
-			<span
-				><strong>Allow always</strong> → {isShellWithAnalysis
-					? previewShellAlways('allow-always')
-					: previewAlways('allow-always')}</span
-			>
-			<span
-				><strong>Deny always</strong> → {isShellWithAnalysis
-					? previewShellAlways('deny-always')
-					: previewAlways('deny-always')}</span
-			>
-			{#if denyAllPolicy}
-				<span class="warning"
-					>Default policy is <strong>Deny all</strong>; "Allow always" is disabled so it doesn't get
-					silently dropped.</span
+			{#if canPersistDecision}
+				<button
+					class="btn primary"
+					disabled={busy ||
+						denyAllPolicy ||
+						isShellUnsafe ||
+						(isShellWithAnalysis && shellCheckedCount === 0)}
+					onclick={() => pickAlways('allow-always')}
+					title={denyAllPolicy
+						? 'Your default policy is "Deny all" — change it in Settings before saving Allow grants.'
+						: isShellUnsafe
+							? 'Structured grants unavailable for unparseable commands. Use "Allow once" or add a grant from Settings.'
+							: isShellWithAnalysis && shellCheckedCount === 0
+								? 'Check at least one scope above to remember this allow.'
+								: `${isShellWithAnalysis ? previewShellAlways('allow-always') : previewAlways('allow-always')}  (Shift+Enter)`}
+					>Allow always</button
 				>
 			{/if}
 		</div>
+		{#if canPersistDecision}
+			<div class="preview muted small" aria-live="polite">
+				<span
+					><strong>Allow always</strong> → {isShellWithAnalysis
+						? previewShellAlways('allow-always')
+						: previewAlways('allow-always')}</span
+				>
+				<span
+					><strong>Deny always</strong> → {isShellWithAnalysis
+						? previewShellAlways('deny-always')
+						: previewAlways('deny-always')}</span
+				>
+				{#if denyAllPolicy}
+					<span class="warning"
+						>Default policy is <strong>Deny all</strong>; "Allow always" is disabled so it doesn't
+						get silently dropped.</span
+					>
+				{/if}
+			</div>
+		{/if}
 	{:else if request.kind === 'auto_mode_switch'}
 		<div class="head">Switch to auto mode?</div>
 		<div class="body">

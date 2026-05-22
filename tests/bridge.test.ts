@@ -315,7 +315,8 @@ describe('bridge.open() session mode and permissions', () => {
 			request: {
 				kind: 'permission',
 				tool: 'request_mode_switch',
-				permissionKind: 'custom-tool'
+				permissionKind: 'custom-tool',
+				canPersistDecision: false
 			}
 		});
 		ac.abort();

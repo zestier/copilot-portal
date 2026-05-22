@@ -175,6 +175,12 @@ export interface InteractivePermissionView {
 	 */
 	userPolicy?: PermissionPolicy;
 	/**
+	 * False for sensitive one-shot permissions (for example switching a
+	 * best-effort conversation back to interactive mode). The dialog must not
+	 * offer persistent allow/deny actions, and the server rejects them.
+	 */
+	canPersistDecision?: boolean;
+	/**
 	 * For `shell` permissions: the server-side parser's verdict on the
 	 * command. `parsed` means we tokenized it into segments split on
 	 * `&&`/`||`/`;`/`|`; the dialog uses this to break the pipeline out

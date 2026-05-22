@@ -176,6 +176,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				summary,
 				args: req.args ?? null,
 				userPolicy: opts.policy,
+				canPersistDecision: !isModeSwitchToolRequest,
 				shellAnalysis
 			}
 		);

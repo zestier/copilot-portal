@@ -157,7 +157,9 @@ export function resolve(requestId: string, userId: string, response: Interactive
 				typeof p.view.summary === 'string' ? p.view.summary : '',
 				response.decision
 			);
-			const isAlways = response.decision === 'allow-always' || response.decision === 'deny-always';
+			const isAlways =
+				p.view.canPersistDecision !== false &&
+				(response.decision === 'allow-always' || response.decision === 'deny-always');
 			if (isAlways) {
 				const grantDecision = response.decision === 'allow-always' ? 'allow' : 'deny';
 				const targetConversationId = response.applyToAllConversations ? null : p.conversationId;
