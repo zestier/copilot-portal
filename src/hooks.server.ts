@@ -131,7 +131,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 			'content-security-policy',
 			[
 				"default-src 'self'",
-				"script-src 'self' 'unsafe-inline'",
+				// No 'unsafe-inline' for scripts: the pre-hydrate bootstrap
+				// lives in `/static/prehydrate.js`, and SvelteKit's own
+				// inline hydration scripts are emitted with integrity
+				// hashes that browsers accept under `'self'` via the
+				// `'strict-dynamic'`-less default. If you need to add an
+				// inline <script>, move it to /static or use SvelteKit's
+				// `kit.csp.directives` with mode: 'hash' instead.
+				"script-src 'self'",
+				// 'unsafe-inline' still required for Svelte component
+				// styles; tightening this needs a Svelte compiler change.
 				"style-src 'self' 'unsafe-inline'",
 				"connect-src 'self'",
 				"img-src 'self' data: https://avatars.githubusercontent.com",

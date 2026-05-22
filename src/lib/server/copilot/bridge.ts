@@ -37,13 +37,21 @@ import { StubCopilotClient, isStubMode } from './bridge-stub';
 
 type RuntimeSessionMode = 'interactive' | 'plan' | 'autopilot';
 
-let sharedClient: CopilotClient | null = null;
-let starting: Promise<CopilotClient> | null = null;
+// One CopilotClient per portal user. Sharing a single process-wide
+// client would cause the SDK subprocess spawned for whichever user
+// logged in first to handle every other user's turns too — which
+// silently re-attributes Copilot API calls (billing, audit trail) to
+// the wrong GitHub identity. With the documented multi-user allowlist
+// (`ALLOWED_GITHUB_LOGINS`) that's a real cross-user bleed.
+const clients = new Map<string, CopilotClient>();
+const starting = new Map<string, Promise<CopilotClient>>();
 
-export async function getClient(authToken?: string): Promise<CopilotClient> {
-	if (sharedClient) return sharedClient;
-	if (starting) return starting;
-	starting = (async () => {
+export async function getClient(userId: string, authToken?: string): Promise<CopilotClient> {
+	const existing = clients.get(userId);
+	if (existing) return existing;
+	const inflight = starting.get(userId);
+	if (inflight) return inflight;
+	const p = (async () => {
 		const cliUrl = process.env.COPILOT_CLI_URL?.trim();
 		const client = isStubMode()
 			? (new StubCopilotClient() as unknown as CopilotClient)
@@ -56,42 +64,52 @@ export async function getClient(authToken?: string): Promise<CopilotClient> {
 						gitHubToken: authToken
 					});
 		await client.start();
-		sharedClient = client;
-		log.info('copilot.client.started');
+		clients.set(userId, client);
+		log.info('copilot.client.started', { userId });
 		return client;
 	})();
+	starting.set(userId, p);
 	try {
-		return await starting;
+		return await p;
 	} finally {
-		starting = null;
+		starting.delete(userId);
 	}
 }
 
 export async function shutdownClient() {
-	if (!sharedClient) return;
-	try {
-		await sharedClient.stop();
-	} catch (e) {
-		log.warn('copilot.client.stop_failed', { err: String(e) });
+	const all = [...clients.values()];
+	clients.clear();
+	starting.clear();
+	for (const c of all) {
+		try {
+			await c.stop();
+		} catch (e) {
+			log.warn('copilot.client.stop_failed', { err: String(e) });
+		}
 	}
-	sharedClient = null;
 }
 
-let modelsCache: { at: number; models: ModelInfo[] } | null = null;
+// Per-user listModels cache: entitlements (and therefore the list of
+// available models) can differ between users.
+const modelsCache = new Map<string, { at: number; models: ModelInfo[] }>();
 const MODELS_TTL_MS = 5 * 60_000;
 
-export async function fetchAuthStatus(authToken?: string): Promise<GetAuthStatusResponse> {
-	const client = await getClient(authToken);
+export async function fetchAuthStatus(
+	userId: string,
+	authToken?: string
+): Promise<GetAuthStatusResponse> {
+	const client = await getClient(userId, authToken);
 	return client.getAuthStatus();
 }
 
-export async function fetchModels(authToken?: string): Promise<ModelInfo[]> {
-	if (modelsCache && Date.now() - modelsCache.at < MODELS_TTL_MS) {
-		return modelsCache.models;
+export async function fetchModels(userId: string, authToken?: string): Promise<ModelInfo[]> {
+	const cached = modelsCache.get(userId);
+	if (cached && Date.now() - cached.at < MODELS_TTL_MS) {
+		return cached.models;
 	}
-	const client = await getClient(authToken);
+	const client = await getClient(userId, authToken);
 	const models = await client.listModels();
-	modelsCache = { at: Date.now(), models };
+	modelsCache.set(userId, { at: Date.now(), models });
 	return models;
 }
 
@@ -166,7 +184,7 @@ interface PermissionRequestLike {
 }
 
 export async function open(opts: BridgeOpenOptions): Promise<ConversationSession> {
-	const client = await getClient(opts.authToken);
+	const client = await getClient(opts.userId, opts.authToken);
 
 	let currentMessageId: string | null = null;
 	let activeQueue: AsyncQueue<PortalEvent> | null = null;

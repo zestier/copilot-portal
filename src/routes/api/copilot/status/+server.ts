@@ -12,7 +12,10 @@ export const GET: RequestHandler = async ({ locals }) => {
 	const authToken = tokens.getGithubToken(userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
 
 	try {
-		const [auth, models] = await Promise.all([fetchAuthStatus(authToken), fetchModels(authToken)]);
+		const [auth, models] = await Promise.all([
+			fetchAuthStatus(userId, authToken),
+			fetchModels(userId, authToken)
+		]);
 		return json({ auth, models });
 	} catch (e) {
 		log.warn('copilot.status.failed', { err: String(e) });

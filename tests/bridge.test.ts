@@ -29,21 +29,29 @@ const clientStub = {
 	getSessionMetadata: vi.fn()
 };
 
+// Count how many times `new CopilotClient(...)` runs so tests can
+// distinguish "one shared client" from "one per portal user". The mock
+// constructor still returns the same `clientStub` instance — what we
+// care about is how many distinct construction calls happened.
+const clientCtor = vi.fn();
+
 vi.mock('@github/copilot-sdk', () => {
 	class CopilotClient {
-		constructor() {
+		constructor(...args: unknown[]) {
+			clientCtor(...args);
 			return clientStub as unknown as CopilotClient;
 		}
 	}
 	return { CopilotClient };
 });
 
-// Import after the mock is registered. The bridge module caches the client
-// in a module-level `sharedClient`, so we use vi.resetModules between tests
-// to force a fresh import (and a fresh `new CopilotClient(...)` call which
-// still returns our stub).
+// Import after the mock is registered. The bridge module caches a
+// CopilotClient per portal `userId`; we use vi.resetModules() between
+// tests to force a fresh import (and a fresh `new CopilotClient(...)`
+// call which still returns our stub).
 async function importBridge() {
 	vi.resetModules();
+	clientCtor.mockClear();
 	return await import('../src/lib/server/copilot/bridge');
 }
 
@@ -486,5 +494,34 @@ describe('bridge.open() tool live-streaming events', () => {
 		}
 		expect(events.find((e) => e.type === 'tool.partial_output')).toBeUndefined();
 		expect(events.find((e) => e.type === 'tool.progress')).toBeUndefined();
+	});
+});
+
+describe('bridge.open() per-user CopilotClient caching', () => {
+	it('reuses one CopilotClient when the same userId opens multiple sessions', async () => {
+		const { open } = await importBridge();
+
+		await open({ ...baseOpts, conversationId: 'conv-a', userId: 'alice' });
+		await open({ ...baseOpts, conversationId: 'conv-b', userId: 'alice' });
+
+		expect(clientCtor).toHaveBeenCalledTimes(1);
+	});
+
+	it('starts a separate CopilotClient for each distinct userId', async () => {
+		const { open } = await importBridge();
+
+		await open({ ...baseOpts, conversationId: 'conv-a', userId: 'alice', authToken: 'tok-A' });
+		await open({ ...baseOpts, conversationId: 'conv-b', userId: 'bob', authToken: 'tok-B' });
+
+		// One construction per portal user. This is the guard against the
+		// "first-logged-in-user's token serves every other user" bug.
+		expect(clientCtor).toHaveBeenCalledTimes(2);
+		// Each construction sees that user's own token. The bridge wires
+		// gitHubToken from opts.authToken, so we can assert the SDK was
+		// handed the right credentials per user.
+		const firstArgs = clientCtor.mock.calls[0][0] as { gitHubToken?: string };
+		const secondArgs = clientCtor.mock.calls[1][0] as { gitHubToken?: string };
+		expect(firstArgs.gitHubToken).toBe('tok-A');
+		expect(secondArgs.gitHubToken).toBe('tok-B');
 	});
 });

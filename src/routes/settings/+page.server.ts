@@ -26,7 +26,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		error?: string;
 	};
 	try {
-		const [auth, models] = await Promise.all([fetchAuthStatus(authToken), fetchModels(authToken)]);
+		const [auth, models] = await Promise.all([
+			fetchAuthStatus(locals.userId, authToken),
+			fetchModels(locals.userId, authToken)
+		]);
 		copilot = {
 			auth: {
 				isAuthenticated: auth.isAuthenticated,

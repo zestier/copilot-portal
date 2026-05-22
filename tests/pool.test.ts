@@ -98,4 +98,84 @@ describe('copilot session pool', () => {
 		expect(openMock).toHaveBeenCalledTimes(2);
 		expect(second.workingDirectory).toBe('/tmp/work-b');
 	});
+
+	it('coalesces concurrent acquires for the same conversation into one open()', async () => {
+		const session = {
+			conversationId: 'conv-1',
+			workingDirectory: '/tmp/work-a',
+			lastUsed: Date.now(),
+			send: vi.fn(),
+			abort: vi.fn(),
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setMode: vi.fn(),
+			setApproveAll: vi.fn(),
+			resetSessionApprovals: vi.fn()
+		};
+		let resolveOpen!: (s: typeof session) => void;
+		openMock.mockImplementationOnce(
+			() =>
+				new Promise<typeof session>((res) => {
+					resolveOpen = res;
+				})
+		);
+		const pool = await importPool();
+
+		const a = pool.acquire({
+			conversationId: 'conv-1',
+			userId: 'user-1',
+			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
+			policy: 'prompt'
+		});
+		const b = pool.acquire({
+			conversationId: 'conv-1',
+			userId: 'user-1',
+			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
+			policy: 'prompt'
+		});
+		resolveOpen(session);
+		const [r1, r2] = await Promise.all([a, b]);
+
+		expect(r1).toBe(session);
+		expect(r2).toBe(session);
+		expect(openMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('drops the in-flight cache entry when open() rejects so retries can proceed', async () => {
+		const err = new Error('boom');
+		openMock.mockRejectedValueOnce(err);
+		const session = {
+			conversationId: 'conv-1',
+			workingDirectory: '/tmp/work-a',
+			lastUsed: Date.now(),
+			send: vi.fn(),
+			abort: vi.fn(),
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setMode: vi.fn(),
+			setApproveAll: vi.fn(),
+			resetSessionApprovals: vi.fn()
+		};
+		openMock.mockResolvedValueOnce(session);
+		const pool = await importPool();
+
+		await expect(
+			pool.acquire({
+				conversationId: 'conv-1',
+				userId: 'user-1',
+				workingDirectory: '/tmp/work-a',
+				model: 'gpt-4',
+				policy: 'prompt'
+			})
+		).rejects.toBe(err);
+		const ok = await pool.acquire({
+			conversationId: 'conv-1',
+			userId: 'user-1',
+			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
+			policy: 'prompt'
+		});
+		expect(ok).toBe(session);
+		expect(openMock).toHaveBeenCalledTimes(2);
+	});
 });

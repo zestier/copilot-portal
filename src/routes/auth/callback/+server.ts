@@ -2,7 +2,6 @@ import { error, redirect } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { exchangeCode, fetchProfile, isAllowed } from '$lib/server/auth/github';
 import { upsertGithub } from '$lib/server/db/repos/users';
-import { setGithubToken } from '$lib/server/db/repos/tokens';
 import { issue } from '$lib/server/auth/session';
 import { log } from '$lib/server/log';
 
@@ -36,7 +35,12 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		displayName: profile.name,
 		avatarUrl: profile.avatar_url
 	});
-	setGithubToken(user.id, token);
+	// We intentionally do NOT persist the OAuth access token. With the
+	// default scope=read:user it has no Copilot entitlement and the SDK
+	// falls back to host CLI creds anyway, so storing it would just keep
+	// an encrypted-but-useless credential at rest. Operators who widen
+	// the scope and want to forward the token to the SDK can plumb their
+	// own setGithubToken() call here.
 	issue(cookies, user.id, url.protocol === 'https:');
 	throw redirect(303, '/');
 };

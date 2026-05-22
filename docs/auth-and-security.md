@@ -52,7 +52,9 @@ authenticating reverse proxy in front.
 
 ## Session cookies
 
-- Signed JWT (`HS256`) with `sub=<userId>`, `iat`, `exp`.
+- HMAC-SHA256-signed compact payload: `base64url(JSON({sub, iat, exp})).base64url(sig)`.
+  Resembles a JWT but is not one (no header, no algorithm negotiation —
+  see `src/lib/server/auth/session.ts`). The signing key is `SESSION_SECRET`.
 - Stored as `__Host-portal_session` (forces `Secure`, `Path=/`, no
   `Domain=`).
 - Rotated on each successful auth.
@@ -73,19 +75,39 @@ authenticating reverse proxy in front.
 The Copilot subscription auth used by the SDK is distinct from the portal's
 login token.
 
-Three strategies, configurable per user:
+Two strategies, configurable per user:
 
-1. **Forward portal-issued GitHub OAuth token** — simplest; works if your
-   OAuth app's user-to-server token has Copilot entitlement. The token is
-   read from encrypted storage and injected into the SDK subprocess as
-   `COPILOT_GITHUB_TOKEN` in its environment. Never logged, never echoed
-   to the client.
-2. **Pre-run `copilot auth login`** on the host — the SDK picks up the
-   stored CLI credentials. The portal does no token handling. Best for
-   single-user home installs.
-3. **BYOK** — user pastes an OpenAI/Anthropic key in `/settings`; stored
+1. **Pre-run `copilot auth login`** on the host — the SDK picks up the
+   stored CLI credentials. Recommended for single-user home installs and
+   the path that works out of the box.
+2. **BYOK** — user pastes an OpenAI/Anthropic key in `/settings`; stored
    encrypted; forwarded as the appropriate env var. Limits model selection
    accordingly.
+
+The portal stores **no** GitHub OAuth access token by default. With
+`scope=read:user` (set in `src/lib/server/auth/github.ts`) the token has
+no Copilot entitlement, so persisting it would just keep an
+encrypted-but-useless credential at rest. The SDK falls back to whatever
+the host's `copilot auth login` produced. If you've widened the OAuth
+scope and want the OAuth token forwarded to the SDK, re-add a
+`setGithubToken(user.id, token)` call in `src/routes/auth/callback/+server.ts`
+— the read paths in the bridge plumbing still consume it. The
+`getGithubToken`/`setGithubToken` helpers in `src/lib/server/db/repos/tokens.ts`
+remain available for that, and for BYOK key storage which uses the same
+table.
+
+The fallback chain the SDK sees, in order, is:
+`tokens.getGithubToken(userId)` → `COPILOT_GITHUB_TOKEN` env → undefined
+(host CLI creds via `useLoggedInUser`).
+
+Whatever token the SDK ends up using is never logged and never echoed
+back to the client.
+
+The portal keeps one Copilot SDK subprocess per portal user (see
+`src/lib/server/copilot/bridge.ts`). When `ALLOWED_GITHUB_LOGINS` lists
+multiple users, each gets their own client so Copilot API calls are
+attributed to the right GitHub identity instead of whoever logged in
+first after process boot.
 
 ## Working-directory containment
 
@@ -123,12 +145,17 @@ Three strategies, configurable per user:
   `DOMPurify` (see `src/lib/client/markdown.ts`). Assistant content is
   never injected into SSR HTML; the chat transcript is hydrated and
   rendered in the browser, where DOMPurify uses the real DOM.
-- A strict default CSP is sent from `hooks.server.ts`:
+- A strict default CSP is sent. Inline-script-emitting pages use
+  SvelteKit's hash-mode CSP integration (`kit.csp.directives` in
+  `svelte.config.js`) so we can omit `'unsafe-inline'` from `script-src`;
+  a matching CSP for non-HTML responses (API JSON, SSE) is set in
+  `src/hooks.server.ts`:
   - `default-src 'self'`
-  - `script-src 'self'` (no `unsafe-inline`; SvelteKit hashes inline scripts)
+  - `script-src 'self'` (hashes for inline hydration scripts auto-injected
+    by SvelteKit; the pre-hydrate bootstrap lives at `/prehydrate.js`)
   - `style-src 'self' 'unsafe-inline'` (Svelte component styles)
   - `connect-src 'self'`
-  - `img-src 'self' data:`
+  - `img-src 'self' data: https://avatars.githubusercontent.com`
   - `frame-ancestors 'none'`
 
 ## Rate limiting
