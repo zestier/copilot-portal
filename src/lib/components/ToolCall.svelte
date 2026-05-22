@@ -15,7 +15,18 @@
 	// enough running feedback for the quick tool calls that make up the
 	// bulk of a turn. (Subagents have their own auto-expand because they
 	// run longer and have richer interior content.)
-	let open = $state(false);
+	// `task_complete` is the exception because its result is often the
+	// assistant's final user-facing summary.
+	let userToggled = $state(false);
+	let manualOpen = $state(false);
+	const defaultOpen = $derived(toolCall.tool === 'task_complete');
+	const open = $derived(userToggled ? manualOpen : defaultOpen);
+
+	function onToggle(e: Event) {
+		const el = e.currentTarget as HTMLDetailsElement;
+		userToggled = true;
+		manualOpen = el.open;
+	}
 
 	function statusEmoji(s: ToolCallRecord['status']) {
 		switch (s) {
@@ -58,7 +69,7 @@
 	});
 </script>
 
-<details class="tool" class:open class:is-pending={pending} bind:open>
+<details class="tool" class:open class:is-pending={pending} {open} ontoggle={onToggle}>
 	<summary>
 		<span class="emoji">{statusEmoji(toolCall.status)}</span>
 		<code>{toolCall.tool}</code>
