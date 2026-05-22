@@ -188,6 +188,10 @@ export function updateContent(id: string, content: string, status: MessageStatus
 		.run(content, status, id);
 }
 
+export function updateContentOnly(id: string, content: string) {
+	getDb().prepare('UPDATE messages SET content = ? WHERE id = ?').run(content, id);
+}
+
 export function insertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messageId'>) {
 	getDb()
 		.prepare(
@@ -206,6 +210,48 @@ export function insertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messa
 			t.textOffset,
 			t.parentToolCallId ?? null
 		);
+}
+
+export function upsertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messageId'>) {
+	getDb()
+		.prepare(
+			`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at, text_offset, parent_tool_call_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET
+			   message_id = excluded.message_id,
+			   tool = excluded.tool,
+			   args_json = excluded.args_json,
+			   result_json = excluded.result_json,
+			   status = excluded.status,
+			   started_at = excluded.started_at,
+			   ended_at = excluded.ended_at,
+			   text_offset = excluded.text_offset,
+			   parent_tool_call_id = excluded.parent_tool_call_id`
+		)
+		.run(
+			t.id,
+			messageId,
+			t.tool,
+			t.argsJson,
+			t.resultJson,
+			t.status,
+			t.startedAt,
+			t.endedAt,
+			t.textOffset,
+			t.parentToolCallId ?? null
+		);
+}
+
+export function getToolCallArgs(id: string): unknown | null {
+	const row = getDb().prepare('SELECT args_json FROM tool_calls WHERE id = ?').get(id) as
+		| { args_json: string }
+		| undefined;
+	if (!row) return null;
+	try {
+		return JSON.parse(row.args_json);
+	} catch {
+		return null;
+	}
 }
 
 export function updateToolCall(
@@ -249,6 +295,35 @@ export function insertFileEdit(
 		.run(id, messageId, path, diff, Date.now(), textOffset, parentToolCallId);
 }
 
+export function upsertReasoningBlock(
+	messageId: string,
+	r: Omit<ReasoningBlockRecord, 'messageId'>
+) {
+	getDb()
+		.prepare(
+			`INSERT INTO reasoning_blocks(id, message_id, segment_index, text, text_offset, started_at, duration_ms, parent_tool_call_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET
+			   message_id = excluded.message_id,
+			   segment_index = excluded.segment_index,
+			   text = excluded.text,
+			   text_offset = excluded.text_offset,
+			   started_at = excluded.started_at,
+			   duration_ms = excluded.duration_ms,
+			   parent_tool_call_id = excluded.parent_tool_call_id`
+		)
+		.run(
+			r.id,
+			messageId,
+			r.segmentIndex,
+			r.text,
+			r.textOffset,
+			r.startedAt,
+			r.durationMs ?? null,
+			r.parentToolCallId ?? null
+		);
+}
+
 export function insertReasoningBlock(
 	messageId: string,
 	r: Omit<ReasoningBlockRecord, 'messageId'>
@@ -268,4 +343,31 @@ export function insertReasoningBlock(
 			r.durationMs ?? null,
 			r.parentToolCallId ?? null
 		);
+}
+
+export function recoverInterruptedInFlight(now: number = Date.now()): {
+	messages: number;
+	toolCalls: number;
+} {
+	const db = getDb();
+	const tx = db.transaction(() => {
+		const msg = db
+			.prepare(
+				`UPDATE messages
+				   SET status = 'interrupted',
+				       error_code = COALESCE(error_code, 'server_restarted')
+				 WHERE status = 'streaming'`
+			)
+			.run();
+		const tools = db
+			.prepare(
+				`UPDATE tool_calls
+				   SET status = 'error',
+				       ended_at = COALESCE(ended_at, ?)
+				 WHERE status = 'pending'`
+			)
+			.run(now);
+		return { messages: msg.changes, toolCalls: tools.changes };
+	});
+	return tx();
 }

@@ -265,4 +265,37 @@ describe('db migrations + repos', () => {
 			.run('allow-readonly', u.id);
 		expect(settings.get(u.id)?.defaultPolicy).toBe('prompt');
 	});
+
+	it('recovers interrupted in-flight assistant messages and pending tool calls', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, { title: 'recover', workdir: '/tmp', model: null });
+		const assistant = messages.append(c.id, {
+			role: 'assistant',
+			content: 'partial',
+			status: 'streaming'
+		});
+		messages.insertToolCall(assistant.id, {
+			id: 'tool-pending',
+			tool: 'bash',
+			argsJson: JSON.stringify({ command: 'sleep 10' }),
+			resultJson: null,
+			status: 'pending',
+			startedAt: 100,
+			endedAt: null,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+
+		const recovered = messages.recoverInterruptedInFlight(1234);
+
+		expect(recovered).toEqual({ messages: 1, toolCalls: 1 });
+		const reloaded = messages.listByConversation(c.id).find((m) => m.id === assistant.id);
+		expect(reloaded?.status).toBe('interrupted');
+		expect(reloaded?.errorCode).toBe('server_restarted');
+		expect(reloaded?.toolCalls?.[0]).toMatchObject({
+			id: 'tool-pending',
+			status: 'error',
+			endedAt: 1234
+		});
+	});
 });

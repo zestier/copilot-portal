@@ -405,35 +405,47 @@ describe('bridge.open() session mode and permissions', () => {
 		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
 	});
 
-	it('recognizes forcePermissionPrompt from original tool args via toolCallId', async () => {
+	it('recognizes forcePermissionPrompt from persisted tool args via toolCallId', async () => {
 		const { open } = await importBridge();
 		const interactive = await import('../src/lib/server/copilot/interactive-requests');
 		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const convs = await import('../src/lib/server/db/repos/conversations');
 		const user = ensureLocalUser();
+		const conv = convs.create(user.id, {
+			id: baseOpts.conversationId,
+			title: 'test',
+			workdir: baseOpts.workingDirectory,
+			model: baseOpts.model
+		});
+		const assistant = messages.append(conv.id, {
+			role: 'assistant',
+			content: '',
+			status: 'streaming'
+		});
+		const reason =
+			'User explicitly requested committing these reviewed local changes; structured Git tools cannot commit.';
+		messages.insertToolCall(assistant.id, {
+			id: 'git-commit-tool',
+			tool: 'shell',
+			argsJson: JSON.stringify({
+				command: 'git commit -m x',
+				forcePermissionPrompt: reason
+			}),
+			resultJson: null,
+			status: 'pending',
+			startedAt: Date.now(),
+			endedAt: null,
+			textOffset: 0,
+			parentToolCallId: null
+		});
 		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
 		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
 			req: unknown
 		) => Promise<unknown>;
-		const reason =
-			'User explicitly requested committing these reviewed local changes; structured Git tools cannot commit.';
 
 		sdkSessionStub.send.mockReset().mockImplementation(async () => {
 			await Promise.resolve();
-			const event = {
-				data: {
-					toolCallId: 'git-commit-tool',
-					toolName: 'shell',
-					arguments: {
-						command: 'git commit -m x',
-						forcePermissionPrompt: reason
-					}
-				}
-			};
-			for (const [eventName, handler] of sdkSessionStub.on.mock.calls as Array<
-				[string, (e: unknown) => void]
-			>) {
-				if (eventName === 'tool.execution_start') handler(event);
-			}
 			void onPermissionRequest({
 				kind: 'shell',
 				toolName: 'shell',
@@ -466,57 +478,6 @@ describe('bridge.open() session mode and permissions', () => {
 		});
 		ac.abort();
 		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
-	});
-
-	it('forgets original tool args after tool completion', async () => {
-		const { open } = await importBridge();
-		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
-		const user = ensureLocalUser();
-		await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
-		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
-			req: unknown
-		) => Promise<unknown>;
-		const reason =
-			'User explicitly requested committing these reviewed local changes; structured Git tools cannot commit.';
-
-		const eventStart = {
-			data: {
-				toolCallId: 'git-commit-tool',
-				toolName: 'shell',
-				arguments: {
-					command: 'git commit -m x',
-					forcePermissionPrompt: reason
-				}
-			}
-		};
-		const eventComplete = {
-			data: {
-				toolCallId: 'git-commit-tool',
-				success: true,
-				result: ''
-			}
-		};
-		for (const [eventName, handler] of sdkSessionStub.on.mock.calls as Array<
-			[string, (e: unknown) => void]
-		>) {
-			if (eventName === 'tool.execution_start') handler(eventStart);
-			if (eventName === 'tool.execution_complete') handler(eventComplete);
-		}
-
-		const result = await onPermissionRequest({
-			kind: 'shell',
-			toolName: 'shell',
-			toolCallId: 'git-commit-tool',
-			fullCommandText: 'git commit -m x',
-			args: { command: 'git commit -m x' }
-		});
-
-		expect(result).toEqual(
-			expect.objectContaining({
-				kind: 'reject',
-				feedback: expect.stringContaining('git_status')
-			})
-		);
 	});
 
 	it('does not auto-deny the request_mode_switch tool in best-effort mode', async () => {

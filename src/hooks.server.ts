@@ -8,6 +8,7 @@ import { read as readSession, generateCsrfToken } from '$lib/server/auth/session
 import { perWindow } from '$lib/server/rate-limit';
 import { apiErrorResponse } from '$lib/server/http';
 import { startIdleReaper } from '$lib/server/copilot/pool';
+import * as messages from '$lib/server/db/repos/messages';
 
 // One-time bootstrap.
 let booted = false;
@@ -16,6 +17,7 @@ function boot() {
 	booted = true;
 	loadConfig(); // throws if invalid
 	getDb(); // opens + migrates
+	messages.recoverInterruptedInFlight();
 	startIdleReaper();
 	log.info('boot.ok');
 }

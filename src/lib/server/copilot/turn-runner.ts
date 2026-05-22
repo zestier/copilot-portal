@@ -37,13 +37,6 @@ interface PendingTool {
 	parentToolCallId: string | null;
 }
 
-interface PendingEdit {
-	path: string;
-	diff: string;
-	textOffset: number | null;
-	parentToolCallId: string | null;
-}
-
 interface PendingReasoning {
 	id: string;
 	segmentIndex: number;
@@ -186,12 +179,24 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	// Accumulators for persistence.
 	let assistantBuf = '';
 	let assistantId: string | null = null;
+	let persistedAssistantId: string | null = null;
 	const pendingTools = new Map<string, PendingTool>();
-	const pendingEdits: PendingEdit[] = [];
 	// Reasoning segments keyed by the segmentId minted in the bridge. Order
 	// of insertion matches stream order, which is what we persist.
 	const pendingReasoning = new Map<string, PendingReasoning>();
+	const persistedFileEditKeys = new Set<string>();
 	let nextReasoningIndex = 0;
+
+	function ensurePersistedAssistant(): string {
+		if (persistedAssistantId) return persistedAssistantId;
+		const persisted = messages.append(opts.conversationId, {
+			role: 'assistant',
+			content: assistantBuf,
+			status: 'streaming'
+		});
+		persistedAssistantId = persisted.id;
+		return persisted.id;
+	}
 
 	function dispatch(ev: PortalEvent) {
 		// Suppress the SDK's `done` event: we always emit our own terminal
@@ -202,15 +207,19 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 
 		emit(ev);
 
-		if (ev.type === 'message.start') assistantId = ev.messageId;
-		else if (ev.type === 'message.delta') {
+		if (ev.type === 'message.start') {
+			assistantId = ev.messageId;
+			ensurePersistedAssistant();
+		} else if (ev.type === 'message.delta') {
 			assistantBuf += ev.text;
+			messages.updateContentOnly(ensurePersistedAssistant(), assistantBuf);
 		} else if (ev.type === 'message.reasoning') {
+			const persistedId = ensurePersistedAssistant();
 			let seg = pendingReasoning.get(ev.segmentId);
 			if (!seg) {
 				const isChild = !!ev.parentToolCallId;
 				seg = {
-					id: ulid(),
+					id: ev.segmentId,
 					segmentIndex: nextReasoningIndex++,
 					text: '',
 					// Child reasoning isn't anchored to the outer assistant text;
@@ -223,12 +232,17 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				pendingReasoning.set(ev.segmentId, seg);
 			}
 			seg.text += ev.text;
+			messages.upsertReasoningBlock(persistedId, seg);
 		} else if (ev.type === 'message.reasoning.end') {
 			const seg = pendingReasoning.get(ev.segmentId);
-			if (seg) seg.durationMs = ev.durationMs;
+			if (seg) {
+				seg.durationMs = ev.durationMs;
+				messages.upsertReasoningBlock(ensurePersistedAssistant(), seg);
+			}
 		} else if (ev.type === 'tool.call') {
 			const isChild = !!ev.parentToolCallId;
-			pendingTools.set(ev.toolCallId, {
+			const persistedId = ensurePersistedAssistant();
+			const tool: PendingTool = {
 				toolCallId: ev.toolCallId,
 				tool: ev.tool,
 				argsJson: safeJson(ev.args),
@@ -238,6 +252,18 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				endedAt: null,
 				textOffset: isChild ? null : assistantBuf.length,
 				parentToolCallId: ev.parentToolCallId ?? null
+			};
+			pendingTools.set(ev.toolCallId, tool);
+			messages.upsertToolCall(persistedId, {
+				id: tool.toolCallId,
+				tool: tool.tool,
+				argsJson: tool.argsJson,
+				resultJson: tool.resultJson,
+				status: tool.status,
+				startedAt: tool.startedAt,
+				endedAt: tool.endedAt,
+				textOffset: tool.textOffset,
+				parentToolCallId: tool.parentToolCallId
 			});
 		} else if (ev.type === 'tool.result') {
 			const tc = pendingTools.get(ev.toolCallId);
@@ -245,15 +271,27 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				tc.status = ev.ok ? 'ok' : 'error';
 				tc.resultJson = safeJson(ev.output ?? ev.summary);
 				tc.endedAt = Date.now();
+				messages.updateToolCall(ev.toolCallId, {
+					status: tc.status,
+					resultJson: tc.resultJson,
+					endedAt: tc.endedAt
+				});
 			}
 		} else if (ev.type === 'file.edit') {
 			const isChild = !!ev.parentToolCallId;
-			pendingEdits.push({
-				path: ev.path,
-				diff: ev.diff,
-				textOffset: isChild ? null : assistantBuf.length,
-				parentToolCallId: ev.parentToolCallId ?? null
-			});
+			const textOffset = isChild ? null : assistantBuf.length;
+			const parentToolCallId = ev.parentToolCallId ?? null;
+			const key = JSON.stringify([ev.path, ev.diff, textOffset, parentToolCallId]);
+			if (!persistedFileEditKeys.has(key)) {
+				persistedFileEditKeys.add(key);
+				messages.insertFileEdit(
+					ensurePersistedAssistant(),
+					ev.path,
+					ev.diff,
+					textOffset,
+					parentToolCallId
+				);
+			}
 		} else if (ev.type === 'context.usage') {
 			try {
 				usageRepo.upsert(opts.conversationId, {
@@ -305,50 +343,20 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		} finally {
 			const status: 'interrupted' | 'complete' = turnAc.signal.aborted ? 'interrupted' : 'complete';
 
-			// Persist assistant message + tool calls + file edits.
-			let persistedAssistantId: string | null = null;
 			try {
-				if (
-					assistantBuf ||
-					assistantId ||
-					pendingTools.size ||
-					pendingEdits.length ||
-					pendingReasoning.size
-				) {
-					const persisted = messages.append(opts.conversationId, {
-						role: 'assistant',
-						content: assistantBuf,
-						status
-					});
-					persistedAssistantId = persisted.id;
+				if (persistedAssistantId || assistantBuf || assistantId || pendingTools.size) {
+					const id = ensurePersistedAssistant();
+					messages.updateContent(id, assistantBuf, status);
 					for (const t of pendingTools.values()) {
-						messages.insertToolCall(persisted.id, {
-							id: t.toolCallId,
-							tool: t.tool,
-							argsJson: t.argsJson,
-							resultJson: t.resultJson,
-							status: t.status === 'pending' ? 'error' : t.status,
-							startedAt: t.startedAt,
-							endedAt: t.endedAt,
-							textOffset: t.textOffset,
-							parentToolCallId: t.parentToolCallId
-						});
-					}
-					for (const e of pendingEdits) {
-						messages.insertFileEdit(persisted.id, e.path, e.diff, e.textOffset, e.parentToolCallId);
-					}
-					// Preserve insertion order so segment_index stays monotonic
-					// with the stream.
-					for (const seg of pendingReasoning.values()) {
-						messages.insertReasoningBlock(persisted.id, {
-							id: seg.id,
-							segmentIndex: seg.segmentIndex,
-							text: seg.text,
-							textOffset: seg.textOffset,
-							startedAt: seg.startedAt,
-							durationMs: seg.durationMs,
-							parentToolCallId: seg.parentToolCallId
-						});
+						if (t.status === 'pending') {
+							t.status = 'error';
+							t.endedAt = Date.now();
+							messages.updateToolCall(t.toolCallId, {
+								resultJson: t.resultJson,
+								status: t.status,
+								endedAt: t.endedAt
+							});
+						}
 					}
 				}
 				convs.touch(opts.conversationId);

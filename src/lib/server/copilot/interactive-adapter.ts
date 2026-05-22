@@ -21,6 +21,7 @@ import {
 	type ParsedSegment
 } from '../permissions/shell-parser';
 import { log } from '../log';
+import * as messagesRepo from '../db/repos/messages';
 
 interface PermissionRequestLike {
 	kind?: string;
@@ -44,7 +45,6 @@ interface InteractiveAdapterOptions {
 	emit(ev: PortalEvent): void;
 	getApproveAll(): boolean;
 	getMode(): SessionMode;
-	getToolArgs?(toolCallId: string): unknown;
 }
 
 export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
@@ -139,7 +139,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			return { kind: 'approve-once' } as const;
 		}
 		if (grant.outcome === 'deny') {
-			const escalationReason = grant.denyReason ? readForcePermissionPrompt(req, opts) : null;
+			const escalationReason = grant.denyReason ? readForcePermissionPrompt(req) : null;
 			if (escalationReason) {
 				const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
 					'permission',
@@ -300,16 +300,13 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 	};
 }
 
-function readForcePermissionPrompt(
-	req: PermissionRequestLike,
-	opts: Pick<InteractiveAdapterOptions, 'getToolArgs'>
-): string | null {
+function readForcePermissionPrompt(req: PermissionRequestLike): string | null {
 	const raw =
 		typeof req.forcePermissionPrompt === 'string'
 			? req.forcePermissionPrompt
 			: (readArgString(req.args, 'forcePermissionPrompt') ??
 				(typeof req.toolCallId === 'string'
-					? readArgString(opts.getToolArgs?.(req.toolCallId), 'forcePermissionPrompt')
+					? readArgString(messagesRepo.getToolCallArgs(req.toolCallId), 'forcePermissionPrompt')
 					: null));
 	const reason = raw?.trim();
 	if (!reason) return null;

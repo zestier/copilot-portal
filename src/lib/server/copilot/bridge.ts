@@ -147,7 +147,6 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	const client = await getClient(opts.userId, opts.authToken);
 
 	let activeQueue: AsyncQueue<PortalEvent> | null = null;
-	const toolArgsByCallId = new Map<string, unknown>();
 
 	function emit(ev: PortalEvent) {
 		activeQueue?.push(ev);
@@ -184,8 +183,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		policy: opts.policy,
 		emit,
 		getApproveAll: () => approveAllTools,
-		getMode: () => currentMode,
-		getToolArgs: (toolCallId) => toolArgsByCallId.get(toolCallId)
+		getMode: () => currentMode
 	});
 
 	let existingMetadata: unknown;
@@ -283,18 +281,6 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		})) as unknown as SdkSession;
 	}
 
-	sdkSession.on('tool.execution_start', (e: unknown) => {
-		const data = (e as { data?: { toolCallId?: unknown; arguments?: unknown } } | null)?.data;
-		if (typeof data?.toolCallId === 'string') {
-			toolArgsByCallId.set(data.toolCallId, data.arguments ?? null);
-		}
-	});
-	sdkSession.on('tool.execution_complete', (e: unknown) => {
-		const data = (e as { data?: { toolCallId?: unknown } } | null)?.data;
-		if (typeof data?.toolCallId === 'string') {
-			toolArgsByCallId.delete(data.toolCallId);
-		}
-	});
 	eventAdapter.attach(sdkSession);
 
 	// Push initial mode + approve-all to the runtime. Best-effort: the
@@ -392,7 +378,6 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			}
 		},
 		async dispose() {
-			toolArgsByCallId.clear();
 			try {
 				await sdkSession.disconnect();
 			} catch (e) {

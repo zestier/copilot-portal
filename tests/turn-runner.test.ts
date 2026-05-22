@@ -271,4 +271,132 @@ describe('turn-runner', () => {
 		expect(blocks[1].text).toBe('second thought');
 		expect(blocks[1].durationMs).toBe(200);
 	});
+
+	it('persists assistant content and tool calls before the turn completes', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'incremental',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		acquireMock.mockResolvedValue({
+			conversationId: conv.id,
+			workingDirectory: wd,
+			async *send(): AsyncIterable<PortalEvent> {
+				yield { type: 'message.start', messageId: 'm1', role: 'assistant' };
+				yield { type: 'message.delta', messageId: 'm1', text: 'partial' };
+				yield {
+					type: 'tool.call',
+					toolCallId: 'tool-1',
+					tool: 'bash',
+					args: { command: 'echo hi', forcePermissionPrompt: 'because this is a test' }
+				};
+				await gate;
+				yield {
+					type: 'tool.result',
+					toolCallId: 'tool-1',
+					ok: true,
+					summary: 'ok',
+					output: 'hi\n'
+				};
+			},
+			async abort() {},
+			async dispose() {},
+			async setMode() {},
+			async setApproveAll() {},
+			async resetSessionApprovals() {},
+			lastUsed: Date.now()
+		});
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+
+		for await (const { event } of turn.subscribe()) {
+			if (event.type === 'tool.call') break;
+		}
+
+		const midTurn = messages.listByConversation(conv.id).find((m) => m.role === 'assistant');
+		expect(midTurn).toBeTruthy();
+		expect(midTurn?.status).toBe('streaming');
+		expect(midTurn?.content).toBe('partial');
+		expect(midTurn?.toolCalls?.[0]).toMatchObject({
+			id: 'tool-1',
+			tool: 'bash',
+			status: 'pending'
+		});
+		expect(midTurn?.toolCalls?.[0]?.argsJson).toContain('forcePermissionPrompt');
+
+		release();
+		for await (const { event } of turn.subscribe()) {
+			if (event.type === 'done') break;
+		}
+		const done = messages.listByConversation(conv.id).find((m) => m.role === 'assistant');
+		expect(done?.status).toBe('complete');
+		expect(done?.toolCalls?.[0]).toMatchObject({
+			id: 'tool-1',
+			status: 'ok',
+			resultJson: 'hi\n'
+		});
+	});
+
+	it('dedupes repeated file edit events during incremental persistence', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'file edits',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		const edit: PortalEvent = {
+			type: 'file.edit',
+			path: 'src/a.ts',
+			diff: '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-a\n+b'
+		};
+		acquireMock.mockResolvedValue(
+			makeFakeSession([
+				{ type: 'message.start', messageId: 'm1', role: 'assistant' },
+				edit,
+				edit,
+				{ type: 'done' }
+			])
+		);
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+
+		for await (const { event } of turn.subscribe()) {
+			if (event.type === 'done') break;
+		}
+
+		const assistant = messages.listByConversation(conv.id).find((m) => m.role === 'assistant');
+		expect(assistant?.fileEdits).toHaveLength(1);
+		expect(assistant?.fileEdits?.[0]).toMatchObject({ path: 'src/a.ts', diff: edit.diff });
+	});
 });
