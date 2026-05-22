@@ -1,8 +1,21 @@
 // Pure helpers for the permission-grant matcher. SQL lives in the
 // settings repo; this module only knows about pattern shapes and
 // precedence rules so it can be exercised by unit tests without a DB.
+//
+// Two grant shapes coexist:
+//   * Legacy (`scopePattern`)   — substring glob over the derived scope-key.
+//   * Structured (`scope`)      — typed predicate per permission kind
+//                                 (shell argv, fs containment, url host).
+// When both are present on a row, structured wins; we never glob over a
+// row that has a typed shape.
 
 export { deriveScopeKey } from '../../permissions/scope-key';
+
+import type { GrantScope } from '../../permissions/scope-types';
+import type { ParsedSegment } from './shell-parser';
+import { shellRuleMatches, shellRuleMatchesSegment } from './predicates/shell';
+import { fsScopeMatches } from './predicates/fs';
+import { urlScopeMatches } from './predicates/url';
 
 export type GrantDecision = 'allow' | 'deny';
 export type MatchOutcome = 'allow' | 'deny' | 'none';
@@ -11,6 +24,9 @@ export interface GrantRow {
 	tool: string;
 	permissionKind: string | null;
 	scopePattern: string | null;
+	/** Structured grant. When set, the legacy `scopePattern` is ignored
+	 * for this row. NULL on legacy rows. */
+	scope: GrantScope | null;
 	decision: GrantDecision;
 	expiresAt: number | null;
 	/**
@@ -23,10 +39,19 @@ export interface GrantRow {
 export interface MatchQuery {
 	tool: string;
 	permissionKind: string;
-	/** The runtime scope to test the pattern against (e.g. `git status`,
-	 * `./src/foo.ts`, `https://api.github.com/...`). NULL when the caller
-	 * couldn't derive one; only wildcard grants will match. */
+	/** Legacy scope-key (string). NULL when the caller couldn't derive
+	 * one; only wildcard legacy grants will match. */
 	scopeKey: string | null;
+	/** Parsed shell command for structured shell grants. Omitted for
+	 * non-shell requests or when the parser rejected the command. */
+	shellSegments?: ParsedSegment[] | null;
+	/** Target path for fs requests (`read` / `write` / `edit`). */
+	target?: string | null;
+	/** Target URL for `url` requests. */
+	url?: string | null;
+	/** Conversation's working directory, used by structured predicates
+	 * that constrain to the workspace. */
+	workspaceRoot?: string | null;
 	/** Unix ms. Grants with `expiresAt < now` are ignored. */
 	now: number;
 }
@@ -43,18 +68,104 @@ export interface MatchQuery {
  * matches (exact, NULL = any, or `*`), and the scope pattern matches
  * the supplied scopeKey (NULL pattern = any, glob with `*` otherwise).
  * Expired grants are skipped.
+ *
+ * For shell requests with multiple parsed segments (e.g. `cd ./src &&
+ * git diff`), each segment is evaluated independently against the grant
+ * set: the request is allowed only if every segment has at least one
+ * matching allow grant, and is denied if any segment is denied. This
+ * lets a `cd` grant cover the prefix while a `git` grant covers the
+ * tail without requiring a single rule that knows about both.
  */
 export function matchGrants(rows: GrantRow[], q: MatchQuery): MatchOutcome {
+	if (q.permissionKind === 'shell' && q.shellSegments && q.shellSegments.length > 0) {
+		return matchShellSegments(rows, q, q.shellSegments);
+	}
 	let sawAllow = false;
 	for (const r of rows) {
-		if (r.expiresAt !== null && r.expiresAt < q.now) continue;
-		if (!toolMatches(r.tool, q.tool)) continue;
-		if (!kindMatches(r.permissionKind, q.permissionKind)) continue;
-		if (!scopeMatches(r.scopePattern, q.scopeKey)) continue;
+		if (!grantApplies(r, q)) continue;
+		if (!rowScopeMatches(r, q)) continue;
 		if (r.decision === 'deny') return 'deny';
 		sawAllow = true;
 	}
 	return sawAllow ? 'allow' : 'none';
+}
+
+function matchShellSegments(
+	rows: GrantRow[],
+	q: MatchQuery,
+	segments: ParsedSegment[]
+): MatchOutcome {
+	const ctx = { workspaceRoot: q.workspaceRoot ?? null };
+	let allAllowed = true;
+	for (const seg of segments) {
+		let segAllow = false;
+		for (const r of rows) {
+			if (!grantApplies(r, q)) continue;
+			if (!rowMatchesShellSegment(r, seg, q, ctx)) continue;
+			if (r.decision === 'deny') return 'deny';
+			segAllow = true;
+		}
+		if (!segAllow) allAllowed = false;
+	}
+	return allAllowed ? 'allow' : 'none';
+}
+
+function grantApplies(r: GrantRow, q: MatchQuery): boolean {
+	if (r.expiresAt !== null && r.expiresAt < q.now) return false;
+	if (!toolMatches(r.tool, q.tool)) return false;
+	if (!kindMatches(r.permissionKind, q.permissionKind)) return false;
+	return true;
+}
+
+function rowMatchesShellSegment(
+	r: GrantRow,
+	seg: ParsedSegment,
+	q: MatchQuery,
+	ctx: { workspaceRoot: string | null }
+): boolean {
+	if (r.scope) {
+		switch (r.scope.kind) {
+			case 'any':
+				return true;
+			case 'shell':
+				return shellRuleMatchesSegment(r.scope.rule, seg, ctx);
+			default:
+				return false;
+		}
+	}
+	return scopeMatches(r.scopePattern, q.scopeKey);
+}
+
+function rowScopeMatches(r: GrantRow, q: MatchQuery): boolean {
+	if (r.scope) return structuredScopeMatches(r.scope, q);
+	return scopeMatches(r.scopePattern, q.scopeKey);
+}
+
+function structuredScopeMatches(scope: GrantScope, q: MatchQuery): boolean {
+	switch (scope.kind) {
+		case 'any':
+			return true;
+		case 'shell':
+			if (q.permissionKind !== 'shell') return false;
+			if (!q.shellSegments) return false;
+			return shellRuleMatches(scope.rule, q.shellSegments, {
+				workspaceRoot: q.workspaceRoot ?? null
+			});
+		case 'fs': {
+			const kind = q.permissionKind;
+			if (kind !== 'read' && kind !== 'write' && kind !== 'edit') return false;
+			if (!q.target) return false;
+			return fsScopeMatches(scope, {
+				permissionKind: kind,
+				target: q.target,
+				workspaceRoot: q.workspaceRoot ?? null
+			});
+		}
+		case 'url':
+			if (q.permissionKind !== 'url') return false;
+			if (!q.url) return false;
+			return urlScopeMatches(scope, { url: q.url });
+	}
 }
 
 function toolMatches(grant: string, want: string): boolean {

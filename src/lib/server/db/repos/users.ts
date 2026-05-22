@@ -1,6 +1,7 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
 import type { User } from '$lib/types';
+import { ensureSeedGrantsForUser } from '../../permissions/seed-grants';
 
 interface UserRow {
 	id: string;
@@ -64,6 +65,7 @@ export function upsertGithub(input: UpsertGithubInput): User {
 		`INSERT INTO users(id, github_login, github_id, display_name, avatar_url, created_at, last_login_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`
 	).run(id, input.githubLogin, input.githubId, input.displayName, input.avatarUrl, now, now);
+	ensureSeedGrantsForUser(id);
 	return {
 		id,
 		githubLogin: input.githubLogin,
@@ -87,5 +89,6 @@ export function ensureLocalUser(): User {
 		`INSERT INTO users(id, github_login, display_name, created_at, last_login_at)
 		 VALUES (?, ?, ?, ?, ?)`
 	).run(id, 'local', 'Local user', now, now);
+	ensureSeedGrantsForUser(id);
 	return { id, githubLogin: 'local', displayName: 'Local user', avatarUrl: null };
 }

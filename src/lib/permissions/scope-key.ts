@@ -12,6 +12,8 @@ export function deriveScopeKey(
 	req: {
 		fullCommandText?: string;
 		fileName?: string;
+		path?: string;
+		url?: string;
 		args?: unknown;
 	}
 ): string | null {
@@ -20,11 +22,16 @@ export function deriveScopeKey(
 			return req.fullCommandText ?? readArgString(req.args, 'command') ?? null;
 		case 'write':
 		case 'edit':
-		case 'read':
 			return req.fileName ?? readArgString(req.args, 'path') ?? null;
+		case 'read':
+			// SDK PermissionRequestRead carries `path`, not `fileName`.
+			return req.path ?? req.fileName ?? readArgString(req.args, 'path') ?? null;
 		case 'url': {
 			const url =
-				readArgString(req.args, 'url') ?? readArgString(req.args, 'href') ?? req.fullCommandText;
+				req.url ??
+				readArgString(req.args, 'url') ??
+				readArgString(req.args, 'href') ??
+				req.fullCommandText;
 			return url ?? null;
 		}
 		default:

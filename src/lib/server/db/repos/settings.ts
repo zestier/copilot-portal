@@ -75,6 +75,9 @@ import {
 	type GrantRow,
 	type MatchOutcome
 } from '../../permissions/matcher';
+import { decodeScope, encodeScope } from '$lib/permissions/scope-codec';
+import type { GrantScope } from '$lib/permissions/scope-types';
+import type { ParsedSegment } from '../../permissions/shell-parser';
 
 interface GrantDbRow {
 	user_id: string;
@@ -82,6 +85,7 @@ interface GrantDbRow {
 	tool: string;
 	permission_kind: string | null;
 	scope_pattern: string | null;
+	scope_json: string | null;
 	decision: string;
 	expires_at: number | null;
 	granted_at: number;
@@ -92,6 +96,7 @@ function dbRowToGrant(r: GrantDbRow): GrantRow {
 		tool: r.tool,
 		permissionKind: r.permission_kind,
 		scopePattern: r.scope_pattern,
+		scope: decodeScope(r.scope_json),
 		decision: r.decision === 'deny' ? 'deny' : 'allow',
 		expiresAt: r.expires_at,
 		conversationId: r.conversation_id
@@ -107,7 +112,7 @@ function dbRowToGrant(r: GrantDbRow): GrantRow {
 function loadCandidateGrants(userId: string, conversationId: string, tool: string): GrantRow[] {
 	const rows = getDb()
 		.prepare(
-			`SELECT user_id, conversation_id, tool, permission_kind, scope_pattern,
+			`SELECT user_id, conversation_id, tool, permission_kind, scope_pattern, scope_json,
 			        decision, expires_at, granted_at
 			 FROM permission_grants
 			 WHERE user_id = ?
@@ -116,6 +121,18 @@ function loadCandidateGrants(userId: string, conversationId: string, tool: strin
 		)
 		.all(userId, conversationId, tool) as GrantDbRow[];
 	return rows.map(dbRowToGrant);
+}
+
+export interface MatchGrantContext {
+	/** Parsed shell command (when permissionKind === 'shell' and the
+	 * parser accepted it). */
+	shellSegments?: ParsedSegment[] | null;
+	/** Target path for fs requests. */
+	target?: string | null;
+	/** Target URL for url requests. */
+	url?: string | null;
+	/** Conversation's working directory. */
+	workspaceRoot?: string | null;
 }
 
 /**
@@ -129,10 +146,20 @@ export function matchGrant(
 	tool: string,
 	permissionKind: string,
 	scopeKey: string | null,
+	ctx: MatchGrantContext = {},
 	now: number = Date.now()
 ): MatchOutcome {
 	const rows = loadCandidateGrants(userId, conversationId, tool);
-	return matchGrants(rows, { tool, permissionKind, scopeKey, now });
+	return matchGrants(rows, {
+		tool,
+		permissionKind,
+		scopeKey,
+		shellSegments: ctx.shellSegments ?? null,
+		target: ctx.target ?? null,
+		url: ctx.url ?? null,
+		workspaceRoot: ctx.workspaceRoot ?? null,
+		now
+	});
 }
 
 /**
@@ -153,8 +180,11 @@ export interface AddGrantOptions {
 	tool: string;
 	/** NULL = any kind. */
 	permissionKind?: string | null;
-	/** NULL = any scope. */
+	/** Legacy substring-glob over the derived scope key. NULL = any.
+	 * Prefer `scope` for new grants. */
 	scopePattern?: string | null;
+	/** Structured scope. When set, scopePattern is ignored at match time. */
+	scope?: GrantScope | null;
 	decision?: GrantDecision;
 	/** Unix ms; NULL/undefined = never expires. */
 	expiresAt?: number | null;
@@ -165,8 +195,8 @@ export function addGrant(opts: AddGrantOptions) {
 		.prepare(
 			`INSERT INTO permission_grants(
 			   user_id, conversation_id, tool, permission_kind,
-			   scope_pattern, decision, expires_at, granted_at
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+			   scope_pattern, scope_json, decision, expires_at, granted_at
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			opts.userId,
@@ -174,10 +204,46 @@ export function addGrant(opts: AddGrantOptions) {
 			opts.tool,
 			opts.permissionKind ?? null,
 			opts.scopePattern ?? null,
+			opts.scope ? encodeScope(opts.scope) : null,
 			opts.decision ?? 'allow',
 			opts.expiresAt ?? null,
 			Date.now()
 		);
+}
+
+export interface UpdateGrantOptions {
+	tool: string;
+	permissionKind?: string | null;
+	scopePattern?: string | null;
+	scope?: GrantScope | null;
+	decision: GrantDecision;
+	expiresAt?: number | null;
+}
+
+/**
+ * Update a grant in-place by rowid. Scoped to `userId` so users can only
+ * edit their own rows; `conversation_id` and `granted_at` are preserved
+ * (this is an edit, not a re-grant). Returns true iff a row matched.
+ */
+export function updateGrant(userId: string, id: number, opts: UpdateGrantOptions): boolean {
+	const r = getDb()
+		.prepare(
+			`UPDATE permission_grants
+			    SET tool = ?, permission_kind = ?, scope_pattern = ?, scope_json = ?,
+			        decision = ?, expires_at = ?
+			  WHERE rowid = ? AND user_id = ?`
+		)
+		.run(
+			opts.tool,
+			opts.permissionKind ?? null,
+			opts.scopePattern ?? null,
+			opts.scope ? encodeScope(opts.scope) : null,
+			opts.decision,
+			opts.expiresAt ?? null,
+			id,
+			userId
+		);
+	return r.changes > 0;
 }
 
 export interface GrantSummary {
@@ -187,6 +253,7 @@ export interface GrantSummary {
 	tool: string;
 	permissionKind: string | null;
 	scopePattern: string | null;
+	scope: GrantScope | null;
 	decision: GrantDecision;
 	expiresAt: number | null;
 	grantedAt: number;
@@ -205,7 +272,7 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 	const rows = getDb()
 		.prepare(
 			`SELECT pg.rowid AS id, pg.conversation_id, c.title AS conversation_title,
-			        pg.tool, pg.permission_kind, pg.scope_pattern, pg.decision,
+			        pg.tool, pg.permission_kind, pg.scope_pattern, pg.scope_json, pg.decision,
 			        pg.expires_at, pg.granted_at
 			 FROM permission_grants pg
 			 LEFT JOIN conversations c ON c.id = pg.conversation_id
@@ -219,6 +286,7 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		tool: string;
 		permission_kind: string | null;
 		scope_pattern: string | null;
+		scope_json: string | null;
 		decision: string;
 		expires_at: number | null;
 		granted_at: number;
@@ -230,6 +298,7 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		tool: r.tool,
 		permissionKind: r.permission_kind,
 		scopePattern: r.scope_pattern,
+		scope: decodeScope(r.scope_json),
 		decision: r.decision === 'deny' ? 'deny' : 'allow',
 		expiresAt: r.expires_at,
 		grantedAt: r.granted_at
@@ -248,6 +317,16 @@ export function revokeGrant(userId: string, id: number): boolean {
 }
 
 /**
+ * Delete every grant owned by `userId`. Returns the number of rows removed.
+ * Used by the settings page "Revoke all" action. Seed grants may be
+ * re-installed on next login via `ensureSeedGrantsForUser`.
+ */
+export function revokeAllGrantsForUser(userId: string): number {
+	const r = getDb().prepare(`DELETE FROM permission_grants WHERE user_id = ?`).run(userId);
+	return r.changes;
+}
+
+/**
  * Drop grants past their TTL. The matcher already ignores expired rows at
  * read time, so this is purely housekeeping — keeping the settings page
  * from accumulating dead rows.
@@ -263,7 +342,7 @@ export function recordDecision(
 	conversationId: string,
 	tool: string,
 	argsSummary: string,
-	decision: 'allow-once' | 'allow-always' | 'deny' | 'deny-always'
+	decision: PermissionDecisionRecord['decision']
 ) {
 	const id = ulid();
 	getDb()
@@ -280,7 +359,7 @@ export interface PermissionDecisionRecord {
 	conversationTitle: string | null;
 	tool: string;
 	argsSummary: string | null;
-	decision: 'allow-once' | 'allow-always' | 'deny' | 'deny-always';
+	decision: 'allow-once' | 'allow-always' | 'deny' | 'deny-always' | 'auto-allow' | 'auto-deny';
 	decidedAt: number;
 }
 
