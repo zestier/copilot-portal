@@ -29,6 +29,24 @@ describe('summarizeToolCall', () => {
 		expect(summarizeToolCall('bash', 'not json')).toBeNull();
 	});
 
+	it('summarizes raw apply_patch input by touched files', () => {
+		expect(
+			summarizeToolCall(
+				'apply_patch',
+				[
+					'*** Begin Patch',
+					'*** Update File: src/foo.ts',
+					'@@',
+					'-a',
+					'+b',
+					'*** Add File: src/bar.ts',
+					'+hello',
+					'*** End Patch'
+				].join('\n')
+			)
+		).toBe('src/foo.ts +1 more');
+	});
+
 	it('falls back to first string arg for unknown tools', () => {
 		expect(summarizeToolCall('unknown_tool', JSON.stringify({ x: 'hello' }))).toBe('hello');
 	});

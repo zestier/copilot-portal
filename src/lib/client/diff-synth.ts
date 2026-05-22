@@ -1,4 +1,5 @@
 import { createTwoFilesPatch } from 'diff';
+import { parseApplyPatch } from './apply-patch';
 
 // Synthesize a unified-diff string from the arguments of file-mutation tool
 // calls (create, edit, write_file, etc.) so the existing DiffView component
@@ -72,15 +73,29 @@ function fromCreateArgs(path: string, args: ParsedArgs): SynthDiff | null {
 const EDIT_TOOLS = new Set(['edit', 'str_replace_editor', 'replace', 'apply_patch']);
 const CREATE_TOOLS = new Set(['create', 'create_file', 'write', 'write_file', 'new_file']);
 
-export function synthesizeDiff(input: SynthDiffInput): SynthDiff | null {
-	const args = parseArgs(input.argsJson);
-	if (!args) return null;
-	const path = str(args.path) ?? str(args.file) ?? str(args.filename) ?? str(args.file_path);
-	if (!path) return null;
+export function synthesizeDiffs(input: SynthDiffInput): SynthDiff[] {
 	const t = input.tool.toLowerCase();
-	if (EDIT_TOOLS.has(t)) return fromEditArgs(path, args);
-	if (CREATE_TOOLS.has(t)) return fromCreateArgs(path, args);
+	if (t === 'apply_patch') return parseApplyPatch(input.argsJson) ?? [];
+
+	const args = parseArgs(input.argsJson);
+	if (!args) return [];
+	const path = str(args.path) ?? str(args.file) ?? str(args.filename) ?? str(args.file_path);
+	if (!path) return [];
+	if (EDIT_TOOLS.has(t)) {
+		const diff = fromEditArgs(path, args);
+		return diff ? [diff] : [];
+	}
+	if (CREATE_TOOLS.has(t)) {
+		const diff = fromCreateArgs(path, args);
+		return diff ? [diff] : [];
+	}
 	// Be tolerant: some tools accept either shape. Try edit first, fall
 	// back to create.
-	return fromEditArgs(path, args) ?? fromCreateArgs(path, args);
+	return [fromEditArgs(path, args) ?? fromCreateArgs(path, args)].filter(
+		(v): v is SynthDiff => v != null
+	);
+}
+
+export function synthesizeDiff(input: SynthDiffInput): SynthDiff | null {
+	return synthesizeDiffs(input)[0] ?? null;
 }

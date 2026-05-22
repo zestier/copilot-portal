@@ -3,6 +3,8 @@
 // JSON-encoded arguments. Kept out of the renderer so it can be unit
 // tested without spinning up Svelte.
 
+import { parseApplyPatch } from './apply-patch';
+
 function truncate(s: string, n = 80): string {
 	const oneLine = s.replace(/\s+/g, ' ').trim();
 	return oneLine.length > n ? oneLine.slice(0, n - 1) + '…' : oneLine;
@@ -22,9 +24,18 @@ function str(v: unknown): string | null {
 }
 
 export function summarizeToolCall(tool: string, argsJson: string): string | null {
+	const t = tool.toLowerCase();
+	if (t === 'apply_patch') {
+		const changes = parseApplyPatch(argsJson);
+		if (changes?.length) {
+			return changes.length === 1
+				? changes[0].path
+				: `${changes[0].path} +${changes.length - 1} more`;
+		}
+	}
+
 	const args = parseArgs(argsJson);
 	if (!args) return null;
-	const t = tool.toLowerCase();
 	switch (t) {
 		case 'bash':
 		case 'shell':

@@ -3,7 +3,7 @@
 	import DiffView from './DiffView.svelte';
 	import TerminalBlock from './tool/TerminalBlock.svelte';
 	import ResultBlock from './tool/ResultBlock.svelte';
-	import { synthesizeDiff } from '$lib/client/diff-synth';
+	import { synthesizeDiffs } from '$lib/client/diff-synth';
 	import { summarizeToolCall } from '$lib/client/tool-summary';
 	import { decodeToolResult } from '$lib/client/tool-result';
 
@@ -37,7 +37,7 @@
 	// show the diff once the call succeeded; while pending we'd be
 	// rendering args that haven't been applied, and on error the result
 	// text usually explains the failure.
-	const synthDiff = $derived(toolCall.status === 'ok' ? synthesizeDiff(toolCall) : null);
+	const renderedDiffs = $derived(toolCall.status === 'ok' ? synthesizeDiffs(toolCall) : []);
 	// For shell-style tools, surface the actual command so a viewer
 	// doesn't have to expand "Arguments" to see what ran. We thread it
 	// into the terminal pane (both live partial output and final result)
@@ -93,8 +93,10 @@
 				<div class="muted">Running…</div>
 			{/if}
 		{:else if toolCall.resultJson}
-			{#if synthDiff}
-				<DiffView path={synthDiff.path} diff={synthDiff.diff} showLineNumbers={false} />
+			{#if renderedDiffs.length > 0}
+				{#each renderedDiffs as synthDiff, i (synthDiff.path + ':' + i)}
+					<DiffView path={synthDiff.path} diff={synthDiff.diff} showLineNumbers={false} />
+				{/each}
 			{:else}
 				{#each decoded.blocks as block, i (i)}
 					<ResultBlock {block} command={i === 0 && shellCommand ? shellCommand : undefined} />

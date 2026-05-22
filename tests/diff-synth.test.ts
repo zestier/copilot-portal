@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { synthesizeDiff } from '../src/lib/client/diff-synth';
+import { synthesizeDiff, synthesizeDiffs } from '../src/lib/client/diff-synth';
 import { parseUnifiedDiff, diffStats } from '../src/lib/client/diff-parser';
 
 describe('synthesizeDiff', () => {
@@ -80,5 +80,44 @@ describe('synthesizeDiff', () => {
 
 	it('returns null on malformed JSON', () => {
 		expect(synthesizeDiff({ tool: 'edit', argsJson: 'not json' })).toBeNull();
+	});
+
+	it('synthesizes diffs for raw apply_patch input', () => {
+		const r = synthesizeDiffs({
+			tool: 'apply_patch',
+			argsJson: [
+				'*** Begin Patch',
+				'*** Update File: src/foo.ts',
+				'@@',
+				'-const value = 1;',
+				'+const value = 2;',
+				'*** Add File: src/bar.ts',
+				'+export const bar = true;',
+				'*** End Patch'
+			].join('\n')
+		});
+		expect(r).toHaveLength(2);
+		expect(r[0]?.path).toBe('src/foo.ts');
+		expect(diffStats(parseUnifiedDiff(r[0]!.diff))).toEqual({ added: 1, removed: 1 });
+		expect(r[1]?.path).toBe('src/bar.ts');
+		expect(diffStats(parseUnifiedDiff(r[1]!.diff))).toEqual({ added: 1, removed: 0 });
+	});
+
+	it('shows renames from apply_patch updates', () => {
+		const r = synthesizeDiff({
+			tool: 'apply_patch',
+			argsJson: [
+				'*** Begin Patch',
+				'*** Update File: src/old.ts',
+				'*** Move to: src/new.ts',
+				'@@',
+				' export const moved = true;',
+				'*** End Patch'
+			].join('\n')
+		});
+		expect(r).not.toBeNull();
+		expect(r!.path).toBe('src/old.ts -> src/new.ts');
+		expect(r!.diff).toContain('rename from src/old.ts');
+		expect(r!.diff).toContain('rename to src/new.ts');
 	});
 });
