@@ -7,6 +7,7 @@
 		type FormResult,
 		type PermissionGrant
 	} from './settings-types';
+	import type { ShellOptionSpec } from '$lib/permissions/scope-types';
 
 	let { grants, form }: { grants: PermissionGrant[]; form: FormResult | null } = $props();
 
@@ -31,8 +32,10 @@
 	let shellSubcommands = $state('');
 	let shellPositionals = $state<ShellPositionalsKind>('unset');
 	let shellPipeline = $state<ShellPipelineKind>('unset');
-	let shellFlagsDeny = $state('');
-	let shellFlagsAllow = $state('');
+	let shellPreOptionsAllow = $state('');
+	let shellPreOptionsDeny = $state('');
+	let shellOptionsAllow = $state('');
+	let shellOptionsDeny = $state('');
 
 	let fsRuleKind = $state<FsRuleKind>('workspace');
 	let fsExactPath = $state('');
@@ -51,6 +54,39 @@
 			.filter((t) => t.length > 0);
 	}
 
+	function parseShellOptionSpecs(input: string): ShellOptionSpec[] {
+		return csvToList(input).map((entry) => {
+			const split = entry.indexOf('=');
+			if (split === -1) {
+				if (!entry.startsWith('-')) {
+					throw new Error(`option name "${entry}" must start with '-'`);
+				}
+				return { name: entry, kind: 'flag' };
+			}
+			const name = entry.slice(0, split).trim();
+			const valueKind = entry.slice(split + 1).trim();
+			if (!name.startsWith('-')) {
+				throw new Error(`option name "${name}" must start with '-'`);
+			}
+			if (valueKind !== 'any' && valueKind !== 'workspace-path') {
+				throw new Error(`option "${name}" must end with =any or =workspace-path`);
+			}
+			const valueRule =
+				valueKind === 'any' ? ({ kind: 'any' } as const) : ({ kind: 'workspace-path' } as const);
+			return {
+				name,
+				kind: 'option',
+				value: valueRule
+			};
+		});
+	}
+
+	function shellOptionSpecsToCsv(specs: ShellOptionSpec[]): string {
+		return specs
+			.map((spec) => (spec.kind === 'flag' ? spec.name : `${spec.name}=${spec.value.kind}`))
+			.join(', ');
+	}
+
 	type BuildResult = { json: string; error: null } | { json: null; error: string };
 
 	function buildScopeJson(): BuildResult {
@@ -62,13 +98,21 @@
 				if (subs.length > 0) rule.subcommands = subs;
 				if (shellPositionals !== 'unset') rule.positionals = { kind: shellPositionals };
 				if (shellPipeline !== 'unset') rule.pipeline = shellPipeline;
-				const allow = csvToList(shellFlagsAllow);
-				const deny = csvToList(shellFlagsDeny);
+				const preAllow = parseShellOptionSpecs(shellPreOptionsAllow);
+				const preDeny = csvToList(shellPreOptionsDeny);
+				if (preAllow.length > 0 || preDeny.length > 0) {
+					const options: Record<string, unknown> = {};
+					if (preAllow.length > 0) options.allow = preAllow;
+					if (preDeny.length > 0) options.deny = preDeny;
+					rule.preSubcommandOptions = options;
+				}
+				const allow = parseShellOptionSpecs(shellOptionsAllow);
+				const deny = csvToList(shellOptionsDeny);
 				if (allow.length > 0 || deny.length > 0) {
-					const flags: Record<string, unknown> = {};
-					if (allow.length > 0) flags.allow = allow;
-					if (deny.length > 0) flags.deny = deny;
-					rule.flags = flags;
+					const options: Record<string, unknown> = {};
+					if (allow.length > 0) options.allow = allow;
+					if (deny.length > 0) options.deny = deny;
+					rule.options = options;
 				}
 				return { json: JSON.stringify({ kind: 'shell', rule }), error: null };
 			}
@@ -123,8 +167,10 @@
 			void shellSubcommands;
 			void shellPositionals;
 			void shellPipeline;
-			void shellFlagsAllow;
-			void shellFlagsDeny;
+			void shellPreOptionsAllow;
+			void shellPreOptionsDeny;
+			void shellOptionsAllow;
+			void shellOptionsDeny;
 			void fsRuleKind;
 			void fsExactPath;
 			void fsGlob;
@@ -168,8 +214,10 @@
 		shellSubcommands = '';
 		shellPositionals = 'unset';
 		shellPipeline = 'unset';
-		shellFlagsDeny = '';
-		shellFlagsAllow = '';
+		shellPreOptionsAllow = '';
+		shellPreOptionsDeny = '';
+		shellOptionsAllow = '';
+		shellOptionsDeny = '';
 		fsRuleKind = 'workspace';
 		fsExactPath = '';
 		fsGlob = '';
@@ -215,8 +263,10 @@
 				shellSubcommands = (sc.rule.subcommands ?? []).join(', ');
 				shellPositionals = sc.rule.positionals?.kind ?? 'unset';
 				shellPipeline = sc.rule.pipeline ?? 'unset';
-				shellFlagsAllow = (sc.rule.flags?.allow ?? []).join(', ');
-				shellFlagsDeny = (sc.rule.flags?.deny ?? []).join(', ');
+				shellPreOptionsAllow = shellOptionSpecsToCsv(sc.rule.preSubcommandOptions?.allow ?? []);
+				shellPreOptionsDeny = (sc.rule.preSubcommandOptions?.deny ?? []).join(', ');
+				shellOptionsAllow = shellOptionSpecsToCsv(sc.rule.options?.allow ?? []);
+				shellOptionsDeny = (sc.rule.options?.deny ?? []).join(', ');
 			} else if (sc.kind === 'url') {
 				urlRuleKind = sc.rule.kind;
 				if (sc.rule.kind === 'exact') urlExact = sc.rule.url;
@@ -232,7 +282,10 @@
 
 		detailsOpen = true;
 		queueMicrotask(() => {
-			document.querySelector('.add-grant')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+			document.querySelector('.add-grant')?.scrollIntoView({
+				behavior: 'smooth',
+				block: 'start'
+			});
 		});
 	}
 
@@ -357,7 +410,8 @@
 							autocomplete="off"
 						/>
 						<span class="muted small"
-							>If set, argv[1] must be one of these (e.g. `git status` but not `git push`).</span
+							>If set, the resolved subcommand must be one of these. Leading option specs below
+							control which options are consumed before subcommand matching.</span
 						>
 					</label>
 					<label>
@@ -387,31 +441,59 @@
 						>
 					</label>
 					<label>
-						Flag deny list (optional, comma-separated)
+						Leading option allow list (optional, comma-separated)
 						<input
 							type="text"
-							bind:value={shellFlagsDeny}
+							bind:value={shellPreOptionsAllow}
+							placeholder="--no-pager, -C=any, --git-dir=workspace-path"
+							spellcheck="false"
+							autocomplete="off"
+						/>
+						<span class="muted small"
+							>Shared option-spec syntax: bare names are boolean flags; `name=any` and
+							`name=workspace-path` consume a value (either `name value` or `name=value`).</span
+						>
+					</label>
+					<label>
+						Leading option deny list (optional, comma-separated)
+						<input
+							type="text"
+							bind:value={shellPreOptionsDeny}
 							placeholder="--git-dir, -C"
 							spellcheck="false"
 							autocomplete="off"
 						/>
 						<span class="muted small"
-							>Reject if any argv token equals one of these (or starts with `flag=`). Each entry
-							must start with `-`.</span
+							>Name-based deny list for options before the subcommand. Useful for blocking repo
+							escape hatches like `git -C` or `git --git-dir`.</span
 						>
 					</label>
 					<label>
-						Flag allow list (optional, comma-separated)
+						Post-subcommand option allow list (optional, comma-separated)
 						<input
 							type="text"
-							bind:value={shellFlagsAllow}
-							placeholder="-n, --oneline"
+							bind:value={shellOptionsAllow}
+							placeholder="-n, --color=any, --"
 							spellcheck="false"
 							autocomplete="off"
 						/>
 						<span class="muted small"
-							>If set, every flag-shaped token (starting with `-`) must be in this list. Positionals
-							are governed by the row above.</span
+							>If set, every option-shaped token after the subcommand must match one of these specs.
+							Consumed option values are not treated as positionals.</span
+						>
+					</label>
+					<label>
+						Post-subcommand option deny list (optional, comma-separated)
+						<input
+							type="text"
+							bind:value={shellOptionsDeny}
+							placeholder="--format, --upload-pack"
+							spellcheck="false"
+							autocomplete="off"
+						/>
+						<span class="muted small"
+							>Name-based deny list for options after the subcommand. Positionals are governed by
+							the row above.</span
 						>
 					</label>
 				</fieldset>

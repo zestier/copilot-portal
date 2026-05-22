@@ -5,7 +5,13 @@
 // the parser couldn't fully understand. This module focuses on the
 // structural question: does this rule cover this argv?
 
-import type { ShellRule, PositionalsRule } from '../../../permissions/scope-types';
+import type { ShellRule, PositionalsRule, ShellOptionSpec } from '../../../permissions/scope-types';
+import {
+	defaultPreSubcommandOptionsForArgv0,
+	looksLikeShellOptionToken,
+	matchShellOptionToken,
+	resolveSubcommandIndex
+} from '../../../permissions/shell-argv';
 import type { ParsedSegment } from '../shell-parser';
 import { isPathInWorkspace } from '../workspace';
 
@@ -70,44 +76,113 @@ export function shellRuleMatchesSegment(
 		if (rule.pipeline === 'forbid' && inPipeline) return false;
 	}
 
+	const ignored = new Set<number>([0]);
+	const preRules = rule.preSubcommandOptions;
+	const preAllow = preRules?.allow ?? defaultPreSubcommandOptionsForArgv0(rule.argv0);
+	let bodyStartIndex = 1;
 	if (rule.subcommands && rule.subcommands.length > 0) {
-		const sub = argv[1];
-		if (typeof sub !== 'string' || !rule.subcommands.includes(sub)) return false;
-	}
-
-	const startIndex = rule.subcommands ? 2 : 1;
-	const flags: string[] = [];
-	const positionals: string[] = [];
-	for (let i = startIndex; i < argv.length; i++) {
-		const tok = argv[i];
-		if (typeof tok !== 'string') return false;
-		if (tok.startsWith('-') && tok !== '-' && tok !== '--') flags.push(tok);
-		else positionals.push(tok);
-	}
-
-	if (rule.flags?.deny) {
-		for (const tok of flags) {
-			for (const denied of rule.flags.deny) {
-				if (tok === denied || tok.startsWith(denied + '=')) return false;
-			}
+		const leading = resolveSubcommandIndex(argv, preAllow);
+		const subcommandIndex = leading.subcommandIndex;
+		if (subcommandIndex === null) return false;
+		for (const opt of leading.matchedOptions) {
+			if (!optionSpecMatchesValue(opt.spec, opt.value, ctx)) return false;
+			ignored.add(opt.index);
+			if (opt.valueIndex !== undefined) ignored.add(opt.valueIndex);
 		}
-	}
-	if (rule.flags?.allow) {
-		for (const tok of flags) {
-			let ok = false;
-			for (const allowed of rule.flags.allow) {
-				if (tok === allowed || tok.startsWith(allowed + '=')) {
-					ok = true;
-					break;
+		if (preRules?.deny && hasDeniedOption(argv.slice(1, subcommandIndex), preRules.deny)) {
+			return false;
+		}
+		const sub = argv[subcommandIndex];
+		if (typeof sub !== 'string' || !rule.subcommands.includes(sub)) return false;
+		ignored.add(subcommandIndex);
+		bodyStartIndex = subcommandIndex + 1;
+	} else if (preAllow.length > 0 || preRules?.deny) {
+		let i = 1;
+		for (; i < argv.length; ) {
+			const tok = argv[i];
+			if (!looksLikeShellOptionToken(tok) || tok === '--') break;
+			if (preRules?.deny) {
+				for (const denied of preRules.deny) {
+					if (tok === denied || tok.startsWith(denied + '=')) return false;
 				}
 			}
-			if (!ok) return false;
+			const matched = matchShellOptionToken(tok, argv[i + 1], preAllow);
+			if (!matched) break;
+			if (!optionSpecMatchesValue(matched.spec, matched.value, ctx)) return false;
+			ignored.add(i);
+			if (matched.consumedNextToken) {
+				ignored.add(i + 1);
+				i += 2;
+			} else {
+				i += 1;
+			}
 		}
+		bodyStartIndex = i;
+	}
+
+	const positionals: string[] = [];
+	let afterDoubleDash = false;
+	for (let i = bodyStartIndex; i < argv.length; i++) {
+		if (ignored.has(i)) continue;
+		const tok = argv[i];
+		if (typeof tok !== 'string') return false;
+		if (afterDoubleDash) {
+			positionals.push(tok);
+			continue;
+		}
+		if (tok === '--') {
+			afterDoubleDash = true;
+			continue;
+		}
+		if (looksLikeShellOptionToken(tok)) {
+			if (rule.options?.deny) {
+				for (const denied of rule.options.deny) {
+					if (tok === denied || tok.startsWith(denied + '=')) return false;
+				}
+			}
+			if (rule.options?.allow) {
+				const matched = matchShellOptionToken(tok, argv[i + 1], rule.options.allow);
+				if (!matched) return false;
+				if (!optionSpecMatchesValue(matched.spec, matched.value, ctx)) return false;
+				if (matched.spec.kind === 'flag' && matched.spec.name === '--') {
+					afterDoubleDash = true;
+				}
+				if (matched.consumedNextToken) i += 1;
+				continue;
+			}
+			continue;
+		}
+		positionals.push(tok);
 	}
 
 	if (!positionalsMatch(rule.positionals, positionals, ctx)) return false;
 
 	return true;
+}
+
+function optionSpecMatchesValue(
+	spec: ShellOptionSpec,
+	value: string | undefined,
+	ctx: ShellMatchContext
+): boolean {
+	if (spec.kind === 'flag') return true;
+	if (value === undefined) return false;
+	switch (spec.value.kind) {
+		case 'any':
+			return true;
+		case 'workspace-path':
+			return !!ctx.workspaceRoot && isPathInWorkspace(value, ctx.workspaceRoot);
+	}
+}
+
+function hasDeniedOption(tokens: string[], denied: readonly string[]): boolean {
+	for (const tok of tokens) {
+		if (!looksLikeShellOptionToken(tok)) continue;
+		for (const name of denied) {
+			if (tok === name || tok.startsWith(name + '=')) return true;
+		}
+	}
+	return false;
 }
 
 function positionalsMatch(

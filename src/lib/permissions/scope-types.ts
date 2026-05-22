@@ -19,27 +19,46 @@ export interface ShellScope {
 	rule: ShellRule;
 }
 
+export interface ShellOptionRules {
+	allow?: ShellOptionSpec[];
+	deny?: string[];
+}
+
+export type ShellOptionSpec =
+	| { name: string; kind: 'flag' }
+	| { name: string; kind: 'option'; value: ShellOptionValueRule };
+
+export type ShellOptionValueRule = { kind: 'any' } | { kind: 'workspace-path' };
+
 export interface ShellRule {
 	/** argv[0] — exact match, no globs. Required. */
 	argv0: string;
-	/** If set, matches only when argv[1] is in this list. */
+	/**
+	 * If set, matches only when the invocation's resolved subcommand is in
+	 * this list. When `preSubcommandOptions.allow` is omitted, known global
+	 * options for supported command families (currently `git`) are skipped
+	 * heuristically first, so `git --no-pager status` still resolves to
+	 * subcommand `status`.
+	 */
 	subcommands?: string[];
 	/**
-	 * Token-level flag constraints. `deny` flags reject the invocation if
-	 * any argv token equals the flag OR starts with `flag + '='` (so
-	 * `--git-dir /etc` and `--git-dir=/etc` are both caught).
-	 *
-	 * `allow` is an allow-list: if set, every flag-shaped token (starting
-	 * with `-`) must be in the list. Positional args are unconstrained
-	 * here — see `positionals`.
+	 * Option rules that apply before subcommand discovery. `allow` specs
+	 * consume known leading options so the matcher can locate the
+	 * subcommand and avoid misclassifying consumed values as positionals.
+	 * `deny` remains name-based because rejecting the option does not need
+	 * value-shape knowledge.
 	 */
-	flags?: {
-		allow?: string[];
-		deny?: string[];
-	};
+	preSubcommandOptions?: ShellOptionRules;
 	/**
-	 * What positional arguments (non-flag tokens after argv[0] / argv[1])
-	 * are allowed.
+	 * Option rules that apply after the subcommand (or immediately after
+	 * argv0 when no subcommand constraint is present). `allow` specs are
+	 * value-aware; `deny` is name-based.
+	 */
+	options?: ShellOptionRules;
+	/**
+	 * What positional arguments (non-flag tokens other than argv[0], the
+	 * resolved subcommand when constrained, and values consumed by matched
+	 * option specs) are allowed.
 	 *   none             — every positional must be absent
 	 *   any              — anything goes
 	 *   workspace-paths  — every positional must resolve to a path inside

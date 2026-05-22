@@ -23,7 +23,7 @@ const FsRuleSchema = z.discriminatedUnion('kind', [
 // Structured ShellScope wire shape mirrors `ShellScope` in
 // $lib/permissions/scope-types. The shell picker only emits the
 // argv0-anchored shapes (with optional subcommands and a coarse
-// positionals rule); free-form flag allow/deny lists come from
+// positionals rule); richer option rules come from
 // Settings / seeds, not dialog responses. The shape is re-validated by
 // the codec on the way to the DB.
 const ShellRuleSchema = z.object({

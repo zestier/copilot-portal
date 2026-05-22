@@ -23,7 +23,17 @@ describe('scope-codec roundtrip', () => {
 			rule: {
 				argv0: 'git',
 				subcommands: ['status', 'log', 'diff'],
-				flags: { allow: ['-n', '--oneline'], deny: ['--git-dir', '-C'] },
+				preSubcommandOptions: {
+					allow: [{ name: '-C', kind: 'option', value: { kind: 'any' } }],
+					deny: ['--git-dir']
+				},
+				options: {
+					allow: [
+						{ name: '-n', kind: 'flag' },
+						{ name: '--oneline', kind: 'flag' }
+					],
+					deny: ['--format']
+				},
 				positionals: { kind: 'workspace-paths' }
 			}
 		});
@@ -37,6 +47,35 @@ describe('scope-codec roundtrip', () => {
 		roundtrip({
 			kind: 'shell',
 			rule: { argv0: 'cat', pipeline: 'forbid', positionals: { kind: 'any' } }
+		});
+	});
+
+	it('decodes legacy flags into the new option-rule fields', () => {
+		expect(
+			decodeScope(
+				JSON.stringify({
+					kind: 'shell',
+					rule: {
+						argv0: 'git',
+						subcommands: ['status'],
+						flags: { allow: ['--no-pager'], deny: ['-C'] }
+					}
+				})
+			)
+		).toEqual({
+			kind: 'shell',
+			rule: {
+				argv0: 'git',
+				subcommands: ['status'],
+				preSubcommandOptions: {
+					allow: [{ name: '--no-pager', kind: 'flag' }],
+					deny: ['-C']
+				},
+				options: {
+					allow: [{ name: '--no-pager', kind: 'flag' }],
+					deny: ['-C']
+				}
+			}
 		});
 	});
 
@@ -75,7 +114,8 @@ describe('scope-codec decode — rejects malformed input', () => {
 		'{"kind":"shell","rule":{"argv0":"/bin/ls"}}',
 		'{"kind":"shell","rule":{"argv0":"./ls"}}',
 		'{"kind":"shell","rule":{"argv0":"git","subcommands":[1]}}',
-		'{"kind":"shell","rule":{"argv0":"git","flags":{"allow":[1]}}}',
+		'{"kind":"shell","rule":{"argv0":"git","options":{"allow":[1]}}}',
+		'{"kind":"shell","rule":{"argv0":"git","options":{"allow":[{"name":"-C","kind":"option","value":{"kind":"weird"}}]}}}',
 		'{"kind":"shell","rule":{"argv0":"git","positionals":{"kind":"foo"}}}',
 		'{"kind":"fs","rule":{"kind":"exact"}}',
 		'{"kind":"fs","rule":{"kind":"workspace-glob"}}',

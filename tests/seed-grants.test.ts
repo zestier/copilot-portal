@@ -52,6 +52,8 @@ describe('seed grants — runtime behaviour', () => {
 
 	it('auto-approves git read-only subcommands', () => {
 		expect(shellMatch('git status')).toBe('allow');
+		expect(shellMatch('git --no-pager status')).toBe('allow');
+		expect(shellMatch('git -c color.ui=always status')).toBe('allow');
 		expect(shellMatch('git log -n 5')).toBe('allow');
 		expect(shellMatch('git diff HEAD')).toBe('allow');
 	});

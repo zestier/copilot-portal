@@ -28,20 +28,39 @@ const PositionalsSchema = z.discriminatedUnion('kind', [
 const FlagSchema = z
 	.string()
 	.min(1)
-	.refine((s) => s.startsWith('-'), 'flags must start with `-`');
+	.refine((s) => s.startsWith('-'), 'option names must start with `-`');
+
+const ShellOptionValueSchema = z.discriminatedUnion('kind', [
+	z.object({ kind: z.literal('any') }),
+	z.object({ kind: z.literal('workspace-path') })
+]);
+
+const ShellOptionSpecSchema = z.discriminatedUnion('kind', [
+	z.object({
+		name: FlagSchema,
+		kind: z.literal('flag')
+	}),
+	z.object({
+		name: FlagSchema,
+		kind: z.literal('option'),
+		value: ShellOptionValueSchema
+	})
+]);
+
+const ShellOptionRulesSchema = z
+	.object({
+		allow: z.array(ShellOptionSpecSchema).min(1).optional(),
+		deny: z.array(FlagSchema).min(1).optional()
+	})
+	.refine((f) => f.allow !== undefined || f.deny !== undefined, {
+		message: 'option rules must specify at least one of allow/deny'
+	});
 
 const ShellRuleSchema = z.object({
 	argv0: Argv0Schema,
 	subcommands: z.array(ArgvToken).min(1).optional(),
-	flags: z
-		.object({
-			allow: z.array(FlagSchema).min(1).optional(),
-			deny: z.array(FlagSchema).min(1).optional()
-		})
-		.refine((f) => f.allow !== undefined || f.deny !== undefined, {
-			message: 'flags must specify at least one of allow/deny'
-		})
-		.optional(),
+	preSubcommandOptions: ShellOptionRulesSchema.optional(),
+	options: ShellOptionRulesSchema.optional(),
 	positionals: PositionalsSchema.optional(),
 	pipeline: z.enum(['must', 'forbid']).optional()
 });

@@ -10,6 +10,10 @@
 	} from '$lib/types';
 	import type { GrantScope } from '$lib/permissions/scope-types';
 	import { deriveScopeKey } from '$lib/permissions/scope-key';
+	import {
+		defaultPreSubcommandOptionsForArgv0,
+		resolveSubcommandIndex
+	} from '$lib/permissions/shell-argv';
 
 	let {
 		request,
@@ -238,12 +242,11 @@
 	// from the segments and let the user check several at once. Each
 	// checked option becomes its own grant row on "Allow always".
 	//
-	// Subcommand heuristic: if argv[1] exists, doesn't start with `-`,
-	// and looks like a bare identifier (matches /^[A-Za-z0-9][A-Za-z0-9_.:+-]*$/),
-	// we offer a "Any `cmd sub`" option in addition to the broad
-	// "Any `cmd`". This matches how git/kubectl/cargo/npm/docker are
-	// shaped without trying to know the actual subcommand vocabulary
-	// of every tool.
+	// Subcommand heuristic: for known command families like `git`, resolve
+	// the subcommand after supported global flags / options; otherwise fall
+	// back to argv[1]. If the resolved token looks like a bare identifier
+	// (matches /^[A-Za-z0-9][A-Za-z0-9_.:+-]*$/), we offer a
+	// "Any `cmd sub`" option in addition to the broad "Any `cmd`".
 
 	interface ShellScopeOption {
 		id: string;
@@ -310,7 +313,11 @@
 					}
 				});
 			}
-			const sub = seg.argv[1];
+			const subIndex = resolveSubcommandIndex(
+				seg.argv,
+				defaultPreSubcommandOptionsForArgv0(argv0)
+			).subcommandIndex;
+			const sub = subIndex === null ? undefined : seg.argv[subIndex];
 			if (
 				typeof sub === 'string' &&
 				!sub.startsWith('-') &&

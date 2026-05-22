@@ -20,7 +20,7 @@ describe('GrantInputSchema — valid shapes', () => {
 		expect(parsed.expiresAt).toBeNull();
 	});
 
-	it('shell with flag deny-list', () => {
+	it('shell with pre-subcommand and post-subcommand option rules', () => {
 		const parsed = GrantInputSchema.parse({
 			tool: 'shell',
 			decision: 'allow',
@@ -29,7 +29,14 @@ describe('GrantInputSchema — valid shapes', () => {
 				rule: {
 					argv0: 'git',
 					subcommands: ['status', 'log'],
-					flags: { deny: ['--git-dir', '-C'] }
+					preSubcommandOptions: {
+						allow: [{ name: '-C', kind: 'option', value: { kind: 'any' } }],
+						deny: ['--git-dir']
+					},
+					options: {
+						allow: [{ name: '--oneline', kind: 'flag' }],
+						deny: ['--format']
+					}
 				}
 			}
 		});
@@ -146,13 +153,13 @@ describe('GrantInputSchema — rejections', () => {
 		expect(r.success).toBe(false);
 	});
 
-	it('rejects flag without leading dash', () => {
+	it('rejects option name without leading dash', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'allow',
 			scope: {
 				kind: 'shell',
-				rule: { argv0: 'git', flags: { deny: ['foo'] } }
+				rule: { argv0: 'git', options: { deny: ['foo'] } }
 			}
 		});
 		expect(r.success).toBe(false);

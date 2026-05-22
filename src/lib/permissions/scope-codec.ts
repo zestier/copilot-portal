@@ -9,6 +9,9 @@ import type {
 	GrantScope,
 	ShellScope,
 	ShellRule,
+	ShellOptionRules,
+	ShellOptionSpec,
+	ShellOptionValueRule,
 	FsScope,
 	FsRule,
 	UrlScope,
@@ -67,21 +70,26 @@ function validateShell(v: Record<string, unknown>): ShellScope | null {
 		out.subcommands = subs;
 	}
 
+	if (rule.preSubcommandOptions !== undefined) {
+		const parsed = validateShellOptionRules(rule.preSubcommandOptions);
+		if (!parsed) return null;
+		out.preSubcommandOptions = parsed;
+	}
+
+	if (rule.options !== undefined) {
+		const parsed = validateShellOptionRules(rule.options);
+		if (!parsed) return null;
+		out.options = parsed;
+	}
+
 	if (rule.flags !== undefined) {
-		if (!isObject(rule.flags)) return null;
-		const f = rule.flags as Record<string, unknown>;
-		const flags: NonNullable<ShellRule['flags']> = {};
-		if (f.allow !== undefined) {
-			const list = asStringList(f.allow);
-			if (list === null) return null;
-			flags.allow = list;
+		if (out.preSubcommandOptions || out.options) return null;
+		const legacy = validateLegacyFlags(rule.flags);
+		if (!legacy) return null;
+		out.options = legacy;
+		if (out.subcommands && out.subcommands.length > 0) {
+			out.preSubcommandOptions = legacy;
 		}
-		if (f.deny !== undefined) {
-			const list = asStringList(f.deny);
-			if (list === null) return null;
-			flags.deny = list;
-		}
-		out.flags = flags;
 	}
 
 	if (rule.positionals !== undefined) {
@@ -96,6 +104,67 @@ function validateShell(v: Record<string, unknown>): ShellScope | null {
 	}
 
 	return { kind: 'shell', rule: out };
+}
+
+function validateShellOptionRules(v: unknown): ShellOptionRules | null {
+	if (!isObject(v)) return null;
+	const raw = v as Record<string, unknown>;
+	const out: ShellOptionRules = {};
+	if (raw.allow !== undefined) {
+		if (!Array.isArray(raw.allow)) return null;
+		const allow: ShellOptionSpec[] = [];
+		for (const spec of raw.allow) {
+			const parsed = validateShellOptionSpec(spec);
+			if (!parsed) return null;
+			allow.push(parsed);
+		}
+		out.allow = allow;
+	}
+	if (raw.deny !== undefined) {
+		const deny = asFlagNameList(raw.deny);
+		if (deny === null) return null;
+		out.deny = deny;
+	}
+	if (out.allow === undefined && out.deny === undefined) return null;
+	return out;
+}
+
+function validateShellOptionSpec(v: unknown): ShellOptionSpec | null {
+	if (!isObject(v)) return null;
+	const raw = v as Record<string, unknown>;
+	if (!isFlagName(raw.name)) return null;
+	if (raw.kind === 'flag') return { name: raw.name, kind: 'flag' };
+	if (raw.kind !== 'option') return null;
+	const value = validateShellOptionValue(raw.value);
+	if (!value) return null;
+	return { name: raw.name, kind: 'option', value };
+}
+
+function validateShellOptionValue(v: unknown): ShellOptionValueRule | null {
+	if (!isObject(v)) return null;
+	const kind = (v as { kind?: unknown }).kind;
+	if (kind === 'any' || kind === 'workspace-path') {
+		return { kind } as ShellOptionValueRule;
+	}
+	return null;
+}
+
+function validateLegacyFlags(v: unknown): ShellOptionRules | null {
+	if (!isObject(v)) return null;
+	const raw = v as Record<string, unknown>;
+	const out: ShellOptionRules = {};
+	if (raw.allow !== undefined) {
+		const list = asFlagNameList(raw.allow);
+		if (list === null) return null;
+		out.allow = list.map((name) => ({ name, kind: 'flag' }));
+	}
+	if (raw.deny !== undefined) {
+		const list = asFlagNameList(raw.deny);
+		if (list === null) return null;
+		out.deny = list;
+	}
+	if (out.allow === undefined && out.deny === undefined) return null;
+	return out;
 }
 
 function validatePositionals(v: unknown): PositionalsRule | null {
@@ -175,6 +244,19 @@ function asStringList(v: unknown): string[] | null {
 	return out;
 }
 
+function asFlagNameList(v: unknown): string[] | null {
+	const out = asStringList(v);
+	if (out === null) return null;
+	for (const s of out) {
+		if (!isFlagName(s)) return null;
+	}
+	return out;
+}
+
 function isObject(v: unknown): v is Record<string, unknown> {
 	return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function isFlagName(v: unknown): v is string {
+	return typeof v === 'string' && v.length > 0 && v.startsWith('-');
 }

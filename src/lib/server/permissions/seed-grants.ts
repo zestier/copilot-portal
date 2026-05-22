@@ -18,7 +18,7 @@
 //      is surfaced to the agent as `feedback` on the SDK reject, so
 //      the next call learns immediately without a user prompt.
 
-import type { GrantScope, ShellRule } from '$lib/permissions/scope-types';
+import type { GrantScope, ShellRule, ShellOptionSpec } from '$lib/permissions/scope-types';
 import { addGrant, listGrantsForUser } from '../db/repos/settings';
 
 interface SeedSpec {
@@ -96,7 +96,7 @@ const GIT_READ_SUBCOMMANDS = [
 	'for-each-ref'
 ];
 
-/** git flags that redirect operations to another repo or run external
+/** git options that redirect operations to another repo or run external
  * helpers. Always denied on the seed git grant — users who genuinely
  * need them can grant a broader rule. */
 const GIT_DANGEROUS_FLAGS = [
@@ -108,6 +108,25 @@ const GIT_DANGEROUS_FLAGS = [
 	'--man-path',
 	'--info-path',
 	'--super-prefix'
+];
+
+const GIT_PRE_SUBCOMMAND_ALLOW: ShellOptionSpec[] = [
+	{ name: '--paginate', kind: 'flag' },
+	{ name: '--no-pager', kind: 'flag' },
+	{ name: '--bare', kind: 'flag' },
+	{ name: '--no-replace-objects', kind: 'flag' },
+	{ name: '--literal-pathspecs', kind: 'flag' },
+	{ name: '--glob-pathspecs', kind: 'flag' },
+	{ name: '--noglob-pathspecs', kind: 'flag' },
+	{ name: '--icase-pathspecs', kind: 'flag' },
+	{ name: '--no-lazy-fetch', kind: 'flag' },
+	{ name: '--no-optional-locks', kind: 'flag' },
+	{ name: '-c', kind: 'option', value: { kind: 'any' } },
+	{ name: '-C', kind: 'option', value: { kind: 'any' } },
+	{ name: '--git-dir', kind: 'option', value: { kind: 'any' } },
+	{ name: '--work-tree', kind: 'option', value: { kind: 'any' } },
+	{ name: '--namespace', kind: 'option', value: { kind: 'any' } },
+	{ name: '--config-env', kind: 'option', value: { kind: 'any' } }
 ];
 
 function shellGrant(rule: ShellRule): SeedSpec {
@@ -186,17 +205,17 @@ export function defaultSeedGrants(): SeedSpec[] {
 		shellGrant({
 			argv0: 'git',
 			subcommands: GIT_READ_SUBCOMMANDS,
-			flags: { deny: GIT_DANGEROUS_FLAGS }
+			preSubcommandOptions: { allow: GIT_PRE_SUBCOMMAND_ALLOW, deny: GIT_DANGEROUS_FLAGS }
 		})
 	);
 
 	// rg / grep / find: read-only by default, but their command-running
-	// flags must be denied. We don't constrain positionals because users
+	// options must be denied. We don't constrain positionals because users
 	// commonly search for patterns whose syntax overlaps with paths.
 	seeds.push(
 		shellGrant({
 			argv0: 'rg',
-			flags: { deny: ['--pre', '--pre-glob', '--hostname-bin', '--no-config'] }
+			options: { deny: ['--pre', '--pre-glob', '--hostname-bin', '--no-config'] }
 		})
 	);
 	seeds.push(
@@ -208,7 +227,9 @@ export function defaultSeedGrants(): SeedSpec[] {
 	seeds.push(
 		shellGrant({
 			argv0: 'find',
-			flags: { deny: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprintf'] }
+			options: {
+				deny: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprintf']
+			}
 		})
 	);
 

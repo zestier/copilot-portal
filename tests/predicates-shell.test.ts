@@ -37,13 +37,19 @@ describe('shell predicate — argv0', () => {
 describe('shell predicate — subcommands', () => {
 	const rule: ShellRule = { argv0: 'git', subcommands: ['status', 'log', 'diff'] };
 
-	it('matches when argv[1] is in the list', () => {
+	it('matches when the resolved subcommand is in the list', () => {
 		expect(match(rule, 'git status')).toBe(true);
 		expect(match(rule, 'git log -n 5')).toBe(true);
 		expect(match(rule, 'git diff HEAD')).toBe(true);
 	});
 
-	it('rejects when argv[1] is not in the list', () => {
+	it('skips supported git global options before matching the subcommand', () => {
+		expect(match(rule, 'git --no-pager status')).toBe(true);
+		expect(match(rule, 'git -c color.ui=always status')).toBe(true);
+	});
+
+	it('rejects unsupported pre-subcommand prefixes or missing subcommands', () => {
+		expect(match(rule, 'git --exec-path status')).toBe(false);
 		expect(match(rule, 'git push')).toBe(false);
 		expect(match(rule, 'git')).toBe(false);
 	});
@@ -53,7 +59,15 @@ describe('shell predicate — flag deny', () => {
 	const rule: ShellRule = {
 		argv0: 'git',
 		subcommands: ['status', 'log'],
-		flags: { deny: ['--git-dir', '--work-tree', '-C'] }
+		preSubcommandOptions: {
+			allow: [
+				{ name: '--no-pager', kind: 'flag' },
+				{ name: '-C', kind: 'option', value: { kind: 'any' } },
+				{ name: '--git-dir', kind: 'option', value: { kind: 'any' } },
+				{ name: '--work-tree', kind: 'option', value: { kind: 'any' } }
+			],
+			deny: ['--git-dir', '--work-tree', '-C']
+		}
 	};
 
 	it('allows when none of the denied flags appear', () => {
@@ -70,12 +84,24 @@ describe('shell predicate — flag deny', () => {
 		expect(match(rule, 'git --git-dir=/etc status')).toBe(false);
 		expect(match(rule, 'git --work-tree=/tmp status')).toBe(false);
 	});
+
+	it('still inspects flags that appear before the subcommand', () => {
+		expect(match(rule, 'git --no-pager status -sb')).toBe(true);
+		expect(match(rule, 'git --no-pager -C /etc status')).toBe(false);
+	});
 });
 
-describe('shell predicate — flag allow-list', () => {
+describe('shell predicate — option allow-list', () => {
 	const rule: ShellRule = {
 		argv0: 'rg',
-		flags: { allow: ['-n', '--color', '--', '-i'] }
+		options: {
+			allow: [
+				{ name: '-n', kind: 'flag' },
+				{ name: '--color', kind: 'option', value: { kind: 'any' } },
+				{ name: '--', kind: 'flag' },
+				{ name: '-i', kind: 'flag' }
+			]
+		}
 	};
 
 	it('allows when every flag is in the list', () => {
@@ -86,6 +112,31 @@ describe('shell predicate — flag allow-list', () => {
 
 	it('rejects an unknown flag', () => {
 		expect(match(rule, 'rg --pre cat foo')).toBe(false);
+	});
+});
+
+describe('shell predicate — option values', () => {
+	it('consumes allowed option values instead of treating them as positionals', () => {
+		const rule: ShellRule = {
+			argv0: 'tool',
+			options: {
+				allow: [{ name: '--config', kind: 'option', value: { kind: 'any' } }]
+			},
+			positionals: { kind: 'none' }
+		};
+		expect(match(rule, 'tool --config settings.json')).toBe(true);
+	});
+
+	it('validates workspace-path option values when requested', () => {
+		const rule: ShellRule = {
+			argv0: 'tool',
+			options: {
+				allow: [{ name: '--file', kind: 'option', value: { kind: 'workspace-path' } }]
+			},
+			positionals: { kind: 'none' }
+		};
+		expect(match(rule, 'tool --file README.md')).toBe(true);
+		expect(match(rule, 'tool --file /etc/passwd')).toBe(false);
 	});
 });
 
