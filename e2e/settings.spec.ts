@@ -16,7 +16,14 @@ test('settings page loads with no client-side errors', async ({ page }) => {
 
 	await page.goto('/settings');
 	await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+	await expect(page.getByRole('tab', { name: 'General', exact: true })).toHaveAttribute(
+		'aria-selected',
+		'true'
+	);
+
+	await page.getByRole('tab', { name: /Permissions/ }).click();
 	await expect(page.getByRole('heading', { name: 'Saved permission grants' })).toBeVisible();
+	await expect(page.getByRole('tabpanel', { name: /Permissions/ })).toBeVisible();
 
 	// Open the add-grant <details> and verify the reactive sub-form
 	// fields render. <details> doesn't expose an ARIA role consistently,
@@ -31,6 +38,7 @@ test('settings page loads with no client-side errors', async ({ page }) => {
 
 test('creating a shell+workspace-paths grant adds a row to the list', async ({ page }) => {
 	await page.goto('/settings');
+	await page.getByRole('tab', { name: /Permissions/ }).click();
 	await page.locator('details.add-grant > summary').click();
 
 	// Default tool=shell. Use a unique argv0 so re-runs against the
@@ -53,4 +61,15 @@ test('creating a shell+workspace-paths grant adds a row to the list', async ({ p
 	// Revoking via the existing button removes it.
 	await row.getByRole('button', { name: 'Revoke' }).click();
 	await expect(row).toHaveCount(0);
+});
+
+test('settings tabs isolate activity from general settings', async ({ page }) => {
+	await page.goto('/settings');
+
+	await expect(page.getByRole('heading', { name: 'General', exact: true })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Recent permission decisions' })).toBeHidden();
+
+	await page.getByRole('tab', { name: 'Activity' }).click();
+	await expect(page.getByRole('heading', { name: 'Recent permission decisions' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'General', exact: true })).toBeHidden();
 });

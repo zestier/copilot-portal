@@ -67,7 +67,7 @@ const SaveSchema = z.object({
 
 export const actions: Actions = {
 	save: async ({ request, locals }) => {
-		if (!locals.userId) return { ok: false, error: 'Not authenticated' };
+		if (!locals.userId) return { ok: false, error: 'Not authenticated', formId: 'save' };
 		const data = await request.formData();
 		const parsed = SaveSchema.safeParse({
 			defaultModel: (data.get('defaultModel') as string) || undefined,
@@ -76,7 +76,11 @@ export const actions: Actions = {
 			theme: data.get('theme')
 		});
 		if (!parsed.success) {
-			return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid settings' };
+			return {
+				ok: false,
+				error: parsed.error.issues[0]?.message ?? 'Invalid settings',
+				formId: 'save'
+			};
 		}
 		const next: UserSettings = {
 			defaultModel: parsed.data.defaultModel ?? null,
@@ -85,25 +89,28 @@ export const actions: Actions = {
 			theme: parsed.data.theme
 		};
 		settings.save(locals.userId, next);
-		return { ok: true };
+		return { ok: true, formId: 'save' };
 	},
 	revokeGrant: async ({ request, locals }) => {
-		if (!locals.userId) return fail(401, { ok: false, error: 'Not authenticated' });
+		if (!locals.userId)
+			return fail(401, { ok: false, error: 'Not authenticated', formId: 'revokeGrant' });
 		const data = await request.formData();
 		const id = Number(data.get('id'));
 		if (!Number.isInteger(id) || id <= 0) {
-			return fail(400, { ok: false, error: 'Invalid grant id' });
+			return fail(400, { ok: false, error: 'Invalid grant id', formId: 'revokeGrant' });
 		}
 		const removed = settings.revokeGrant(locals.userId, id);
-		if (!removed) return fail(404, { ok: false, error: 'Grant not found' });
+		if (!removed) return fail(404, { ok: false, error: 'Grant not found', formId: 'revokeGrant' });
 		log.info('settings.grant_revoked', { userId: locals.userId, id });
-		return { ok: true };
+		return { ok: true, formId: 'revokeGrant' };
 	},
 	revokeAllGrants: async ({ locals }) => {
-		if (!locals.userId) return fail(401, { ok: false, error: 'Not authenticated' });
+		if (!locals.userId) {
+			return fail(401, { ok: false, error: 'Not authenticated', formId: 'revokeAllGrants' });
+		}
 		const removed = settings.revokeAllGrantsForUser(locals.userId);
 		log.info('settings.grants_revoked_all', { userId: locals.userId, count: removed });
-		return { ok: true, removed };
+		return { ok: true, removed, formId: 'revokeAllGrants' };
 	},
 
 	/**
@@ -114,10 +121,12 @@ export const actions: Actions = {
 	 * back-fill any new seeds shipped after their account was created.
 	 */
 	restoreSeedGrants: async ({ locals }) => {
-		if (!locals.userId) return fail(401, { ok: false, error: 'Not authenticated' });
+		if (!locals.userId) {
+			return fail(401, { ok: false, error: 'Not authenticated', formId: 'restoreSeedGrants' });
+		}
 		const inserted = ensureSeedGrantsForUser(locals.userId);
 		log.info('settings.seed_grants_restored', { userId: locals.userId, inserted });
-		return { ok: true, inserted };
+		return { ok: true, inserted, formId: 'restoreSeedGrants' };
 	},
 
 	/**
