@@ -104,8 +104,13 @@ discriminated `{ kind, ... }` body. The legacy
 
 ## Concurrency model
 
-- **One shared `CopilotClient` subprocess** for the whole portal process,
-  lazily started on first use.
+- **One `CopilotClient` subprocess per portal user**, lazily started on
+  first use and kept in a `Map<userId, CopilotClient>` in
+  `copilot/bridge.ts`. With the documented `ALLOWED_GITHUB_LOGINS`
+  allowlist this keeps Copilot API attribution (billing, audit) tied to
+  the GitHub identity that actually sent the turn instead of whichever
+  user logged in first after process boot. In the common single-user
+  deployment there is exactly one entry.
 - **One SDK session per conversation**, kept alive until idle for N
   minutes (configurable, default 15) or explicitly closed. Held in a
   small in-memory `Map<conversationId, Session>` (`copilot/pool.ts`).

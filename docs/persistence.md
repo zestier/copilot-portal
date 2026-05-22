@@ -24,7 +24,7 @@ table. No ORM, no migration framework.
 CREATE TABLE users (
   id              TEXT PRIMARY KEY,         -- ULID
   github_login    TEXT UNIQUE NOT NULL,
-  github_id       INTEGER UNIQUE NOT NULL,
+  github_id       INTEGER UNIQUE,           -- null for the local-only `AUTH_MODE=none` user
   display_name    TEXT,
   avatar_url      TEXT,
   created_at      INTEGER NOT NULL,         -- unix ms
@@ -43,7 +43,7 @@ CREATE TABLE user_settings (
   user_id            TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   default_model      TEXT,
   default_workdir    TEXT,
-  default_policy     TEXT NOT NULL DEFAULT 'prompt',  -- 'prompt'|'allow-readonly'|'allow-all'|'deny-all'
+  default_policy     TEXT NOT NULL DEFAULT 'prompt',  -- 'prompt'|'allow-all'|'deny-all'
   theme              TEXT NOT NULL DEFAULT 'dark',
   updated_at         INTEGER NOT NULL
 );

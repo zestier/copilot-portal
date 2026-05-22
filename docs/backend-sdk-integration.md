@@ -11,9 +11,13 @@ agent sessions.
 
 A thin wrapper that:
 
-1. Owns a single process-wide `CopilotClient` (the SDK's child process),
-   started lazily on first use and reused across conversations.
-2. Opens a per-conversation **session** on top of that shared client,
+1. Owns one `CopilotClient` (the SDK's child process) **per portal
+   user**, kept in a `Map<userId, CopilotClient>` and started lazily on
+   first use. With a multi-entry `ALLOWED_GITHUB_LOGINS` this keeps
+   Copilot API calls (billing, audit) attributed to the right GitHub
+   identity; in the common single-user deployment there is exactly one
+   entry.
+2. Opens a per-conversation **session** on top of that user's client,
    scoped to the conversation's working directory.
 3. Translates SDK events into the normalized `PortalEvent` discriminated
    union defined in `$lib/types.ts`.
@@ -27,18 +31,20 @@ A thin wrapper that:
 import { CopilotClient } from '@github/copilot-sdk';
 import type { PortalEvent } from '$lib/types';
 
-let shared: CopilotClient | null = null;
+const clients = new Map<string, CopilotClient>();
 
-async function getClient(authToken?: string): Promise<CopilotClient> {
-  if (shared) return shared;
-  shared = new CopilotClient({
+async function getClient(userId: string, authToken?: string): Promise<CopilotClient> {
+  const existing = clients.get(userId);
+  if (existing) return existing;
+  const client = new CopilotClient({
     useStdio: true,
     autoStart: false,
     useLoggedInUser: true,
     gitHubToken: authToken
   });
-  await shared.start();
-  return shared;
+  await client.start();
+  clients.set(userId, client);
+  return client;
 }
 
 export interface BridgeOpenOptions {
@@ -86,7 +92,7 @@ view is needed.
 
 ```ts
 // Singleton, per-process. Tracks per-conversation sessions on top of
-// the bridge's shared CopilotClient.
+// the bridge's per-user CopilotClient pool.
 const sessions = new Map<string, { session: ConversationSession; lastUsed: number }>();
 
 export async function acquire(opts: BridgeOpenOptions): Promise<ConversationSession> { ... }

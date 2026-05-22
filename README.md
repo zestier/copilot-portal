@@ -81,6 +81,37 @@ at `scripts/git-hooks/` (containing a `pre-commit` that runs
   no inline-edit-in-file UX beyond showing the diff produced by the agent).
 - Mobile-native apps. Web is responsive; that's enough.
 
+## Caveat: conversations are not independent
+
+Conversations share one host: one filesystem, one git repo, one set of
+package-manager caches, one set of long-lived side effects (pushed
+branches, deployed services, mutated databases, sent webhooks). The
+portal models conversations as if they were independent tabs, but the
+substrate underneath them is not. This is not unique to this portal —
+Copilot CLI, VS Code Copilot Chat, and similar tools all share the same
+limitation — but the portal makes it easier to forget, because you can
+fire off a second conversation from your phone while the first is still
+running on your laptop.
+
+Treat the portal like a single keyboard:
+
+- Don't run two conversations concurrently against the same repo. Side
+  effects will interleave, the working tree will reflect the union of
+  both turns, and edit/retry forking will replay onto whatever state
+  the _other_ conversation left behind.
+- "Allow always" permission grants are scoped to the user, not the
+  conversation. A grant approved in one conversation auto-allows the
+  same shape in every other conversation.
+- Snapshots (`src/lib/server/snapshots.ts`) are forensic, not
+  transactional. There is no "roll back what this conversation did."
+- If `PROJECT_ROOT` points at this repo, the agent can edit the
+  portal's own source while it's running. Vite HMR will pick the edits
+  up mid-turn.
+
+If you need real isolation, run separate portal instances with separate
+`PROJECT_ROOT`s (and ideally separate `DATA_DIR`s) — e.g. one per repo
+you want to work on concurrently.
+
 ## Document index
 
 1. [docs/architecture.md](docs/architecture.md) — Components and data flow.
