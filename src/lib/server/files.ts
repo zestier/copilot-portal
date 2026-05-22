@@ -17,36 +17,48 @@ import {
 } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve, join, relative, sep, isAbsolute, normalize } from 'node:path';
-import { projectRoot } from './workdir';
+import { effectiveWorkdir, projectRoot } from './workdir';
 
 /**
- * The root the file browser and git endpoints operate on. Tracks the
- * configured PROJECT_ROOT (env var, default `process.cwd()`) so the
- * sidebar file tree and git panel show the same tree the Copilot SDK is
- * editing. Resolved to its realpath; the result is cached per-root so a
- * mid-run PROJECT_ROOT change (test helpers) is honored without paying
- * the realpath() cost on every request.
+ * Resolve a workspace root to a stable absolute realpath, caching by the
+ * lexical root so repeated route hits don't pay the realpath cost.
  */
-let cachedFor: string | null = null;
-let cachedReal: string | null = null;
-export function workspaceRoot(): string {
-	const root = projectRoot();
-	if (cachedFor === root && cachedReal !== null) return cachedReal;
+const cachedRoots = new Map<string, string>();
+
+export function resolveWorkspaceRoot(root: string): string {
+	const abs = resolve(root);
+	const cached = cachedRoots.get(abs);
+	if (cached) return cached;
 	let real: string;
 	try {
-		real = realpathSync(root);
+		real = realpathSync(abs);
 	} catch {
-		real = resolve(root);
+		real = abs;
 	}
-	cachedFor = root;
-	cachedReal = real;
+	cachedRoots.set(abs, real);
 	return real;
+}
+
+/**
+ * The default root the file browser and git endpoints operate on when they are
+ * not scoped to a specific conversation.
+ */
+export function workspaceRoot(): string {
+	return resolveWorkspaceRoot(projectRoot());
+}
+
+/**
+ * Resolve the root a conversation-scoped file or git route should operate on.
+ * The conversation row is authoritative; legacy stored workdirs still fold
+ * back to PROJECT_ROOT via effectiveWorkdir().
+ */
+export function conversationWorkspaceRoot(workdir: string | null | undefined): string {
+	return resolveWorkspaceRoot(effectiveWorkdir(workdir));
 }
 
 /** Test-only: reset the cached workspace root. */
 export function resetWorkspaceRootForTests() {
-	cachedFor = null;
-	cachedReal = null;
+	cachedRoots.clear();
 }
 
 export interface DirEntry {

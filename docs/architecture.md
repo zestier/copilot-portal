@@ -40,15 +40,11 @@ See [persistence.md](persistence.md).
 
 ### 4. Working directory
 
-The Copilot SDK runs against a single project tree — the `PROJECT_ROOT`
-env var, defaulting to the server process's cwd. All conversations in a
-given deployment share that same workdir; the agent's edits land in one
-place, and the file browser / git tabs all read from it. (Earlier
-versions tried to give each conversation its own private sandbox under
-`DATA_DIR/workspaces/<id>/`, but the SDK was never actually pointed at
-those dirs; the per-conversation sandbox idea was removed. See
-`src/lib/server/workdir.ts` for the resolution logic and the legacy-path
-fallback.)
+Each conversation carries its own persisted `workdir`. New conversations
+default to `PROJECT_ROOT`, but can override it; the Copilot SDK, turn
+snapshots, and the file/git routes all resolve from that conversation row.
+Legacy `DATA_DIR/workspaces/<id>/` paths still fold back to `PROJECT_ROOT`
+via `src/lib/server/workdir.ts`.
 
 ### 5. Cloudflare Tunnel (optional, deployment-time)
 

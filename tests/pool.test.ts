@@ -1,0 +1,101 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { setupLocalEnv } from './helpers/env';
+
+const openMock = vi.fn();
+
+vi.mock('../src/lib/server/copilot/bridge', () => ({
+	open: (...args: unknown[]) => openMock(...args)
+}));
+
+async function importPool() {
+	vi.resetModules();
+	return await import('../src/lib/server/copilot/pool');
+}
+
+describe('copilot session pool', () => {
+	beforeEach(async () => {
+		await setupLocalEnv('portal-pool-test-');
+		openMock.mockReset();
+	});
+
+	afterEach(async () => {
+		const pool = await importPool();
+		await pool.shutdown();
+	});
+
+	it('reuses a live session when the requested workdir matches', async () => {
+		const session = {
+			conversationId: 'conv-1',
+			workingDirectory: '/tmp/work-a',
+			lastUsed: Date.now(),
+			send: vi.fn(),
+			abort: vi.fn(),
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setMode: vi.fn(),
+			setApproveAll: vi.fn(),
+			resetSessionApprovals: vi.fn()
+		};
+		openMock.mockResolvedValue(session);
+		const pool = await importPool();
+
+		const first = await pool.acquire({
+			conversationId: 'conv-1',
+			userId: 'user-1',
+			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
+			policy: 'prompt'
+		});
+		const second = await pool.acquire({
+			conversationId: 'conv-1',
+			userId: 'user-1',
+			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
+			policy: 'prompt'
+		});
+
+		expect(first).toBe(second);
+		expect(openMock).toHaveBeenCalledTimes(1);
+		expect(session.dispose).not.toHaveBeenCalled();
+	});
+
+	it('recreates a live session when the requested workdir changes', async () => {
+		const firstSession = {
+			conversationId: 'conv-1',
+			workingDirectory: '/tmp/work-a',
+			lastUsed: Date.now(),
+			send: vi.fn(),
+			abort: vi.fn(),
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setMode: vi.fn(),
+			setApproveAll: vi.fn(),
+			resetSessionApprovals: vi.fn()
+		};
+		const secondSession = {
+			...firstSession,
+			workingDirectory: '/tmp/work-b',
+			dispose: vi.fn().mockResolvedValue(undefined)
+		};
+		openMock.mockResolvedValueOnce(firstSession).mockResolvedValueOnce(secondSession);
+		const pool = await importPool();
+
+		const first = await pool.acquire({
+			conversationId: 'conv-1',
+			userId: 'user-1',
+			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
+			policy: 'prompt'
+		});
+		const second = await pool.acquire({
+			conversationId: 'conv-1',
+			userId: 'user-1',
+			workingDirectory: '/tmp/work-b',
+			model: 'gpt-4',
+			policy: 'prompt'
+		});
+
+		expect(first).not.toBe(second);
+		expect(firstSession.dispose).toHaveBeenCalledTimes(1);
+		expect(openMock).toHaveBeenCalledTimes(2);
+		expect(second.workingDirectory).toBe('/tmp/work-b');
+	});
+});

@@ -8,10 +8,12 @@ import type { ConversationSession } from '../../src/lib/server/copilot/bridge';
  */
 export function makeFakeSession(
 	events: PortalEvent[],
-	conversationId = 'conv-x'
+	conversationId = 'conv-x',
+	workingDirectory = '/tmp'
 ): ConversationSession {
 	return {
 		conversationId,
+		workingDirectory,
 		async *send(): AsyncIterable<PortalEvent> {
 			for (const e of events) yield e;
 		},

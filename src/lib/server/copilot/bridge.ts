@@ -112,6 +112,7 @@ export interface BridgeOpenOptions {
 
 export interface ConversationSession {
 	conversationId: string;
+	workingDirectory: string;
 	send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent>;
 	abort(): Promise<void>;
 	dispose(): Promise<void>;
@@ -1000,6 +1001,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 
 	const session: ConversationSession = {
 		conversationId: opts.conversationId,
+		workingDirectory: opts.workingDirectory,
 		lastUsed: Date.now(),
 		async *send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent> {
 			if (activeQueue) throw new Error('session busy: a turn is already in progress');

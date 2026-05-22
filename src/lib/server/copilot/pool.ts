@@ -29,8 +29,17 @@ function setReaperTimer(t: NodeJS.Timeout | null) {
 export async function acquire(opts: BridgeOpenOptions): Promise<ConversationSession> {
 	const existing = sessions.get(opts.conversationId);
 	if (existing) {
-		existing.lastUsed = Date.now();
-		return existing.session;
+		if (existing.session.workingDirectory === opts.workingDirectory) {
+			existing.lastUsed = Date.now();
+			return existing.session;
+		}
+		log.warn('copilot.pool.workdir_mismatch_recreate', {
+			conversationId: opts.conversationId,
+			cachedWorkdir: existing.session.workingDirectory,
+			requestedWorkdir: opts.workingDirectory
+		});
+		await existing.session.dispose().catch(() => undefined);
+		sessions.delete(opts.conversationId);
 	}
 	const cfg = loadConfig();
 	if (sessions.size >= cfg.MAX_CONCURRENT_SESSIONS) {

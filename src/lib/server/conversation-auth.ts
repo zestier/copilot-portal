@@ -4,6 +4,7 @@
 
 import { error } from '@sveltejs/kit';
 import * as convs from '$lib/server/db/repos/conversations';
+import { conversationWorkspaceRoot } from '$lib/server/files';
 import type { Conversation } from '$lib/types';
 
 export function authorizeConversation(
@@ -15,4 +16,15 @@ export function authorizeConversation(
 	const conv = convs.get(convId, userId);
 	if (!conv) throw error(404);
 	return conv;
+}
+
+export function authorizeConversationWorkdir(
+	convId: string | undefined,
+	userId: string | null | undefined
+): { conversation: Conversation; workdir: string } {
+	const conversation = authorizeConversation(convId, userId);
+	return {
+		conversation,
+		workdir: conversationWorkspaceRoot(conversation.workdir)
+	};
 }

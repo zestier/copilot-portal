@@ -89,11 +89,12 @@ Three strategies, configurable per user:
 
 ## Working-directory containment
 
-- The Copilot SDK is pointed at a single directory — `PROJECT_ROOT`
-  (env, defaulting to the server process's cwd). All conversations
-  share that workdir; the per-conversation `workdir` column exists for
-  historical reasons but resolves back to `PROJECT_ROOT` via
-  `src/lib/server/workdir.ts`.
+- The authoritative workdir is the persisted `conversations.workdir`
+  row. New conversations default to `PROJECT_ROOT` (env, defaulting to
+  the server process's cwd), but can override it; the Copilot SDK and
+  the conversation-scoped file/git routes both resolve from that same
+  row. Legacy stored paths under `DATA_DIR/workspaces/<id>/` still fold
+  back to `PROJECT_ROOT` via `src/lib/server/workdir.ts`.
 - No allowlist is enforced. The portal is a single-trusted-user app;
   if you can log in, you can already make the agent run shell
   commands, so policing the chosen directory adds no real defence.
