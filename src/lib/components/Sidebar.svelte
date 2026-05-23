@@ -6,6 +6,7 @@
 	import type { TicketChatMode } from '$lib/client/tickets';
 	import { ticketChatPrompt, ticketChatTitle } from '$lib/client/tickets';
 	import { createTicketDraftChat } from '$lib/client/ticket-chat-launch';
+	import { archiveWorkspaceTicket } from '$lib/client/ticket-archive';
 
 	let {
 		conversations,
@@ -35,6 +36,7 @@
 	let ticketTitle = $state('');
 	let ticketBusy = $state(false);
 	let ticketLaunchId = $state<string | null>(null);
+	let ticketArchiveId = $state<string | null>(null);
 	let expandedTicketIds = $state(new Set<string>());
 	let errorMsg = $state<string | null>(null);
 	let errorTimer: ReturnType<typeof setTimeout> | null = null;
@@ -133,8 +135,14 @@
 		expandedTicketIds = next;
 	}
 
+	function collapseTicket(ticketId: string) {
+		const next = new Set(expandedTicketIds);
+		next.delete(ticketId);
+		expandedTicketIds = next;
+	}
+
 	async function launchTicketChat(ticket: WorkspaceTicket, mode: TicketChatMode) {
-		if (ticketLaunchId) return;
+		if (ticketLaunchId || ticketArchiveId === ticket.id) return;
 		ticketLaunchId = ticket.id;
 		let conversationId: string | null = null;
 		try {
@@ -184,7 +192,7 @@
 	}
 
 	async function openTicketDraft(ticket: WorkspaceTicket, mode: TicketChatMode = 'do') {
-		if (ticketLaunchId) return;
+		if (ticketLaunchId || ticketArchiveId === ticket.id) return;
 		ticketLaunchId = ticket.id;
 		try {
 			const result = await createTicketDraftChat({
@@ -204,6 +212,28 @@
 			flashError('Could not open ticket draft');
 		} finally {
 			ticketLaunchId = null;
+		}
+	}
+
+	async function archiveTicket(ticket: WorkspaceTicket) {
+		if (ticketArchiveId || ticketLaunchId) return;
+		ticketArchiveId = ticket.id;
+		try {
+			const result = await archiveWorkspaceTicket({
+				ticketId: ticket.id,
+				workspace: ticketWorkspace,
+				fetcher: fetch
+			});
+			if (!result.ok) {
+				flashError(`Remove ticket failed (${result.status ?? 'network'})`);
+				return;
+			}
+			collapseTicket(ticket.id);
+			await invalidateAll();
+		} catch {
+			flashError('Remove ticket failed');
+		} finally {
+			ticketArchiveId = null;
 		}
 	}
 
@@ -450,7 +480,7 @@
 												class="ticket-action"
 												title="Start implementation chat"
 												aria-label={`Do ticket: ${ticket.title}`}
-												disabled={ticketLaunchId !== null}
+												disabled={ticketLaunchId !== null || ticketArchiveId === ticket.id}
 												onclick={() => launchTicketChat(ticket, 'do')}
 											>
 												Do
@@ -459,7 +489,7 @@
 												class="ticket-action"
 												title="Open editable draft chat"
 												aria-label={`Open draft for ticket: ${ticket.title}`}
-												disabled={ticketLaunchId !== null}
+												disabled={ticketLaunchId !== null || ticketArchiveId === ticket.id}
 												onclick={() => openTicketDraft(ticket)}
 											>
 												Draft
@@ -468,10 +498,19 @@
 												class="ticket-action"
 												title="Start ticket refinement chat"
 												aria-label={`Refine ticket: ${ticket.title}`}
-												disabled={ticketLaunchId !== null}
+												disabled={ticketLaunchId !== null || ticketArchiveId === ticket.id}
 												onclick={() => launchTicketChat(ticket, 'refine')}
 											>
 												Refine
+											</button>
+											<button
+												class="ticket-action danger"
+												title="Remove ticket from open list"
+												aria-label={`Remove ticket: ${ticket.title}`}
+												disabled={ticketLaunchId !== null || ticketArchiveId === ticket.id}
+												onclick={() => archiveTicket(ticket)}
+											>
+												Remove
 											</button>
 										</div>
 										<div class="ticket-details">
@@ -826,6 +865,17 @@
 		color: var(--text);
 		border-color: var(--accent);
 		outline: none;
+	}
+	.ticket-action.danger {
+		margin-left: auto;
+		color: var(--danger);
+		border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+	}
+	.ticket-action.danger:hover,
+	.ticket-action.danger:focus-visible {
+		color: var(--danger-text);
+		border-color: var(--danger);
+		background: var(--danger);
 	}
 	.ticket-action:disabled {
 		cursor: wait;

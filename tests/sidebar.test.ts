@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { archiveWorkspaceTicket } from '../src/lib/client/ticket-archive';
 import { resolveInitialSidebarOpen } from '../src/lib/client/sidebar';
 import { ticketChatPrompt, ticketChatTitle, ticketDraftChatUrl } from '../src/lib/client/tickets';
 
@@ -81,5 +82,38 @@ describe('ticket chat helpers', () => {
 		expect(ticketDraftChatUrl('conv-1', 'ticket-1', 'do')).toBe(
 			'/conversations/conv-1?draftTicketId=ticket-1&ticketMode=do'
 		);
+	});
+});
+
+describe('ticket archive helper', () => {
+	it('archives a ticket with workspace scoping', async () => {
+		const calls: Array<[string, RequestInit]> = [];
+		const result = await archiveWorkspaceTicket({
+			ticketId: 'ticket/1',
+			workspace: '/workspace with spaces',
+			fetcher: async (url, init) => {
+				calls.push([url, init]);
+				return Response.json({ ok: true });
+			}
+		});
+
+		expect(result).toEqual({ ok: true });
+		expect(calls).toEqual([
+			[
+				'/api/tickets/ticket%2F1?workspace=%2Fworkspace+with+spaces',
+				{
+					method: 'DELETE'
+				}
+			]
+		]);
+	});
+
+	it('returns the failed archive status', async () => {
+		const result = await archiveWorkspaceTicket({
+			ticketId: 'ticket-1',
+			fetcher: async () => new Response(null, { status: 404 })
+		});
+
+		expect(result).toEqual({ ok: false, status: 404 });
 	});
 });
