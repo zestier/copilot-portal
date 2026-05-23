@@ -27,6 +27,7 @@
 	let selectMode = $state(false);
 	let selected = $state(new Set<string>());
 	let bulkBusy = $state(false);
+	let ticketsOpen = $state(false);
 	let ticketDraftOpen = $state(false);
 	let ticketTitle = $state('');
 	let ticketBusy = $state(false);
@@ -100,6 +101,17 @@
 		} finally {
 			ticketBusy = false;
 		}
+	}
+
+	function toggleTickets() {
+		ticketsOpen = !ticketsOpen;
+		if (!ticketsOpen) ticketDraftOpen = false;
+	}
+
+	function toggleTicketDraft() {
+		if (!ticketWorkspace) return;
+		ticketsOpen = true;
+		ticketDraftOpen = !ticketDraftOpen;
 	}
 
 	async function setTicketDone(id: string) {
@@ -288,56 +300,68 @@
 
 	<section class="tickets" aria-label="Workspace tickets">
 		<div class="tickets-head">
-			<span class="count muted">Tickets ({ticketCount})</span>
+			<button
+				class="section-toggle tickets-toggle"
+				aria-expanded={ticketsOpen}
+				aria-controls="workspace-ticket-list"
+				onclick={toggleTickets}
+			>
+				<span class="caret" class:open={ticketsOpen}>▸</span>
+				Tickets ({ticketCount})
+			</button>
 			<button
 				class="btn sm ghost"
 				title="Add ticket"
 				aria-label="Add ticket"
 				disabled={!ticketWorkspace}
-				onclick={() => (ticketDraftOpen = !ticketDraftOpen)}
+				onclick={toggleTicketDraft}
 			>
 				+
 			</button>
 		</div>
-		{#if ticketDraftOpen}
-			<form
-				class="ticket-form"
-				onsubmit={(e) => {
-					e.preventDefault();
-					addTicket();
-				}}
-			>
-				<input
-					bind:value={ticketTitle}
-					maxlength="200"
-					placeholder="Do this later..."
-					aria-label="Ticket title"
-					disabled={ticketBusy}
-				/>
-				<button class="btn sm" disabled={ticketBusy || !ticketTitle.trim()}>Add</button>
-			</form>
-		{/if}
-		{#if tickets.length === 0}
-			<p class="muted empty ticket-empty">No open tickets.</p>
-		{:else}
-			<div class="ticket-list">
-				{#each tickets as ticket (ticket.id)}
-					<div class="ticket">
-						<button
-							class="ticket-done"
-							title="Mark done"
-							aria-label={`Mark ${ticket.title} done`}
-							onclick={() => setTicketDone(ticket.id)}
-						>
-							✓
-						</button>
-						<div class="ticket-title" title={ticket.title}>{ticket.title}</div>
+		{#if ticketsOpen}
+			<div id="workspace-ticket-list">
+				{#if ticketDraftOpen}
+					<form
+						class="ticket-form"
+						onsubmit={(e) => {
+							e.preventDefault();
+							addTicket();
+						}}
+					>
+						<input
+							bind:value={ticketTitle}
+							maxlength="200"
+							placeholder="Do this later..."
+							aria-label="Ticket title"
+							disabled={ticketBusy}
+						/>
+						<button class="btn sm" disabled={ticketBusy || !ticketTitle.trim()}>Add</button>
+					</form>
+				{/if}
+				{#if tickets.length === 0}
+					<p class="muted empty ticket-empty">No open tickets.</p>
+				{:else}
+					<div class="ticket-list">
+						{#each tickets as ticket (ticket.id)}
+							<div class="ticket">
+								<button
+									class="ticket-done"
+									title="Mark done"
+									aria-label={`Mark ${ticket.title} done`}
+									onclick={() => setTicketDone(ticket.id)}
+								>
+									✓
+								</button>
+								<div class="ticket-title" title={ticket.title}>{ticket.title}</div>
+							</div>
+						{/each}
 					</div>
-				{/each}
+					{#if ticketCount > tickets.length}
+						<p class="muted ticket-more">Showing latest {tickets.length} open tickets.</p>
+					{/if}
+				{/if}
 			</div>
-			{#if ticketCount > tickets.length}
-				<p class="muted ticket-more">Showing latest {tickets.length} open tickets.</p>
-			{/if}
 		{/if}
 	</section>
 
@@ -588,6 +612,11 @@
 		justify-content: space-between;
 		gap: var(--space-2);
 		margin-bottom: var(--space-1);
+	}
+	.tickets-toggle {
+		flex: 1;
+		min-width: 0;
+		padding: var(--space-1) 0;
 	}
 	.ticket-form {
 		display: flex;
