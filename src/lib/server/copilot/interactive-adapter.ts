@@ -361,7 +361,7 @@ function bestEffortPermissionFeedback(view: { permissionKind: string }): string 
 	const permissionKind = bestEffortPermissionKindLabel(view.permissionKind);
 	return (
 		`A ${permissionKind} permission request was auto-rejected because this conversation is in \`best-effort\` mode. ` +
-		`${alternative} If that cannot satisfy the request, retry with \`forcePermissionPrompt\` explaining why user approval is required, or call \`request_mode_switch\` if repeated permission prompts are blocking progress.`
+		`${alternative} Use \`permission_capabilities\` to inspect allowed alternatives. If that cannot satisfy the request, retry with \`forcePermissionPrompt\` explaining why user approval is required, or call \`request_mode_switch\` if repeated permission prompts are blocking progress.`
 	);
 }
 

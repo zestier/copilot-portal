@@ -243,11 +243,98 @@ describe('bridge.open() session mode and permissions', () => {
 				expect.objectContaining({ name: 'ticket_get' }),
 				expect.objectContaining({ name: 'ticket_update' }),
 				expect.objectContaining({
+					name: 'permission_capabilities',
+					description: expect.stringContaining('allowed alternatives')
+				}),
+				expect.objectContaining({
 					name: 'request_mode_switch',
 					description: expect.stringContaining('interactive mode')
 				})
 			])
 		);
+	});
+
+	it('permission_capabilities reports effective alternatives without raw grant internals', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const convs = await import('../src/lib/server/db/repos/conversations');
+		const user = ensureLocalUser();
+		convs.create(user.id, {
+			id: baseOpts.conversationId,
+			title: 'test',
+			workdir: baseOpts.workingDirectory,
+			model: baseOpts.model
+		});
+		settings.addGrant({
+			userId: user.id,
+			conversationId: null,
+			tool: 'url_fetcher',
+			permissionKind: 'url',
+			scope: { kind: 'url', rule: { kind: 'host', host: 'api.example.test' } }
+		});
+		settings.addGrant({
+			userId: user.id,
+			conversationId: baseOpts.conversationId,
+			tool: 'read',
+			permissionKind: 'read',
+			scope: {
+				kind: 'fs',
+				perms: ['read'],
+				rule: { kind: 'path', root: 'absolute', behavior: 'exact', value: '/secret/file.txt' }
+			},
+			decision: 'deny',
+			denyReason: 'Do not expose this exact path in capability output.'
+		});
+		await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+
+		const tools = clientStub.createSession.mock.calls[0][0].tools as Array<{
+			name: string;
+			handler(args: unknown): Promise<string>;
+		}>;
+		const tool = tools.find((t) => t.name === 'permission_capabilities');
+		expect(tool).toBeTruthy();
+
+		const response = JSON.parse(
+			await tool!.handler({ permissionKind: 'url', toolName: 'url_fetcher' })
+		) as {
+			mode: string;
+			bestEffort: boolean;
+			capabilities: Array<{
+				permissionKind: string;
+				status: string;
+				allowed?: Array<{ summary: string }>;
+			}>;
+			escalation: {
+				forcePermissionPrompt: { supported: boolean };
+				requestModeSwitch: { supported: boolean };
+			};
+		};
+
+		expect(response).toMatchObject({
+			mode: 'best-effort',
+			bestEffort: true,
+			escalation: {
+				forcePermissionPrompt: { supported: true },
+				requestModeSwitch: { supported: true }
+			}
+		});
+		expect(response.capabilities).toEqual([
+			expect.objectContaining({
+				permissionKind: 'url',
+				status: 'allowed',
+				allowed: [
+					expect.objectContaining({
+						summary: expect.stringContaining('api.example.test')
+					})
+				]
+			})
+		]);
+
+		const readResponseText = await tool!.handler({ permissionKind: 'read' });
+		expect(readResponseText).not.toContain('/secret/file.txt');
+		expect(readResponseText).not.toContain('Do not expose this exact path');
+		expect(readResponseText).toContain('specific absolute exact rule');
 	});
 
 	it('maps best-effort mode to autopilot on the runtime RPC', async () => {
@@ -349,6 +436,11 @@ describe('bridge.open() session mode and permissions', () => {
 				feedback: expect.stringContaining('forcePermissionPrompt')
 			})
 		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('permission_capabilities')
+			})
+		);
 		const feedback = (result as { feedback: string }).feedback;
 		expect(feedback).not.toContain('The user would have been asked to approve:');
 		expect(feedback).not.toContain('shell (shell)');
@@ -404,6 +496,7 @@ describe('bridge.open() session mode and permissions', () => {
 			);
 			const kindFeedback = (kindResult as { feedback: string }).feedback;
 			expect(kindFeedback).toContain(c.expectedHint);
+			expect(kindFeedback).toContain('permission_capabilities');
 			expect(kindFeedback).toContain('forcePermissionPrompt');
 			expect(kindFeedback).toContain('request_mode_switch');
 			expect(kindFeedback).not.toContain(c.forbiddenDetail);

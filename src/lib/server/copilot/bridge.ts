@@ -14,6 +14,7 @@ import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
 import { buildGitTools } from '../tools/git';
 import { buildTicketTools } from '../tools/tickets';
+import { buildPermissionTools } from '../tools/permissions';
 import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 
 // One CopilotClient per portal user. Sharing a single process-wide
@@ -214,6 +215,12 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 				userId: opts.userId,
 				workspaceKey: ticketWorkspaceFromConversation(opts.workingDirectory),
 				conversationId: opts.conversationId
+			}),
+			...buildPermissionTools({
+				userId: opts.userId,
+				conversationId: opts.conversationId,
+				policy: opts.policy,
+				getMode: () => currentMode
 			}),
 			{
 				name: 'request_mode_switch',

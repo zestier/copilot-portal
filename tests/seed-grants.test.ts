@@ -82,6 +82,10 @@ describe('seed grants — runtime behaviour', () => {
 		expect(customToolMatch('ticket_update')).toBe('allow');
 	});
 
+	it('auto-approves permission capability inspection by default', () => {
+		expect(customToolMatch('permission_capabilities')).toBe('allow');
+	});
+
 	it('auto-approves filesystem requests inside the SDK session workspace by default', () => {
 		const session = mkdtempSync(join(tmpdir(), 'portal-seed-session-'));
 		mkdirSync(join(session, 'files'));
