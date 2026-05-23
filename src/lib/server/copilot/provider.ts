@@ -1,4 +1,12 @@
-import type { BackendProviderId, PortalEvent, PermissionPolicy, SessionMode } from '$lib/types';
+import type {
+	BackendProviderId,
+	PortalEvent,
+	PermissionPolicy,
+	ProviderCapabilities,
+	SessionMode
+} from '$lib/types';
+
+export type { ProviderCapabilities } from '$lib/types';
 
 export interface ProviderAuthStatus {
 	isAuthenticated: boolean;
@@ -14,53 +22,6 @@ export interface ProviderModelInfo {
 		limits?: {
 			max_context_window_tokens?: number;
 		};
-	};
-}
-
-export interface ProviderCapabilities {
-	authStatus: boolean;
-	modelList: boolean;
-	session: {
-		open: true;
-		/** Resume by conversation id when the provider has durable session state. */
-		resume: boolean;
-		dispose: true;
-		abort: boolean;
-	};
-	stream: {
-		send: true;
-		/**
-		 * Providers must normalize their native streaming protocol into PortalEvent.
-		 * turn-runner consumes only this contract and should not depend on SDK-
-		 * specific event shapes.
-		 */
-		contract: 'PortalEvent';
-	};
-	controls: {
-		/** Supports live session modes such as plan/autopilot/best-effort. */
-		mode: boolean;
-		/** Supports live approve-all toggling for tool permission requests. */
-		approveAll: boolean;
-		/** Supports clearing provider/session-scoped approval grants. */
-		resetSessionApprovals: boolean;
-	};
-	/**
-	 * Copilot SDK features the portal can consume when present. Alternative
-	 * providers, including OpenAI-compatible backends, may leave these false and
-	 * still satisfy the core PortalEvent stream contract.
-	 */
-	optionalCopilotFeatures: {
-		infiniteSessionMetadata: boolean;
-		permissionCallbacks: boolean;
-		userInputCallbacks: boolean;
-		elicitationCallbacks: boolean;
-		exitPlanModeCallbacks: boolean;
-		autoModeSwitchCallbacks: boolean;
-		contextWindowEvents: boolean;
-		contextCompactionEvents: boolean;
-		fileEditEvents: boolean;
-		reasoningEvents: boolean;
-		subagentLifecycleEvents: boolean;
 	};
 }
 

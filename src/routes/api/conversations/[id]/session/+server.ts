@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as pool from '$lib/server/copilot/pool';
+import { getProvider } from '$lib/server/copilot/providers';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 import { parseBody } from '$lib/server/validate';
 import { log } from '$lib/server/log';
@@ -26,7 +27,9 @@ const PatchBody = z
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	const conv = authorizeConversation(params.id, locals.userId);
 	const body = await parseBody(request, PatchBody);
+	const provider = getProvider(conv.provider);
 
+	const persistedPatch = { ...body };
 	convs.updateSessionSettings(conv.id, conv.userId, body);
 	const live = pool.getActive(conv.id);
 	if (live) {
@@ -52,7 +55,17 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 		}
 	}
 
-	return json({ ok: true, conversation: convs.get(conv.id, conv.userId) });
+	return json({
+		ok: true,
+		conversation: convs.get(conv.id, conv.userId),
+		capabilities: provider.capabilities,
+		unsupported: {
+			mode:
+				persistedPatch.mode !== undefined && !provider.capabilities.controls.mode
+					? provider.capabilities.features.modes.description
+					: undefined
+		}
+	});
 };
 
 // POST /api/conversations/:id/session — clear the SDK's session-scoped
@@ -60,6 +73,14 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 // slate without ending the conversation.
 export const POST: RequestHandler = async ({ params, locals }) => {
 	const conv = authorizeConversation(params.id, locals.userId);
+	const provider = getProvider(conv.provider);
+	if (!provider.capabilities.controls.resetSessionApprovals) {
+		return json({
+			ok: true,
+			supported: false,
+			message: 'This provider has no session-scoped approval cache to reset.'
+		});
+	}
 	const live = pool.getActive(conv.id);
 	if (live?.resetSessionApprovals) {
 		try {
@@ -71,5 +92,5 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 			});
 		}
 	}
-	return json({ ok: true });
+	return json({ ok: true, supported: true });
 };

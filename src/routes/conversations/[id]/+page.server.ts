@@ -6,6 +6,7 @@ import * as tickets from '$lib/server/db/repos/tickets';
 import * as usage from '$lib/server/db/repos/usage';
 import { getTurn } from '$lib/server/copilot/turn-runner';
 import { listForConversation as listPendingInteractive } from '$lib/server/copilot/interactive-requests';
+import { getProvider } from '$lib/server/copilot/providers';
 import { ticketWorkspaceFromConversation } from '$lib/server/ticket-workspace';
 import { isTicketChatMode, ticketChatPrompt } from '$lib/tickets/chat';
 
@@ -67,6 +68,7 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 
 	return {
 		conversation: conv,
+		providerCapabilities: getProvider(conv.provider).capabilities,
 		messages: msgs,
 		contextUsage,
 		parent,

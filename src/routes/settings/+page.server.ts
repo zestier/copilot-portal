@@ -16,6 +16,7 @@ import {
 	normalizeBackendProvider,
 	type BackendProviderId,
 	type PermissionPolicy,
+	type ProviderCapabilities,
 	type SessionMode,
 	type UserSettings
 } from '$lib/types';
@@ -38,6 +39,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		displayName: string;
 		auth: { isAuthenticated: boolean; authType?: string; login?: string; statusMessage?: string };
 		models: { id: string; name: string; maxContextWindowTokens?: number }[];
+		capabilities: ProviderCapabilities;
 		error?: string;
 	};
 	const providers = await Promise.all(
@@ -60,7 +62,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 						id: m.id,
 						name: m.name,
 						maxContextWindowTokens: m.capabilities?.limits?.max_context_window_tokens
-					}))
+					})),
+					capabilities: provider.capabilities
 				};
 			} catch (e) {
 				log.warn('settings.provider_status_failed', { provider: provider.id, err: String(e) });
@@ -69,6 +72,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 					displayName: provider.displayName,
 					auth: { isAuthenticated: false, statusMessage: String(e) },
 					models: [],
+					capabilities: provider.capabilities,
 					error: e instanceof Error ? e.message : String(e)
 				};
 			}

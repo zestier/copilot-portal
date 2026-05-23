@@ -82,6 +82,86 @@ export function normalizeBackendProvider(raw: string | null | undefined): Backen
 	return raw === 'openai-compatible' ? raw : 'copilot';
 }
 
+export type ProviderRuntimeFeature =
+	| 'modes'
+	| 'approveAll'
+	| 'contextUsage'
+	| 'subagents'
+	| 'mcpInfoEvents'
+	| 'planExit'
+	| 'elicitation';
+
+export type ProviderRuntimeFeatureBehavior =
+	| 'supported'
+	| 'portal-enforced'
+	| 'no-op'
+	| 'unsupported';
+
+export interface ProviderRuntimeFeatureStatus {
+	supported: boolean;
+	behavior: ProviderRuntimeFeatureBehavior;
+	label: string;
+	description: string;
+}
+
+export type ProviderRuntimeFeatureMap = Record<
+	ProviderRuntimeFeature,
+	ProviderRuntimeFeatureStatus
+>;
+
+export interface ProviderCapabilities {
+	authStatus: boolean;
+	modelList: boolean;
+	session: {
+		open: true;
+		/** Resume by conversation id when the provider has durable session state. */
+		resume: boolean;
+		dispose: true;
+		abort: boolean;
+	};
+	stream: {
+		send: true;
+		/**
+		 * Providers must normalize their native streaming protocol into PortalEvent.
+		 * turn-runner consumes only this contract and should not depend on SDK-
+		 * specific event shapes.
+		 */
+		contract: 'PortalEvent';
+	};
+	controls: {
+		/** Supports live runtime modes such as plan/autopilot/best-effort. */
+		mode: boolean;
+		/** Supports live approve-all toggling for tool permission requests. */
+		approveAll: boolean;
+		/** Supports clearing provider/session-scoped approval grants. */
+		resetSessionApprovals: boolean;
+	};
+	/**
+	 * User-facing runtime capability contract. Non-Copilot providers must mark
+	 * unsupported Copilot SDK features explicitly so API clients and UI copy do
+	 * not imply unavailable runtime behavior is active.
+	 */
+	features: ProviderRuntimeFeatureMap;
+	/**
+	 * Copilot SDK features the portal can consume when present. Alternative
+	 * providers, including OpenAI-compatible backends, may leave these false and
+	 * still satisfy the core PortalEvent stream contract.
+	 */
+	optionalCopilotFeatures: {
+		infiniteSessionMetadata: boolean;
+		permissionCallbacks: boolean;
+		userInputCallbacks: boolean;
+		elicitationCallbacks: boolean;
+		exitPlanModeCallbacks: boolean;
+		autoModeSwitchCallbacks: boolean;
+		contextWindowEvents: boolean;
+		contextCompactionEvents: boolean;
+		fileEditEvents: boolean;
+		reasoningEvents: boolean;
+		subagentLifecycleEvents: boolean;
+	};
+}
+
 export interface Message {
 	id: string;
 	conversationId: string;

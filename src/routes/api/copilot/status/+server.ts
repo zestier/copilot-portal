@@ -26,7 +26,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 			provider: defaultProvider,
 			providers: listProviders().map((provider) => ({
 				id: provider.id,
-				displayName: provider.displayName
+				displayName: provider.displayName,
+				capabilities: provider.capabilities
 			})),
 			auth,
 			models
@@ -38,7 +39,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 				provider: defaultProvider,
 				providers: listProviders().map((provider) => ({
 					id: provider.id,
-					displayName: provider.displayName
+					displayName: provider.displayName,
+					capabilities: provider.capabilities
 				})),
 				auth: { isAuthenticated: false, statusMessage: String(e) },
 				models: []

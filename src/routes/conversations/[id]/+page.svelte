@@ -70,6 +70,7 @@
 	<div class="tab-body" class:hidden={tab !== 'chat'}>
 		<Chat
 			conversation={data.conversation}
+			providerCapabilities={data.providerCapabilities}
 			initialMessages={data.messages}
 			initialUsage={data.contextUsage}
 			parent={data.parent}

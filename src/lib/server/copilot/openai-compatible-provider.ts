@@ -110,9 +110,60 @@ export const openAICompatibleProvider: ModelBackendProvider = {
 			contract: 'PortalEvent'
 		},
 		controls: {
-			mode: true,
+			mode: false,
 			approveAll: true,
 			resetSessionApprovals: false
+		},
+		features: {
+			modes: {
+				supported: false,
+				behavior: 'no-op',
+				label: 'Runtime modes',
+				description:
+					'OpenAI-compatible backends do not expose Copilot runtime modes. The saved mode is retained for portal permission semantics; it is not sent to the model provider.'
+			},
+			approveAll: {
+				supported: true,
+				behavior: 'portal-enforced',
+				label: 'Approve all',
+				description:
+					'Approve-all is enforced by the portal for portal-hosted tools. OpenAI-compatible backends do not receive a separate runtime approve-all signal.'
+			},
+			contextUsage: {
+				supported: false,
+				behavior: 'unsupported',
+				label: 'Context usage',
+				description:
+					'OpenAI-compatible streaming does not include Copilot context-window or compaction events, so no context meter is shown unless usage was previously recorded.'
+			},
+			subagents: {
+				supported: false,
+				behavior: 'unsupported',
+				label: 'Subagents',
+				description:
+					'The Copilot subagent/task runtime is unavailable; subagent tools and lifecycle events are not exposed.'
+			},
+			mcpInfoEvents: {
+				supported: false,
+				behavior: 'unsupported',
+				label: 'MCP info events',
+				description:
+					'MCP sampling, OAuth, and external-tool info events are Copilot SDK events and are not emitted by OpenAI-compatible sessions.'
+			},
+			planExit: {
+				supported: false,
+				behavior: 'unsupported',
+				label: 'Plan exit',
+				description:
+					'OpenAI-compatible sessions do not support Copilot plan-exit callbacks; there is no plan approval dialog to exit.'
+			},
+			elicitation: {
+				supported: false,
+				behavior: 'unsupported',
+				label: 'Elicitation',
+				description:
+					'OpenAI-compatible sessions do not support Copilot elicitation callbacks; no elicitation dialogs are raised.'
+			}
 		},
 		optionalCopilotFeatures: {
 			infiniteSessionMetadata: false,

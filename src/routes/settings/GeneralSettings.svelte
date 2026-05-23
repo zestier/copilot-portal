@@ -48,6 +48,10 @@
 	const selectedProviderStatus = $derived(
 		providers.find((provider) => provider.id === selectedProvider) ?? providers[0]
 	);
+	const modeFeature = $derived(selectedProviderStatus.capabilities.features.modes);
+	const runtimeModesSupported = $derived(
+		modeFeature.supported && modeFeature.behavior === 'supported'
+	);
 </script>
 
 <div
@@ -135,7 +139,11 @@
 			<span class="muted small">
 				Applies to newly created conversations. Existing conversations keep their current mode.
 				<br />
-				{MODE_OPTIONS.find((opt) => opt.value === settings.defaultConversationMode)?.hint}
+				{#if runtimeModesSupported}
+					{MODE_OPTIONS.find((opt) => opt.value === settings.defaultConversationMode)?.hint}
+				{:else}
+					{modeFeature.description}
+				{/if}
 			</span>
 		</label>
 		<label>

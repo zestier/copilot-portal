@@ -1,10 +1,17 @@
 <script lang="ts">
-	import type { Conversation, ConversationUsage, SessionMode } from '$lib/types';
+	import type {
+		Conversation,
+		ConversationUsage,
+		ProviderRuntimeFeatureStatus,
+		ProviderCapabilities,
+		SessionMode
+	} from '$lib/types';
 	import ContextMeter from './ContextMeter.svelte';
 
 	let {
 		title,
 		conversation,
+		providerCapabilities,
 		parent = null,
 		usage = null,
 		recentCompaction = null,
@@ -14,6 +21,7 @@
 	}: {
 		title: string;
 		conversation: Conversation;
+		providerCapabilities: ProviderCapabilities;
 		parent?: {
 			id: string;
 			title: string;
@@ -63,6 +71,22 @@
 		copilot: 'GitHub Copilot',
 		'openai-compatible': 'OpenAI compatible'
 	};
+
+	const modeFeature = $derived(providerCapabilities.features.modes);
+	const approveAllFeature = $derived(providerCapabilities.features.approveAll);
+	const supportsRuntimeModes = $derived(
+		modeFeature.supported && modeFeature.behavior === 'supported'
+	);
+	const showContextMeter = $derived(
+		providerCapabilities.features.contextUsage.supported || usage !== null
+	);
+	const unavailableRuntimeFeatures = $derived.by(() =>
+		Object.values(providerCapabilities.features).filter(
+			(feature): feature is ProviderRuntimeFeatureStatus =>
+				!feature.supported || feature.behavior === 'no-op'
+		)
+	);
+	const currentModeLabel = $derived(MODES.find((opt) => opt.value === mode)?.label ?? mode);
 
 	async function patchSession(body: { mode?: SessionMode; approveAllTools?: boolean }) {
 		const res = await fetch(`/api/conversations/${conversation.id}/session`, {
@@ -202,46 +226,76 @@
 						{/if}
 					</div>
 				{/if}
-				<ContextMeter {usage} {recentCompaction} />
+				{#if showContextMeter}
+					<ContextMeter {usage} {recentCompaction} />
+				{/if}
+				{#if unavailableRuntimeFeatures.length > 0}
+					<div class="capability-notes" aria-label="Provider capability notes">
+						<strong>Provider capability limits</strong>
+						<ul>
+							{#each unavailableRuntimeFeatures as feature (feature.label)}
+								<li>
+									<span>{feature.label}</span>
+									<small>{feature.description}</small>
+								</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
 				<div class="session-settings" role="group" aria-label="Session settings">
 					<div class="setting-row">
 						<span class="setting-label">Mode</span>
-						<div class="seg" role="radiogroup" aria-label="Session mode" aria-busy={savingMode}>
-							{#each MODES as opt (opt.value)}
-								<button
-									type="button"
-									role="radio"
-									aria-checked={mode === opt.value}
-									class="seg-btn"
-									class:active={mode === opt.value}
-									title={opt.hint}
-									disabled={savingMode}
-									onclick={() => chooseMode(opt.value)}
-								>
-									{opt.label}
-								</button>
-							{/each}
-						</div>
+						{#if supportsRuntimeModes}
+							<div class="seg" role="radiogroup" aria-label="Session mode" aria-busy={savingMode}>
+								{#each MODES as opt (opt.value)}
+									<button
+										type="button"
+										role="radio"
+										aria-checked={mode === opt.value}
+										class="seg-btn"
+										class:active={mode === opt.value}
+										title={opt.hint}
+										disabled={savingMode}
+										onclick={() => chooseMode(opt.value)}
+									>
+										{opt.label}
+									</button>
+								{/each}
+							</div>
+						{:else}
+							<span class="unsupported-chip" title={modeFeature.description}>
+								{currentModeLabel} · provider no-op
+							</span>
+						{/if}
 					</div>
 					<div class="setting-row">
 						<label class="approve-toggle">
 							<input
 								type="checkbox"
 								checked={approveAllTools}
-								disabled={savingApprove}
+								disabled={savingApprove || !approveAllFeature.supported}
 								onchange={toggleApproveAll}
 							/>
 							<span>Approve all tool calls</span>
 						</label>
-						<button
-							type="button"
-							class="reset-btn"
-							disabled={resetting}
-							onclick={resetApprovals}
-							title="Clear the runtime's session-scoped approvals."
-						>
-							{resetting ? 'Resetting…' : 'Reset session approvals'}
-						</button>
+						{#if providerCapabilities.controls.resetSessionApprovals}
+							<button
+								type="button"
+								class="reset-btn"
+								disabled={resetting}
+								onclick={resetApprovals}
+								title="Clear the runtime's session-scoped approvals."
+							>
+								{resetting ? 'Resetting…' : 'Reset session approvals'}
+							</button>
+						{:else}
+							<span
+								class="unsupported-chip"
+								title="This provider has no session approval cache to clear."
+							>
+								approval reset unavailable
+							</span>
+						{/if}
 						{#if resetFlash === 'ok'}
 							<span class="reset-flash ok" aria-live="polite">Cleared</span>
 						{:else if resetFlash === 'err'}
@@ -250,8 +304,8 @@
 					</div>
 					{#if approveAllTools}
 						<p class="approve-warning" role="note">
-							Every tool call is auto-approved for this conversation. Audit entries still record
-							each one as <code>auto-allow</code>.
+							{approveAllFeature.description} Audit entries still record each auto-approved portal tool
+							as <code>auto-allow</code>.
 						</p>
 					{:else if mode === 'best-effort'}
 						<p class="approve-warning" role="note">
@@ -382,6 +436,30 @@
 	.parent-crumb a:hover {
 		text-decoration-color: currentColor;
 	}
+	.capability-notes {
+		padding: var(--space-2);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		background: var(--surface-2);
+	}
+	.capability-notes strong {
+		display: block;
+		margin-bottom: var(--space-1);
+	}
+	.capability-notes ul {
+		margin: 0;
+		padding-left: 1.1rem;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.capability-notes li span {
+		font-weight: 600;
+	}
+	.capability-notes li small {
+		display: block;
+		opacity: 0.75;
+	}
 	@media (prefers-reduced-motion: reduce) {
 		.chat-header-details,
 		.chevron,
@@ -470,6 +548,15 @@
 	}
 	.reset-flash.err {
 		color: var(--danger);
+	}
+	.unsupported-chip {
+		display: inline-flex;
+		align-items: center;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: var(--surface-2);
+		padding: 2px 8px;
+		opacity: 0.78;
 	}
 	.approve-warning {
 		margin: 0;

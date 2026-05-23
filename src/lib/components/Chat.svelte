@@ -7,7 +7,8 @@
 		Message,
 		PortalEvent,
 		InteractiveRequestView,
-		InteractiveResponse
+		InteractiveResponse,
+		ProviderCapabilities
 	} from '$lib/types';
 	import Message_ from './Message.svelte';
 	import InteractiveRequestDialog from './InteractiveRequestDialog.svelte';
@@ -27,9 +28,11 @@
 		parent = null,
 		initialActiveTurnId = null,
 		initialPendingInteractive = [],
-		initialComposer = ''
+		initialComposer = '',
+		providerCapabilities
 	}: {
 		conversation: Conversation;
+		providerCapabilities: ProviderCapabilities;
 		initialMessages: Message[];
 		initialUsage?: ConversationUsage | null;
 		parent?: {
@@ -598,6 +601,7 @@
 	<ChatHeader
 		{title}
 		{conversation}
+		{providerCapabilities}
 		{parent}
 		{usage}
 		{recentCompaction}

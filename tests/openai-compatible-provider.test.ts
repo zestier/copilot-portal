@@ -67,6 +67,30 @@ afterEach(() => {
 });
 
 describe('openAICompatibleProvider', () => {
+	it('documents Copilot runtime degradation for OpenAI-compatible sessions', () => {
+		expect(openAICompatibleProvider.capabilities.controls).toEqual({
+			mode: false,
+			approveAll: true,
+			resetSessionApprovals: false
+		});
+		expect(openAICompatibleProvider.capabilities.features).toMatchObject({
+			modes: { supported: false, behavior: 'no-op' },
+			approveAll: { supported: true, behavior: 'portal-enforced' },
+			contextUsage: { supported: false, behavior: 'unsupported' },
+			subagents: { supported: false, behavior: 'unsupported' },
+			mcpInfoEvents: { supported: false, behavior: 'unsupported' },
+			planExit: { supported: false, behavior: 'unsupported' },
+			elicitation: { supported: false, behavior: 'unsupported' }
+		});
+		expect(openAICompatibleProvider.capabilities.optionalCopilotFeatures).toMatchObject({
+			contextWindowEvents: false,
+			contextCompactionEvents: false,
+			subagentLifecycleEvents: false,
+			exitPlanModeCallbacks: false,
+			elicitationCallbacks: false
+		});
+	});
+
 	it('discovers models from an OpenAI-compatible /models endpoint with optional API key', async () => {
 		process.env.OPENAI_COMPATIBLE_API_KEY = 'test-key';
 		resetConfigForTests();
@@ -355,6 +379,51 @@ describe('openAICompatibleProvider', () => {
 			type: 'message.delta',
 			text: 'after permission'
 		});
+	});
+
+	it('keeps mode no-op at the provider API while approve-all remains portal-enforced', async () => {
+		const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+			void _url;
+			void _init;
+			if (fetchMock.mock.calls.length === 1) {
+				return sseResponse([
+					'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_git_status","type":"function","function":{"name":"git_status","arguments":"{}"}}]}}]}\n\n',
+					'data: [DONE]\n\n'
+				]);
+			}
+			return sseResponse([
+				'data: {"choices":[{"delta":{"content":"done"}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const session = await openAICompatibleProvider.openSession(
+			await persistedOpts({ policy: 'prompt' })
+		);
+
+		await session.setMode?.('plan');
+		await session.setApproveAll?.(true);
+		expect(session.resetSessionApprovals).toBeUndefined();
+
+		const events = await collect(session.send('status please', new AbortController().signal));
+
+		expect(events.map((event) => event.type)).toEqual([
+			'message.start',
+			'tool.call',
+			'tool.result',
+			'message.delta',
+			'message.end',
+			'done'
+		]);
+		expect(events).not.toContainEqual(expect.objectContaining({ type: 'interactive.request' }));
+		expect(events).not.toContainEqual(expect.objectContaining({ type: 'session.settings' }));
+		expect(events).not.toContainEqual(expect.objectContaining({ type: 'context.usage' }));
+		expect(events).not.toContainEqual(expect.objectContaining({ type: 'subagent.lifecycle' }));
+		const firstBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+		expect(firstBody).toMatchObject({ model: 'local-model', stream: true, tool_choice: 'auto' });
+		expect(firstBody).not.toHaveProperty('mode');
+		expect(firstBody).not.toHaveProperty('approve_all');
+		expect(firstBody).not.toHaveProperty('approveAllTools');
 	});
 
 	it('stops tool-calling with an explicit error at the configured max iterations', async () => {

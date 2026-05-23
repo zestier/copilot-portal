@@ -427,6 +427,50 @@ export const copilotProvider: ModelBackendProvider = {
 			approveAll: true,
 			resetSessionApprovals: true
 		},
+		features: {
+			modes: {
+				supported: true,
+				behavior: 'supported',
+				label: 'Runtime modes',
+				description: 'Interactive, plan, autopilot, and best-effort are forwarded to Copilot.'
+			},
+			approveAll: {
+				supported: true,
+				behavior: 'supported',
+				label: 'Approve all',
+				description: 'Approve-all is mirrored to the Copilot runtime and enforced by the portal.'
+			},
+			contextUsage: {
+				supported: true,
+				behavior: 'supported',
+				label: 'Context usage',
+				description: 'Copilot context-window and compaction events are shown in the header.'
+			},
+			subagents: {
+				supported: true,
+				behavior: 'supported',
+				label: 'Subagents',
+				description: 'Copilot task subagent lifecycle events are streamed and persisted.'
+			},
+			mcpInfoEvents: {
+				supported: true,
+				behavior: 'supported',
+				label: 'MCP info events',
+				description: 'MCP sampling, OAuth, and external-tool info events are surfaced to the UI.'
+			},
+			planExit: {
+				supported: true,
+				behavior: 'supported',
+				label: 'Plan exit',
+				description: 'Copilot can request approval before leaving plan mode.'
+			},
+			elicitation: {
+				supported: true,
+				behavior: 'supported',
+				label: 'Elicitation',
+				description: 'Copilot elicitation callbacks are rendered as interactive requests.'
+			}
+		},
 		optionalCopilotFeatures: {
 			infiniteSessionMetadata: true,
 			permissionCallbacks: true,
