@@ -85,10 +85,11 @@ function start() {
 		process.exit(1);
 	}
 	log('starting node build.live');
+	const deployedAt = new Date().toISOString();
 	child = spawn(process.execPath, [liveDir], {
 		stdio: 'inherit',
 		cwd: root,
-		env: process.env
+		env: { ...process.env, COPILOT_PORTAL_DEPLOYED_AT: deployedAt }
 	});
 	child.on('exit', (code, signal) => {
 		log(`child exited code=${code} signal=${signal}`);

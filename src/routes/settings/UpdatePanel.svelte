@@ -7,10 +7,30 @@
 		| { type: 'step-done'; label: string; code: number }
 		| { type: 'done'; ok: boolean; failedStep?: string; restarting?: boolean; message?: string };
 
+	let { deploy }: { deploy: { deployedAt: string | null } } = $props();
+
 	let deployBusy = $state(false);
 	let deployLog = $state('');
 	let deployStatus = $state<'idle' | 'running' | 'ok' | 'failed' | 'restarting'>('idle');
 	let logEl = $state<HTMLPreElement | undefined>();
+
+	const deployTimeLabel = $derived(formatDeployTime(deploy.deployedAt));
+
+	function formatDeployTime(value: string | null): string {
+		if (!value) return 'Deploy time unavailable';
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) return 'Deploy time unavailable';
+		return new Intl.DateTimeFormat('en-US', {
+			year: 'numeric',
+			month: 'long',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+			hour12: false,
+			timeZone: 'UTC',
+			timeZoneName: 'short'
+		}).format(date);
+	}
 
 	function appendLog(text: string) {
 		deployLog += text;
@@ -78,6 +98,10 @@
 		<h2>Update</h2>
 		<p class="muted small">Run maintenance actions for this portal instance.</p>
 	</div>
+	<div class="deploy-time" aria-label="Server deploy time">
+		<span class="deploy-time-label">Server deployed:</span>
+		<span>{deployTimeLabel}</span>
+	</div>
 	<p class="muted small">
 		Runs <code>pnpm run verify</code> (lint, type-check, unit tests, build, and e2e), then exits so
 		the <code>pnpm serve</code> supervisor relaunches on the refreshed code. "Pull &amp; restart"
@@ -118,6 +142,21 @@
 	}
 	.deploy p {
 		margin: 0 0 0.75rem;
+	}
+	.deploy-time {
+		display: inline-flex;
+		gap: 0.35rem;
+		align-items: baseline;
+		margin: 0 0 0.75rem;
+		padding: 0.4rem 0.6rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--surface-2);
+		font-size: 0.9em;
+	}
+	.deploy-time-label {
+		color: var(--text-muted);
+		font-weight: 700;
 	}
 	.deploy-buttons {
 		display: flex;

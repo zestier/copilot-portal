@@ -5,6 +5,7 @@ import * as settings from '$lib/server/db/repos/settings';
 import * as tokens from '$lib/server/db/repos/tokens';
 import { fetchAuthStatus, fetchModels } from '$lib/server/copilot/bridge';
 import { loadConfig } from '$lib/server/config';
+import { getDeployMetadata } from '$lib/server/deploy';
 import { log } from '$lib/server/log';
 import type { PermissionPolicy, SessionMode, UserSettings } from '$lib/types';
 import { GrantInputSchema, permissionKindForTool } from '$lib/permissions/scope-schema';
@@ -57,7 +58,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		copilot,
 		recentDecisions: settings.listRecentDecisionsForUser(locals.userId, 25),
 		grants: settings.listGrantsForUser(locals.userId),
-		enableRedeploy: cfg.ENABLE_REDEPLOY
+		enableRedeploy: cfg.ENABLE_REDEPLOY,
+		deploy: getDeployMetadata()
 	};
 };
 

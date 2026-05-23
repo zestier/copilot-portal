@@ -77,7 +77,7 @@
 	{:else if activeTab === 'activity'}
 		<ActivityPanel decisions={data.recentDecisions} />
 	{:else if activeTab === 'update' && data.enableRedeploy}
-		<UpdatePanel />
+		<UpdatePanel deploy={data.deploy} />
 	{/if}
 </div>
 
