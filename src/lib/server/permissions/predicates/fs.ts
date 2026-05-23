@@ -1,6 +1,6 @@
 // Predicate for FsScope grants — `read` / `write` / `edit` requests.
 
-import { isAbsolute, sep, relative } from 'node:path';
+import { isAbsolute, sep, relative, resolve } from 'node:path';
 import type { FsScope, FsRule } from '../../../permissions/scope-types';
 import { isPathInWorkspace, resolveWithParentFallback } from '../workspace';
 
@@ -20,24 +20,64 @@ export function fsScopeMatches(scope: FsScope, ctx: FsMatchContext): boolean {
 
 function fsRuleMatches(rule: FsRule, ctx: FsMatchContext): boolean {
 	switch (rule.kind) {
-		case 'exact':
-			return ctx.target === rule.path;
-		case 'workspace':
-			return ctx.workspaceRoot ? isPathInWorkspace(ctx.target, ctx.workspaceRoot) : false;
-		case 'session-workspace':
-			return ctx.sessionWorkspaceRoot
-				? isPathInWorkspace(ctx.target, ctx.sessionWorkspaceRoot)
-				: false;
-		case 'workspace-glob': {
-			if (!ctx.workspaceRoot) return false;
-			if (!isPathInWorkspace(ctx.target, ctx.workspaceRoot)) return false;
-			const rel = workspaceRelative(ctx.target, ctx.workspaceRoot);
-			if (rel === null) return false;
-			return tokenGlobMatches(rule.glob, rel);
+		case 'path':
+			return pathRuleMatches(rule, ctx);
+	}
+}
+
+function pathRuleMatches(rule: FsRule, ctx: FsMatchContext): boolean {
+	if (ctx.target.includes('\0')) return false;
+	if (rule.root === 'absolute') {
+		const target = canonicalAbsolutePath(ctx.target);
+		if (target === null) return false;
+		return absolutePathBehaviorMatches(rule.behavior, rule.value, target);
+	}
+
+	const root = rule.root === 'workspace' ? ctx.workspaceRoot : ctx.sessionWorkspaceRoot;
+	if (!root) return false;
+	const rel = canonicalRelativePath(ctx.target, root);
+	if (rel === null) return false;
+	if (rule.behavior === 'any') return true;
+	return relativePathBehaviorMatches(rule.behavior, rule.value, rel);
+}
+
+function absolutePathBehaviorMatches(
+	behavior: 'exact' | 'prefix' | 'glob',
+	value: string,
+	target: string
+): boolean {
+	if (value.includes('\0') || target.includes('\0')) return false;
+	switch (behavior) {
+		case 'exact': {
+			const exact = canonicalAbsolutePath(value);
+			return exact !== null && target === exact;
 		}
 		case 'prefix':
-			return prefixMatches(rule.path, ctx.target);
+			return prefixMatches(value, target);
+		case 'glob':
+			return tokenGlobMatches(value, target);
 	}
+}
+
+function relativePathBehaviorMatches(
+	behavior: 'exact' | 'prefix' | 'glob',
+	value: string,
+	target: string
+): boolean {
+	if (value.includes('\0') || target.includes('\0')) return false;
+	switch (behavior) {
+		case 'exact':
+			return target === value;
+		case 'prefix':
+			return relativePrefixMatches(value, target);
+		case 'glob':
+			return tokenGlobMatches(value, target);
+	}
+}
+
+function canonicalAbsolutePath(path: string): string | null {
+	if (!path || path.includes('\0') || !isAbsolute(path)) return null;
+	return resolveWithParentFallback(resolve(path));
 }
 
 /**
@@ -60,13 +100,30 @@ function prefixMatches(prefix: string, target: string): boolean {
 	return resolvedTarget.startsWith(resolvedPrefix + sep);
 }
 
-function workspaceRelative(target: string, root: string): string | null {
-	let abs = target;
-	if (!abs.startsWith('/')) abs = `${root.replace(/\/$/, '')}/${abs}`;
-	const r = root.replace(/\/$/, '');
-	if (abs === r) return '';
-	if (!abs.startsWith(r + '/')) return null;
-	return abs.slice(r.length + 1);
+function relativePrefixMatches(prefix: string, target: string): boolean {
+	if (!prefix || !target) return false;
+	if (prefix.includes('\0') || target.includes('\0')) return false;
+	if (isAbsolute(prefix) || isAbsolute(target)) return false;
+	if (target === prefix) return true;
+	const rel = relative(prefix, target);
+	if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return false;
+	return target.startsWith(prefix.replace(/\/$/, '') + '/');
+}
+
+function canonicalRelativePath(target: string, root: string): string | null {
+	if (!isPathInWorkspace(target, root)) return null;
+
+	const resolvedRoot = canonicalAbsolutePath(resolve(root));
+	if (resolvedRoot === null) return null;
+	const absTarget = isAbsolute(target) ? resolve(target) : resolve(resolvedRoot, target);
+	const resolvedTarget = resolveWithParentFallback(absTarget);
+	if (resolvedTarget === null) return null;
+	if (resolvedTarget === resolvedRoot) return '';
+
+	const rel = relative(resolvedRoot, resolvedTarget);
+	if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return null;
+	if (!resolvedTarget.startsWith(resolvedRoot + sep)) return null;
+	return rel;
 }
 
 /**

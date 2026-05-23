@@ -8,7 +8,7 @@
 		ShellAnalysisView,
 		ShellAnalysisSegment
 	} from '$lib/types';
-	import type { GrantScope } from '$lib/permissions/scope-types';
+	import { FS_PERMISSIONS, type GrantScope } from '$lib/permissions/scope-types';
 	import { deriveScopeKey } from '$lib/permissions/scope-key';
 	import {
 		defaultPreSubcommandOptionsForArgv0,
@@ -104,7 +104,7 @@
 	//   for this kind, any invocation regardless of kind, everything).
 	type ScopeChoice = 'this-exact' | 'this-directory' | 'tool-kind' | 'tool-any' | 'everything';
 
-	const FS_KINDS = new Set(['read', 'write', 'edit']);
+	const FS_KINDS = new Set<string>(FS_PERMISSIONS);
 
 	const isFsKind = $derived(request.kind === 'permission' && FS_KINDS.has(request.permissionKind));
 
@@ -204,7 +204,7 @@
 						scope: {
 							kind: 'fs',
 							perms: [kind as 'read' | 'write' | 'edit'],
-							rule: { kind: 'exact', path: permissionScopeKey }
+							rule: { kind: 'path', root: 'absolute', behavior: 'exact', value: permissionScopeKey }
 						}
 					};
 				}
@@ -224,7 +224,7 @@
 					scope: {
 						kind: 'fs',
 						perms: [kind as 'read' | 'write' | 'edit'],
-						rule: { kind: 'prefix', path: fsParentDir }
+						rule: { kind: 'path', root: 'absolute', behavior: 'prefix', value: fsParentDir }
 					}
 				};
 			case 'tool-kind':

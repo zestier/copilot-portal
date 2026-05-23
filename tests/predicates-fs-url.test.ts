@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fsScopeMatches, tokenGlobMatches } from '../src/lib/server/permissions/predicates/fs';
@@ -17,7 +17,15 @@ afterAll(() => rmSync(ws, { recursive: true, force: true }));
 
 describe('fs predicate', () => {
 	it('exact rule matches only the exact path', () => {
-		const scope = { kind: 'fs' as const, rule: { kind: 'exact' as const, path: '/tmp/x' } };
+		const scope = {
+			kind: 'fs' as const,
+			rule: {
+				kind: 'path' as const,
+				root: 'absolute' as const,
+				behavior: 'exact' as const,
+				value: '/tmp/x'
+			}
+		};
 		expect(
 			fsScopeMatches(scope, { permissionKind: 'read', target: '/tmp/x', workspaceRoot: ws })
 		).toBe(true);
@@ -27,7 +35,10 @@ describe('fs predicate', () => {
 	});
 
 	it('workspace rule matches anything inside the workspace', () => {
-		const scope = { kind: 'fs' as const, rule: { kind: 'workspace' as const } };
+		const scope = {
+			kind: 'fs' as const,
+			rule: { kind: 'path' as const, root: 'workspace' as const, behavior: 'any' as const }
+		};
 		expect(
 			fsScopeMatches(scope, {
 				permissionKind: 'read',
@@ -44,10 +55,15 @@ describe('fs predicate', () => {
 		).toBe(false);
 	});
 
-	it('workspace-glob requires both containment and glob match', () => {
+	it('workspace glob requires both containment and glob match', () => {
 		const scope = {
 			kind: 'fs' as const,
-			rule: { kind: 'workspace-glob' as const, glob: 'src/**' }
+			rule: {
+				kind: 'path' as const,
+				root: 'workspace' as const,
+				behavior: 'glob' as const,
+				value: 'src/**'
+			}
 		};
 		expect(
 			fsScopeMatches(scope, {
@@ -61,17 +77,91 @@ describe('fs predicate', () => {
 		expect(
 			fsScopeMatches(scope, {
 				permissionKind: 'read',
+				target: join(ws, 'other.txt'),
+				workspaceRoot: ws
+			})
+		).toBe(false);
+		expect(
+			fsScopeMatches(scope, {
+				permissionKind: 'read',
+				target: join(ws, 'src', '..', 'top.txt'),
+				workspaceRoot: ws
+			})
+		).toBe(false);
+	});
+
+	it('absolute glob matches absolute targets', () => {
+		const scope = {
+			kind: 'fs' as const,
+			rule: {
+				kind: 'path' as const,
+				root: 'absolute' as const,
+				behavior: 'glob' as const,
+				value: `${ws}/src/**`
+			}
+		};
+		expect(
+			fsScopeMatches(scope, {
+				permissionKind: 'read',
+				target: join(ws, 'src', 'a.ts'),
+				workspaceRoot: ws
+			})
+		).toBe(true);
+		expect(
+			fsScopeMatches(scope, {
+				permissionKind: 'read',
 				target: join(ws, 'top.txt'),
 				workspaceRoot: ws
 			})
 		).toBe(false);
+		expect(
+			fsScopeMatches(scope, {
+				permissionKind: 'read',
+				target: join(ws, 'src', '..', 'top.txt'),
+				workspaceRoot: ws
+			})
+		).toBe(false);
+		expect(
+			fsScopeMatches(scope, {
+				permissionKind: 'read',
+				target: '/etc/passwd',
+				workspaceRoot: ws
+			})
+		).toBe(false);
+	});
+
+	it('absolute glob matches canonical paths so symlink escapes do not inherit lexical grants', () => {
+		const outside = realpathSync(mkdtempSync(join(tmpdir(), 'portal-fs-abs-glob-outside-')));
+		try {
+			writeFileSync(join(outside, 'secret.txt'), 'x');
+			symlinkSync(outside, join(ws, 'src', 'escape'));
+			const scope = {
+				kind: 'fs' as const,
+				rule: {
+					kind: 'path' as const,
+					root: 'absolute' as const,
+					behavior: 'glob' as const,
+					value: `${ws}/src/**`
+				}
+			};
+			expect(
+				fsScopeMatches(scope, {
+					permissionKind: 'read',
+					target: join(ws, 'src', 'escape', 'secret.txt'),
+					workspaceRoot: ws
+				})
+			).toBe(false);
+		} finally {
+			rmSync(join(ws, 'src', 'escape'), { force: true });
+			rmSync(outside, { recursive: true, force: true });
+		}
 	});
 
 	it('perms filter restricts the request kinds the grant covers', () => {
 		const scope = {
 			kind: 'fs' as const,
 			perms: ['read' as const],
-			rule: { kind: 'workspace' as const }
+			rule: { kind: 'path' as const, root: 'workspace' as const, behavior: 'any' as const }
 		};
 		const target = join(ws, 'src', 'a.ts');
 		expect(fsScopeMatches(scope, { permissionKind: 'read', target, workspaceRoot: ws })).toBe(true);
@@ -80,23 +170,26 @@ describe('fs predicate', () => {
 		);
 	});
 
-	it('workspace / workspace-glob fail closed without a workspace root', () => {
+	it('workspace any / glob fail closed without a workspace root', () => {
 		expect(
 			fsScopeMatches(
-				{ kind: 'fs', rule: { kind: 'workspace' } },
+				{ kind: 'fs', rule: { kind: 'path', root: 'workspace', behavior: 'any' } },
 				{ permissionKind: 'read', target: '/tmp/x', workspaceRoot: null }
 			)
 		).toBe(false);
 		expect(
 			fsScopeMatches(
-				{ kind: 'fs', rule: { kind: 'workspace-glob', glob: '**' } },
+				{ kind: 'fs', rule: { kind: 'path', root: 'workspace', behavior: 'glob', value: '**' } },
 				{ permissionKind: 'read', target: '/tmp/x', workspaceRoot: null }
 			)
 		).toBe(false);
 	});
 
 	it('session-workspace rule matches only inside the SDK session workspace', () => {
-		const scope = { kind: 'fs' as const, rule: { kind: 'session-workspace' as const } };
+		const scope = {
+			kind: 'fs' as const,
+			rule: { kind: 'path' as const, root: 'session-workspace' as const, behavior: 'any' as const }
+		};
 		expect(
 			fsScopeMatches(scope, {
 				permissionKind: 'read',
@@ -133,7 +226,15 @@ describe('fs predicate', () => {
 		afterAll(() => rmSync(outside, { recursive: true, force: true }));
 
 		it('matches the prefix itself and descendants', () => {
-			const scope = { kind: 'fs' as const, rule: { kind: 'prefix' as const, path: outside } };
+			const scope = {
+				kind: 'fs' as const,
+				rule: {
+					kind: 'path' as const,
+					root: 'absolute' as const,
+					behavior: 'prefix' as const,
+					value: outside
+				}
+			};
 			expect(
 				fsScopeMatches(scope, { permissionKind: 'read', target: outside, workspaceRoot: null })
 			).toBe(true);
@@ -147,7 +248,15 @@ describe('fs predicate', () => {
 		});
 
 		it('rejects paths outside the prefix and sibling-prefix collisions', () => {
-			const scope = { kind: 'fs' as const, rule: { kind: 'prefix' as const, path: outside } };
+			const scope = {
+				kind: 'fs' as const,
+				rule: {
+					kind: 'path' as const,
+					root: 'absolute' as const,
+					behavior: 'prefix' as const,
+					value: outside
+				}
+			};
 			expect(
 				fsScopeMatches(scope, {
 					permissionKind: 'read',
@@ -167,7 +276,15 @@ describe('fs predicate', () => {
 		});
 
 		it('handles not-yet-existing descendants via parent-fallback realpath', () => {
-			const scope = { kind: 'fs' as const, rule: { kind: 'prefix' as const, path: outside } };
+			const scope = {
+				kind: 'fs' as const,
+				rule: {
+					kind: 'path' as const,
+					root: 'absolute' as const,
+					behavior: 'prefix' as const,
+					value: outside
+				}
+			};
 			expect(
 				fsScopeMatches(scope, {
 					permissionKind: 'write',
@@ -178,13 +295,26 @@ describe('fs predicate', () => {
 		});
 
 		it('rejects relative prefix or target paths (no working directory anchor)', () => {
-			const scope = { kind: 'fs' as const, rule: { kind: 'prefix' as const, path: 'relative' } };
+			const scope = {
+				kind: 'fs' as const,
+				rule: {
+					kind: 'path' as const,
+					root: 'absolute' as const,
+					behavior: 'prefix' as const,
+					value: 'relative'
+				}
+			};
 			expect(
 				fsScopeMatches(scope, { permissionKind: 'read', target: outside, workspaceRoot: null })
 			).toBe(false);
 			const absScope = {
 				kind: 'fs' as const,
-				rule: { kind: 'prefix' as const, path: outside }
+				rule: {
+					kind: 'path' as const,
+					root: 'absolute' as const,
+					behavior: 'prefix' as const,
+					value: outside
+				}
 			};
 			expect(
 				fsScopeMatches(absScope, {
@@ -199,7 +329,12 @@ describe('fs predicate', () => {
 			const scope = {
 				kind: 'fs' as const,
 				perms: ['read' as const],
-				rule: { kind: 'prefix' as const, path: outside }
+				rule: {
+					kind: 'path' as const,
+					root: 'absolute' as const,
+					behavior: 'prefix' as const,
+					value: outside
+				}
 			};
 			expect(
 				fsScopeMatches(scope, {

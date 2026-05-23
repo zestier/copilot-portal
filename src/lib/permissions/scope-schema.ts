@@ -2,11 +2,15 @@
 //
 // Kept in a separate file so `scope-types.ts` stays framework-free
 // (it's imported from both client and server bundles). These schemas
-// are the source of truth for form-driven grant authoring — the codec
-// in `scope-codec.ts` already validates persisted JSON defensively, but
-// for user input we want richer error messages, so we parse with zod.
+// are the source of truth for form-driven grant authoring and the codec's
+// defensive validation of persisted JSON.
 
 import { z } from 'zod';
+import {
+	FS_PERMISSIONS,
+	FS_RULE_BEHAVIORS_WITH_VALUE,
+	FS_RULE_CONTAINER_ROOTS
+} from './scope-types';
 import type { GrantScope } from './scope-types';
 
 const ArgvToken = z
@@ -74,24 +78,48 @@ const ShellScopeSchema = z.object({
 const AbsolutePathSchema = z
 	.string()
 	.min(1)
+	.refine((s) => !s.includes('\0'), 'path must not contain NUL')
 	.refine((s) => s.startsWith('/'), 'path must be absolute (start with /)');
 
-const FsRuleSchema = z.discriminatedUnion('kind', [
-	z.object({ kind: z.literal('exact'), path: AbsolutePathSchema }),
-	z.object({ kind: z.literal('workspace') }),
-	z.object({ kind: z.literal('session-workspace') }),
-	z.object({ kind: z.literal('workspace-glob'), glob: z.string().min(1) }),
-	z.object({ kind: z.literal('prefix'), path: AbsolutePathSchema })
+const RelativePathPatternSchema = z
+	.string()
+	.min(1)
+	.refine((s) => !s.includes('\0'), 'value must not contain NUL')
+	.refine((s) => !s.startsWith('/'), 'value must be relative for workspace roots');
+
+const FsRuleSchema = z.union([
+	z
+		.object({
+			kind: z.literal('path'),
+			root: z.enum(FS_RULE_CONTAINER_ROOTS),
+			behavior: z.literal('any')
+		})
+		.strict(),
+	z
+		.object({
+			kind: z.literal('path'),
+			root: z.literal('absolute'),
+			behavior: z.enum(FS_RULE_BEHAVIORS_WITH_VALUE),
+			value: AbsolutePathSchema
+		})
+		.strict(),
+	z
+		.object({
+			kind: z.literal('path'),
+			root: z.enum(FS_RULE_CONTAINER_ROOTS),
+			behavior: z.enum(FS_RULE_BEHAVIORS_WITH_VALUE),
+			value: RelativePathPatternSchema
+		})
+		.strict()
 ]);
 
-const FsScopeSchema = z.object({
-	kind: z.literal('fs'),
-	perms: z
-		.array(z.enum(['read', 'write', 'edit']))
-		.min(1)
-		.optional(),
-	rule: FsRuleSchema
-});
+export const FsScopeSchema = z
+	.object({
+		kind: z.literal('fs'),
+		perms: z.array(z.enum(FS_PERMISSIONS)).min(1).optional(),
+		rule: FsRuleSchema
+	})
+	.strict();
 
 const UrlRuleSchema = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('exact'), url: z.string().min(1).url() }),

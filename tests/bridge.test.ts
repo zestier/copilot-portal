@@ -291,7 +291,7 @@ describe('bridge.open() session mode and permissions', () => {
 			scope: {
 				kind: 'fs',
 				perms: ['write'],
-				rule: { kind: 'session-workspace' }
+				rule: { kind: 'path', root: 'session-workspace', behavior: 'any' }
 			},
 			decision: 'deny'
 		});

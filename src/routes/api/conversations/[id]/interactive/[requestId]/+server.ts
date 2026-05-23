@@ -5,20 +5,31 @@ import * as interactive from '$lib/server/copilot/interactive-requests';
 import { parseBody } from '$lib/server/validate';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 import type { InteractiveResponse } from '$lib/types';
+import { FS_PERMISSIONS } from '$lib/permissions/scope-types';
 
 // Per-kind response schemas. The HTTP body must include `kind` so we can
 // route to the right shape; the server-side registry then verifies the kind
 // matches the pending request before applying any side effects.
 
 // Structured FsScope wire shape mirrors `FsScope` in
-// $lib/permissions/scope-types. Keep narrow: the dialog only emits
-// `exact` and `prefix` (workspace / workspace-glob come from seeds, not
-// dialog responses). Defense-in-depth: re-validate at the server-side
+// $lib/permissions/scope-types. Keep narrow: the dialog only emits absolute
+// exact/prefix path rules. Defense-in-depth: re-validate at the server-side
 // codec layer too.
-const FsRuleSchema = z.discriminatedUnion('kind', [
-	z.object({ kind: z.literal('exact'), path: z.string().min(1).max(4096) }),
-	z.object({ kind: z.literal('prefix'), path: z.string().min(1).max(4096) })
-]);
+const DialogFsBehaviors = ['exact', 'prefix'] as const;
+const FsRuleSchema = z
+	.object({
+		kind: z.literal('path'),
+		root: z.literal('absolute'),
+		behavior: z.enum(DialogFsBehaviors),
+		value: z
+			.string()
+			.min(1)
+			.max(4096)
+			.refine((s) => s.startsWith('/'), {
+				message: 'absolute fs scopes must start with /'
+			})
+	})
+	.strict();
 
 // Structured ShellScope wire shape mirrors `ShellScope` in
 // $lib/permissions/scope-types. The shell picker only emits the
@@ -45,10 +56,7 @@ const ShellRuleSchema = z.object({
 const StructuredScopeSchema = z.discriminatedUnion('kind', [
 	z.object({
 		kind: z.literal('fs'),
-		perms: z
-			.array(z.enum(['read', 'write', 'edit']))
-			.max(3)
-			.optional(),
+		perms: z.array(z.enum(FS_PERMISSIONS)).max(3).optional(),
 		rule: FsRuleSchema
 	}),
 	z.object({

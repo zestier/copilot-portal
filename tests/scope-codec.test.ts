@@ -87,17 +87,28 @@ describe('scope-codec roundtrip', () => {
 	});
 
 	it('fs variants', () => {
-		roundtrip({ kind: 'fs', rule: { kind: 'workspace' }, perms: ['read'] });
-		roundtrip({ kind: 'fs', rule: { kind: 'session-workspace' }, perms: ['read'] });
-		roundtrip({ kind: 'fs', rule: { kind: 'exact', path: '/tmp/x' } });
 		roundtrip({
 			kind: 'fs',
-			rule: { kind: 'workspace-glob', glob: 'src/**' },
+			rule: { kind: 'path', root: 'workspace', behavior: 'any' },
+			perms: ['read']
+		});
+		roundtrip({
+			kind: 'fs',
+			rule: { kind: 'path', root: 'session-workspace', behavior: 'any' },
+			perms: ['read']
+		});
+		roundtrip({
+			kind: 'fs',
+			rule: { kind: 'path', root: 'absolute', behavior: 'exact', value: '/tmp/x' }
+		});
+		roundtrip({
+			kind: 'fs',
+			rule: { kind: 'path', root: 'workspace', behavior: 'glob', value: 'src/**' },
 			perms: ['read', 'write']
 		});
 		roundtrip({
 			kind: 'fs',
-			rule: { kind: 'prefix', path: '/home/me/.config/foo' },
+			rule: { kind: 'path', root: 'absolute', behavior: 'prefix', value: '/home/me/.config/foo' },
 			perms: ['read']
 		});
 	});
@@ -111,10 +122,14 @@ describe('scope-codec roundtrip', () => {
 
 describe('stableScopeKey', () => {
 	it('ignores object key insertion order', () => {
-		const a: GrantScope = { kind: 'fs', perms: ['read'], rule: { kind: 'session-workspace' } };
+		const a: GrantScope = {
+			kind: 'fs',
+			perms: ['read'],
+			rule: { kind: 'path', root: 'session-workspace', behavior: 'any' }
+		};
 		const b = {
 			kind: 'fs',
-			rule: { kind: 'session-workspace' },
+			rule: { kind: 'path', root: 'session-workspace', behavior: 'any' },
 			perms: ['read']
 		} as GrantScope;
 		expect(stableScopeKey(a)).toBe(stableScopeKey(b));
@@ -138,10 +153,18 @@ describe('scope-codec decode — rejects malformed input', () => {
 		'{"kind":"shell","rule":{"argv0":"git","options":{"allow":[{"name":"-C","kind":"option","value":{"kind":"weird"}}]}}}',
 		'{"kind":"shell","rule":{"argv0":"git","positionals":{"kind":"foo"}}}',
 		'{"kind":"fs","rule":{"kind":"exact"}}',
+		'{"kind":"fs","rule":{"kind":"exact","path":"/tmp/x"}}',
+		'{"kind":"fs","rule":{"kind":"workspace"}}',
 		'{"kind":"fs","rule":{"kind":"workspace-glob"}}',
+		'{"kind":"fs","rule":{"kind":"workspace-glob","glob":"src/**"}}',
 		'{"kind":"fs","rule":{"kind":"workspace"},"perms":["delete"]}',
 		'{"kind":"fs","rule":{"kind":"prefix"}}',
 		'{"kind":"fs","rule":{"kind":"prefix","path":""}}',
+		'{"kind":"fs","rule":{"kind":"path","root":"absolute","behavior":"any"}}',
+		'{"kind":"fs","rule":{"kind":"path","root":"absolute","behavior":"exact","value":"relative"}}',
+		'{"kind":"fs","rule":{"kind":"path","root":"workspace","behavior":"glob","value":"/tmp/**"}}',
+		'{"kind":"fs","rule":{"kind":"path","root":"workspace","behavior":"any","value":"src/**"}}',
+		'{"kind":"fs","rule":{"kind":"path","root":"workspace","behavior":"any"},"extra":true}',
 		'{"kind":"url","rule":{"kind":"exact"}}',
 		'{"kind":"url","rule":{"kind":"host","host":""}}',
 		'{"kind":"weird"}'

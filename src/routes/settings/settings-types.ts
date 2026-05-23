@@ -92,21 +92,26 @@ export function describeGrantScope(g: {
 			case 'fs': {
 				const perms = s.perms && s.perms.length > 0 ? `[${s.perms.join('|')}] ` : '';
 				switch (s.rule.kind) {
-					case 'exact':
-						return `${perms}${s.rule.path}`;
-					case 'workspace':
-						return `${perms}<workspace>`;
-					case 'session-workspace':
-						return `${perms}<session workspace>`;
-					case 'workspace-glob':
-						return `${perms}<workspace>/${s.rule.glob}`;
-					case 'prefix':
-						return `${perms}${s.rule.path}/**`;
+					case 'path':
+						return `${perms}${describeFsPathRule(s.rule)}`;
 				}
 			}
 		}
 	}
 	return g.scopePattern ?? '*';
+}
+
+function describeFsPathRule(rule: Extract<GrantScope, { kind: 'fs' }>['rule']): string {
+	const root =
+		rule.root === 'workspace'
+			? '<workspace>'
+			: rule.root === 'session-workspace'
+				? '<session workspace>'
+				: '';
+	if (rule.behavior === 'any') return root;
+	const sep = root && rule.value ? '/' : '';
+	if (rule.behavior === 'prefix') return `${root}${sep}${rule.value}/**`;
+	return `${root}${sep}${rule.value}`;
 }
 
 function describeShellRule(rule: Extract<GrantScope, { kind: 'shell' }>['rule']): string {

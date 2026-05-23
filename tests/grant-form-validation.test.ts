@@ -55,14 +55,27 @@ describe('GrantInputSchema — valid shapes', () => {
 		expect(parsed.scope.kind).toBe('shell');
 	});
 
-	it('fs read with workspace-glob', () => {
+	it('fs read with workspace glob path rule', () => {
 		const parsed = GrantInputSchema.parse({
 			tool: 'read',
 			decision: 'allow',
 			scope: {
 				kind: 'fs',
 				perms: ['read'],
-				rule: { kind: 'workspace-glob', glob: 'src/**/*.ts' }
+				rule: { kind: 'path', root: 'workspace', behavior: 'glob', value: 'src/**/*.ts' }
+			}
+		});
+		expect(parsed.scope.kind).toBe('fs');
+	});
+
+	it('fs read with absolute glob path rule', () => {
+		const parsed = GrantInputSchema.parse({
+			tool: 'read',
+			decision: 'allow',
+			scope: {
+				kind: 'fs',
+				perms: ['read'],
+				rule: { kind: 'path', root: 'absolute', behavior: 'glob', value: '/tmp/**/*.ts' }
 			}
 		});
 		expect(parsed.scope.kind).toBe('fs');
@@ -72,7 +85,7 @@ describe('GrantInputSchema — valid shapes', () => {
 		const parsed = GrantInputSchema.parse({
 			tool: 'read',
 			decision: 'allow',
-			scope: { kind: 'fs', rule: { kind: 'workspace' } }
+			scope: { kind: 'fs', rule: { kind: 'path', root: 'workspace', behavior: 'any' } }
 		});
 		expect(parsed.scope.kind).toBe('fs');
 	});
@@ -81,7 +94,11 @@ describe('GrantInputSchema — valid shapes', () => {
 		const parsed = GrantInputSchema.parse({
 			tool: 'read',
 			decision: 'allow',
-			scope: { kind: 'fs', perms: ['read'], rule: { kind: 'session-workspace' } }
+			scope: {
+				kind: 'fs',
+				perms: ['read'],
+				rule: { kind: 'path', root: 'session-workspace', behavior: 'any' }
+			}
 		});
 		expect(parsed.scope.kind).toBe('fs');
 	});
@@ -120,7 +137,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'fs', rule: { kind: 'workspace' } }
+			scope: { kind: 'fs', rule: { kind: 'path', root: 'workspace', behavior: 'any' } }
 		});
 		expect(r.success).toBe(false);
 		if (!r.success) {
@@ -146,11 +163,28 @@ describe('GrantInputSchema — rejections', () => {
 		expect(r.success).toBe(false);
 	});
 
-	it('rejects fs.exact with a relative path', () => {
+	it('rejects fs absolute exact with a relative path', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'read',
 			decision: 'allow',
-			scope: { kind: 'fs', perms: ['read'], rule: { kind: 'exact', path: 'relative/foo' } }
+			scope: {
+				kind: 'fs',
+				perms: ['read'],
+				rule: { kind: 'path', root: 'absolute', behavior: 'exact', value: 'relative/foo' }
+			}
+		});
+		expect(r.success).toBe(false);
+	});
+
+	it('rejects fs workspace glob with an absolute value', () => {
+		const r = GrantInputSchema.safeParse({
+			tool: 'read',
+			decision: 'allow',
+			scope: {
+				kind: 'fs',
+				perms: ['read'],
+				rule: { kind: 'path', root: 'workspace', behavior: 'glob', value: '/tmp/**/*.ts' }
+			}
 		});
 		expect(r.success).toBe(false);
 	});
@@ -159,7 +193,11 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'write',
 			decision: 'allow',
-			scope: { kind: 'fs', perms: ['read'], rule: { kind: 'workspace' } }
+			scope: {
+				kind: 'fs',
+				perms: ['read'],
+				rule: { kind: 'path', root: 'workspace', behavior: 'any' }
+			}
 		});
 		expect(r.success).toBe(false);
 	});

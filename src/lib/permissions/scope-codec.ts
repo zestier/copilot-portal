@@ -5,19 +5,19 @@
 // matcher. New rows are serialized with `encodeScope` which guarantees a
 // shape the codec will accept.
 
-import type {
-	GrantScope,
-	ShellScope,
-	ShellRule,
-	ShellOptionRules,
-	ShellOptionSpec,
-	ShellOptionValueRule,
-	FsScope,
-	FsRule,
-	UrlScope,
-	UrlRule,
-	PositionalsRule
+import {
+	type GrantScope,
+	type ShellScope,
+	type ShellRule,
+	type ShellOptionRules,
+	type ShellOptionSpec,
+	type ShellOptionValueRule,
+	type FsScope,
+	type UrlScope,
+	type UrlRule,
+	type PositionalsRule
 } from './scope-types';
+import { FsScopeSchema } from './scope-schema';
 
 export function encodeScope(scope: GrantScope): string {
 	return JSON.stringify(scope);
@@ -186,42 +186,8 @@ function validatePositionals(v: unknown): PositionalsRule | null {
 }
 
 function validateFs(v: Record<string, unknown>): FsScope | null {
-	const rule = isObject(v.rule) ? (v.rule as Record<string, unknown>) : null;
-	if (!rule) return null;
-	let parsedRule: FsRule | null = null;
-	switch (rule.kind) {
-		case 'exact':
-			if (typeof rule.path !== 'string' || rule.path.length === 0) return null;
-			parsedRule = { kind: 'exact', path: rule.path };
-			break;
-		case 'workspace':
-			parsedRule = { kind: 'workspace' };
-			break;
-		case 'session-workspace':
-			parsedRule = { kind: 'session-workspace' };
-			break;
-		case 'workspace-glob':
-			if (typeof rule.glob !== 'string' || rule.glob.length === 0) return null;
-			parsedRule = { kind: 'workspace-glob', glob: rule.glob };
-			break;
-		case 'prefix':
-			if (typeof rule.path !== 'string' || rule.path.length === 0) return null;
-			parsedRule = { kind: 'prefix', path: rule.path };
-			break;
-	}
-	if (!parsedRule) return null;
-
-	const out: FsScope = { kind: 'fs', rule: parsedRule };
-	if (v.perms !== undefined) {
-		if (!Array.isArray(v.perms)) return null;
-		const perms: ('read' | 'write' | 'edit')[] = [];
-		for (const p of v.perms) {
-			if (p === 'read' || p === 'write' || p === 'edit') perms.push(p);
-			else return null;
-		}
-		out.perms = perms;
-	}
-	return out;
+	const parsed = FsScopeSchema.safeParse(v);
+	return parsed.success ? parsed.data : null;
 }
 
 function validateUrl(v: Record<string, unknown>): UrlScope | null {

@@ -422,7 +422,11 @@ describe('interactive request registry', () => {
 				decision: 'allow-always',
 				scope: {
 					permissionKind: 'read',
-					scope: { kind: 'fs', perms: ['read'], rule: { kind: 'prefix', path: tmp } }
+					scope: {
+						kind: 'fs',
+						perms: ['read'],
+						rule: { kind: 'path', root: 'absolute', behavior: 'prefix', value: tmp }
+					}
 				}
 			});
 

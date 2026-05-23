@@ -89,31 +89,32 @@ export type PositionalsRule =
 export interface FsScope {
 	kind: 'fs';
 	/** Which kinds this grant covers. Empty = all three. */
-	perms?: ('read' | 'write' | 'edit')[];
+	perms?: FsPermission[];
 	rule: FsRule;
 }
 
+export const FS_PERMISSIONS = ['read', 'write', 'edit'] as const;
+export type FsPermission = (typeof FS_PERMISSIONS)[number];
+
+export const FS_RULE_ROOTS = ['workspace', 'session-workspace', 'absolute'] as const;
+export type FsRuleRoot = (typeof FS_RULE_ROOTS)[number];
+
+export const FS_RULE_CONTAINER_ROOTS = ['workspace', 'session-workspace'] as const;
+export type FsRuleContainerRoot = (typeof FS_RULE_CONTAINER_ROOTS)[number];
+
+export const FS_RULE_BEHAVIORS_WITH_VALUE = ['exact', 'prefix', 'glob'] as const;
+export type FsRuleBehaviorWithValue = (typeof FS_RULE_BEHAVIORS_WITH_VALUE)[number];
+
 export type FsRule =
-	/** Exact absolute path equality (after realpath). */
-	| { kind: 'exact'; path: string }
-	/** Any path resolving inside the conversation's workspace root. */
-	| { kind: 'workspace' }
-	/** Any path resolving inside the SDK-provided session workspace root. */
-	| { kind: 'session-workspace' }
 	/**
-	 * Glob relative to the workspace root, token-aware (`*` matches a path
-	 * segment, `**` matches any number of segments). The path must be
-	 * inside the workspace AND match the glob.
+	 * Composable path rule. `root` chooses the coordinate system, `behavior`
+	 * chooses the matcher, and `value` is required for exact / prefix / glob.
+	 *
+	 *   workspace / session-workspace — value is relative to that root
+	 *   absolute                      — value is an absolute path or glob
 	 */
-	| { kind: 'workspace-glob'; glob: string }
-	/**
-	 * Any path equal to `path` or resolving inside it (after realpath on
-	 * both sides). Intended for "I trust this directory" grants on
-	 * out-of-workspace targets — e.g. allowing reads under `~/.config/foo`
-	 * without granting access to the entire filesystem. `path` should be
-	 * absolute; relative paths will not match.
-	 */
-	| { kind: 'prefix'; path: string };
+	| { kind: 'path'; root: FsRuleContainerRoot; behavior: 'any' }
+	| { kind: 'path'; root: FsRuleRoot; behavior: FsRuleBehaviorWithValue; value: string };
 
 /** Matches `url` permission requests. */
 export interface UrlScope {

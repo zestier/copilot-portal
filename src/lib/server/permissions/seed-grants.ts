@@ -18,7 +18,7 @@
 //      is surfaced to the agent as `feedback` on the SDK reject, so
 //      the next call learns immediately without a user prompt.
 
-import type { GrantScope, ShellRule } from '$lib/permissions/scope-types';
+import { FS_PERMISSIONS, type GrantScope, type ShellRule } from '$lib/permissions/scope-types';
 import { stableScopeKey } from '$lib/permissions/scope-codec';
 import { addGrant, listGrantsForUser } from '../db/repos/settings';
 
@@ -82,7 +82,6 @@ const GIT_STRUCTURED_TOOLS = [
 	'git_show_file'
 ];
 const TICKET_STRUCTURED_TOOLS = ['ticket_add', 'ticket_list', 'ticket_get', 'ticket_update'];
-const FS_RUNTIME_PERMS = ['read', 'write', 'edit'] as const;
 
 function shellGrant(rule: ShellRule): SeedSpec {
 	return { tool: 'shell', permissionKind: 'shell', scope: { kind: 'shell', rule } };
@@ -153,14 +152,14 @@ export function defaultSeedGrants(): SeedSpec[] {
 	for (const tool of TICKET_STRUCTURED_TOOLS) {
 		seeds.push({ tool, permissionKind: 'custom-tool', scope: { kind: 'any' } });
 	}
-	for (const perm of FS_RUNTIME_PERMS) {
+	for (const perm of FS_PERMISSIONS) {
 		seeds.push({
 			tool: perm,
 			permissionKind: perm,
 			scope: {
 				kind: 'fs',
 				perms: [perm],
-				rule: { kind: 'session-workspace' }
+				rule: { kind: 'path', root: 'session-workspace', behavior: 'any' }
 			}
 		});
 	}

@@ -33,6 +33,7 @@ import type {
 	PermissionPolicy,
 	PortalEvent
 } from '$lib/types';
+import { FS_PERMISSIONS } from '$lib/permissions/scope-types';
 
 // Default = no timeout. We used to default to 10 minutes "so a forgotten
 // dialog doesn't pin the session forever", but in headless mode (where
@@ -359,7 +360,7 @@ function normalizeResponse(response: InteractiveResponse): InteractiveResponse {
 
 import { isPathInWorkspace } from '../permissions/workspace';
 
-const FILESYSTEM_PERMISSION_KINDS = new Set(['read', 'write', 'edit']);
+const FILESYSTEM_PERMISSION_KINDS = new Set<string>(FS_PERMISSIONS);
 
 export interface PolicyContext {
 	/** The runtime scope key (file path / command / URL) for this request. */

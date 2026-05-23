@@ -7,7 +7,13 @@
 		type FormResult,
 		type PermissionGrant
 	} from './settings-types';
-	import type { ShellOptionSpec } from '$lib/permissions/scope-types';
+	import {
+		FS_RULE_BEHAVIORS_WITH_VALUE,
+		FS_RULE_ROOTS,
+		type FsRuleBehaviorWithValue,
+		type FsRuleRoot,
+		type ShellOptionSpec
+	} from '$lib/permissions/scope-types';
 
 	let { grants, form }: { grants: PermissionGrant[]; form: FormResult | null } = $props();
 
@@ -19,7 +25,8 @@
 		| 'workspace-paths'
 		| 'session-workspace-paths';
 	type ShellPipelineKind = 'unset' | 'must' | 'forbid';
-	type FsRuleKind = 'exact' | 'workspace' | 'session-workspace' | 'workspace-glob' | 'prefix';
+	type FsRootKind = FsRuleRoot;
+	type FsBehaviorKind = 'any' | FsRuleBehaviorWithValue;
 	type UrlRuleKind = 'exact' | 'host' | 'host-suffix';
 
 	let newGrantTool = $state<GrantTool>('shell');
@@ -51,10 +58,9 @@
 	let shellOptionsAllow = $state('');
 	let shellOptionsDeny = $state('');
 
-	let fsRuleKind = $state<FsRuleKind>('workspace');
-	let fsExactPath = $state('');
-	let fsGlob = $state('');
-	let fsPrefixPath = $state('');
+	let fsRoot = $state<FsRootKind>('workspace');
+	let fsBehavior = $state<FsBehaviorKind>('any');
+	let fsValue = $state('');
 
 	let urlRuleKind = $state<UrlRuleKind>('host');
 	let urlExact = $state('');
@@ -99,6 +105,30 @@
 		return specs
 			.map((spec) => (spec.kind === 'flag' ? spec.name : `${spec.name}=${spec.value.kind}`))
 			.join(', ');
+	}
+
+	function fsRootLabel(root: FsRootKind): string {
+		switch (root) {
+			case 'workspace':
+				return 'workspace';
+			case 'session-workspace':
+				return 'SDK session workspace';
+			case 'absolute':
+				return 'absolute path';
+		}
+	}
+
+	function fsBehaviorLabel(behavior: FsBehaviorKind): string {
+		switch (behavior) {
+			case 'any':
+				return 'any path inside the root';
+			case 'exact':
+				return 'one exact path';
+			case 'prefix':
+				return 'path or anything inside it';
+			case 'glob':
+				return 'path matching a glob';
+		}
 	}
 
 	type BuildResult = { json: string; error: null } | { json: null; error: string };
@@ -151,25 +181,15 @@
 
 			const perms = [newGrantTool] as ('read' | 'write' | 'edit')[];
 			let rule: Record<string, unknown>;
-			switch (fsRuleKind) {
-				case 'exact':
-					if (!fsExactPath.trim()) return { json: null, error: 'absolute path is required' };
-					rule = { kind: 'exact', path: fsExactPath.trim() };
-					break;
-				case 'workspace':
-					rule = { kind: 'workspace' };
-					break;
-				case 'session-workspace':
-					rule = { kind: 'session-workspace' };
-					break;
-				case 'workspace-glob':
-					if (!fsGlob.trim()) return { json: null, error: 'glob is required' };
-					rule = { kind: 'workspace-glob', glob: fsGlob.trim() };
-					break;
-				case 'prefix':
-					if (!fsPrefixPath.trim()) return { json: null, error: 'absolute path is required' };
-					rule = { kind: 'prefix', path: fsPrefixPath.trim() };
-					break;
+			if (fsBehavior === 'any') {
+				if (fsRoot === 'absolute') {
+					return { json: null, error: 'absolute root requires exact, prefix, or glob behavior' };
+				}
+				rule = { kind: 'path', root: fsRoot, behavior: 'any' };
+			} else {
+				const value = fsValue.trim();
+				if (!value) return { json: null, error: 'path or glob value is required' };
+				rule = { kind: 'path', root: fsRoot, behavior: fsBehavior, value };
 			}
 			return { json: JSON.stringify({ kind: 'fs', perms, rule }), error: null };
 		} catch (e) {
@@ -188,10 +208,9 @@
 			void shellPreOptionsDeny;
 			void shellOptionsAllow;
 			void shellOptionsDeny;
-			void fsRuleKind;
-			void fsExactPath;
-			void fsGlob;
-			void fsPrefixPath;
+			void fsRoot;
+			void fsBehavior;
+			void fsValue;
 			void urlRuleKind;
 			void urlExact;
 			void urlHost;
@@ -202,6 +221,12 @@
 	const scopeJsonPreview = $derived(buildResult.json ?? '');
 	let userTouched = $state(false);
 	const buildError = $derived(userTouched ? buildResult.error : null);
+
+	$effect(() => {
+		if (fsRoot === 'absolute' && fsBehavior === 'any') {
+			fsBehavior = 'exact';
+		}
+	});
 
 	function onSubmitCreateGrant(e: SubmitEvent) {
 		const result = buildScopeJson();
@@ -235,10 +260,9 @@
 		shellPreOptionsDeny = '';
 		shellOptionsAllow = '';
 		shellOptionsDeny = '';
-		fsRuleKind = 'workspace';
-		fsExactPath = '';
-		fsGlob = '';
-		fsPrefixPath = '';
+		fsRoot = 'workspace';
+		fsBehavior = 'any';
+		fsValue = '';
 		urlRuleKind = 'host';
 		urlExact = '';
 		urlHost = '';
@@ -290,10 +314,9 @@
 				else if (sc.rule.kind === 'host') urlHost = sc.rule.host;
 				else urlSuffix = sc.rule.suffix;
 			} else if (sc.kind === 'fs') {
-				fsRuleKind = sc.rule.kind;
-				if (sc.rule.kind === 'exact') fsExactPath = sc.rule.path;
-				else if (sc.rule.kind === 'workspace-glob') fsGlob = sc.rule.glob;
-				else if (sc.rule.kind === 'prefix') fsPrefixPath = sc.rule.path;
+				fsRoot = sc.rule.root;
+				fsBehavior = sc.rule.behavior;
+				fsValue = 'value' in sc.rule ? sc.rule.value : '';
 			}
 		}
 
@@ -741,57 +764,40 @@
 					<fieldset class="scope-fields">
 						<legend>Filesystem scope ({newGrantTool})</legend>
 						<label>
-							Match by
-							<select bind:value={fsRuleKind}>
-								<option value="workspace">anywhere inside the workspace</option>
-								<option value="session-workspace">anywhere inside the SDK session workspace</option>
-								<option value="workspace-glob"
-									>workspace path matching a glob (e.g. src/**/*.ts)</option
-								>
-								<option value="exact">one exact absolute path</option>
-								<option value="prefix"
-									>absolute path or anything inside it (out-of-workspace directory)</option
-								>
+							Root
+							<select bind:value={fsRoot}>
+								{#each FS_RULE_ROOTS as root}
+									<option value={root}>{fsRootLabel(root)}</option>
+								{/each}
 							</select>
 						</label>
-						{#if fsRuleKind === 'exact'}
+						<label>
+							Behavior
+							<select bind:value={fsBehavior}>
+								{#if fsRoot !== 'absolute'}
+									<option value="any">{fsBehaviorLabel('any')}</option>
+								{/if}
+								{#each FS_RULE_BEHAVIORS_WITH_VALUE as behavior}
+									<option value={behavior}>{fsBehaviorLabel(behavior)}</option>
+								{/each}
+							</select>
+						</label>
+						{#if fsBehavior !== 'any'}
 							<label>
-								Absolute path
+								{fsRoot === 'absolute' ? 'Absolute path or glob' : 'Relative path or glob'}
 								<input
 									type="text"
-									bind:value={fsExactPath}
-									placeholder="/etc/hosts"
-									spellcheck="false"
-									autocomplete="off"
-								/>
-							</label>
-						{:else if fsRuleKind === 'workspace-glob'}
-							<label>
-								Glob (relative to workspace root)
-								<input
-									type="text"
-									bind:value={fsGlob}
-									placeholder="src/**/*.ts"
-									spellcheck="false"
-									autocomplete="off"
-								/>
-								<span class="muted small"
-									>`*` matches one path segment, `**` matches any number. The target must also be
-									inside the workspace.</span
-								>
-							</label>
-						{:else if fsRuleKind === 'prefix'}
-							<label>
-								Absolute directory
-								<input
-									type="text"
-									bind:value={fsPrefixPath}
-									placeholder="/home/me/.config/foo"
+									bind:value={fsValue}
+									placeholder={fsRoot === 'absolute'
+										? '/workspaces/project/src/**/*.ts'
+										: 'src/**/*.ts'}
 									spellcheck="false"
 									autocomplete="off"
 								/>
 								<span class="muted small"
-									>Matches `path` and anything resolving inside it (symlinks followed).</span
+									>Workspace and session-workspace values are relative to that root. Absolute values
+									start with `/`. For glob, `*` matches one path segment and `**` matches any
+									number.</span
 								>
 							</label>
 						{/if}
