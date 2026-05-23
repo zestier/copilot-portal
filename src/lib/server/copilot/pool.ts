@@ -2,10 +2,10 @@
 
 import { loadConfig } from '../config';
 import { log } from '../log';
-import { open, type BridgeOpenOptions, type ConversationSession } from './bridge';
+import { open, type ProviderOpenOptions, type ProviderSession } from './providers';
 
 interface Entry {
-	session: ConversationSession;
+	session: ProviderSession;
 	lastUsed: number;
 }
 
@@ -15,7 +15,7 @@ interface Entry {
 const SESSIONS_KEY = Symbol.for('copilot-portal.pool.sessions');
 const REAPER_KEY = Symbol.for('copilot-portal.pool.reaper');
 type SessionsMap = Map<string, Entry>;
-type InflightMap = Map<string, Promise<ConversationSession>>;
+type InflightMap = Map<string, Promise<ProviderSession>>;
 type GlobalSlot = Record<symbol, unknown>;
 const sessions: SessionsMap =
 	((globalThis as unknown as GlobalSlot)[SESSIONS_KEY] as SessionsMap | undefined) ??
@@ -29,7 +29,7 @@ const inflight: InflightMap =
 	((globalThis as unknown as GlobalSlot)[INFLIGHT_KEY] as InflightMap | undefined) ??
 	(((globalThis as unknown as GlobalSlot)[INFLIGHT_KEY] = new Map<
 		string,
-		Promise<ConversationSession>
+		Promise<ProviderSession>
 	>()) as InflightMap);
 function getReaperTimer(): NodeJS.Timeout | null {
 	return ((globalThis as unknown as GlobalSlot)[REAPER_KEY] as NodeJS.Timeout | null) ?? null;
@@ -38,7 +38,7 @@ function setReaperTimer(t: NodeJS.Timeout | null) {
 	(globalThis as unknown as GlobalSlot)[REAPER_KEY] = t;
 }
 
-export async function acquire(opts: BridgeOpenOptions): Promise<ConversationSession> {
+export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSession> {
 	const existing = sessions.get(opts.conversationId);
 	if (existing) {
 		if (existing.session.workingDirectory === opts.workingDirectory) {
@@ -89,7 +89,7 @@ export async function acquire(opts: BridgeOpenOptions): Promise<ConversationSess
  * running SDK session without spinning a fresh one (which would require
  * an auth token, working directory, etc. the endpoint doesn't have at hand).
  */
-export function getActive(conversationId: string): ConversationSession | null {
+export function getActive(conversationId: string): ProviderSession | null {
 	return sessions.get(conversationId)?.session ?? null;
 }
 

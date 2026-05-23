@@ -33,14 +33,14 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 		// Best-effort: the bridge already logs detailed RPC failures, and
 		// the DB row is the source of truth for the next open(). Don't fail
 		// the request if the live SDK rejects (preview surface, capability-gated).
-		if (body.mode !== undefined) {
+		if (body.mode !== undefined && live.setMode) {
 			try {
 				await live.setMode(body.mode);
 			} catch (e) {
 				log.warn('session.set_mode_failed', { conversationId: conv.id, err: String(e) });
 			}
 		}
-		if (body.approveAllTools !== undefined) {
+		if (body.approveAllTools !== undefined && live.setApproveAll) {
 			try {
 				await live.setApproveAll(body.approveAllTools);
 			} catch (e) {
@@ -61,7 +61,7 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 export const POST: RequestHandler = async ({ params, locals }) => {
 	const conv = authorizeConversation(params.id, locals.userId);
 	const live = pool.getActive(conv.id);
-	if (live) {
+	if (live?.resetSessionApprovals) {
 		try {
 			await live.resetSessionApprovals();
 		} catch (e) {

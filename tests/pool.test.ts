@@ -3,7 +3,7 @@ import { setupLocalEnv } from './helpers/env';
 
 const openMock = vi.fn();
 
-vi.mock('../src/lib/server/copilot/bridge', () => ({
+vi.mock('../src/lib/server/copilot/providers', () => ({
 	open: (...args: unknown[]) => openMock(...args)
 }));
 

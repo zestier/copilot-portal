@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { fetchAuthStatus, fetchModels } from '$lib/server/copilot/bridge';
+import { fetchAuthStatus, fetchModels } from '$lib/server/copilot/providers';
 import { loadConfig } from '$lib/server/config';
 import * as tokens from '$lib/server/db/repos/tokens';
 import { log } from '$lib/server/log';

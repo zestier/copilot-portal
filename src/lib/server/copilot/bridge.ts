@@ -4,11 +4,18 @@
 // NOTE: Pinned to @github/copilot-sdk ^1.0.0-beta. The SDK is in preview; if
 // upgrading, audit bridge.ts plus sdk-events.ts / interactive-adapter.ts.
 
-import { CopilotClient, type GetAuthStatusResponse, type ModelInfo } from '@github/copilot-sdk';
-import type { PortalEvent, PermissionPolicy, SessionMode } from '$lib/types';
+import { CopilotClient } from '@github/copilot-sdk';
+import type { PortalEvent, SessionMode } from '$lib/types';
 import { AsyncQueue } from './async-queue';
 import { createInteractiveCallbacks } from './interactive-adapter';
 import { SdkEventAdapter, toRuntimeMode, type RuntimeSessionMode } from './sdk-events';
+import type {
+	ModelBackendProvider,
+	ProviderAuthStatus,
+	ProviderModelInfo,
+	ProviderOpenOptions,
+	ProviderSession
+} from './provider';
 import * as conversationsRepo from '../db/repos/conversations';
 import * as messagesRepo from '../db/repos/messages';
 import { log } from '../log';
@@ -72,18 +79,21 @@ export async function shutdownClient() {
 
 // Per-user listModels cache: entitlements (and therefore the list of
 // available models) can differ between users.
-const modelsCache = new Map<string, { at: number; models: ModelInfo[] }>();
+const modelsCache = new Map<string, { at: number; models: ProviderModelInfo[] }>();
 const MODELS_TTL_MS = 5 * 60_000;
 
 export async function fetchAuthStatus(
 	userId: string,
 	authToken?: string
-): Promise<GetAuthStatusResponse> {
+): Promise<ProviderAuthStatus> {
 	const client = await getClient(userId, authToken);
 	return client.getAuthStatus();
 }
 
-export async function fetchModels(userId: string, authToken?: string): Promise<ModelInfo[]> {
+export async function fetchModels(
+	userId: string,
+	authToken?: string
+): Promise<ProviderModelInfo[]> {
 	const cached = modelsCache.get(userId);
 	if (cached && Date.now() - cached.at < MODELS_TTL_MS) {
 		return cached.models;
@@ -94,38 +104,9 @@ export async function fetchModels(userId: string, authToken?: string): Promise<M
 	return models;
 }
 
-export interface BridgeOpenOptions {
-	conversationId: string;
-	userId: string;
-	workingDirectory: string;
-	model: string;
-	policy: PermissionPolicy;
-	/** Initial session mode. Forwarded to the runtime after open. */
-	mode?: SessionMode;
-	/** When true, every tool-permission request is auto-approved for this
-	 * session. Mirrored to the SDK via `permissions.setApproveAll`. */
-	approveAllTools?: boolean;
-	authToken?: string;
-	onEvent?: (e: PortalEvent) => void;
-}
-
-export interface ConversationSession {
-	conversationId: string;
-	workingDirectory: string;
-	send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent>;
-	abort(): Promise<void>;
-	dispose(): Promise<void>;
-	/** Switch the live session's mode. Persists nothing — the caller owns
-	 * the DB row. No-op if the SDK rejects (preview / capability gap). */
-	setMode(mode: SessionMode): Promise<void>;
-	/** Toggle the in-bridge auto-approve short-circuit AND mirror the
-	 * setting to the SDK so the model can adapt. */
-	setApproveAll(enabled: boolean): Promise<void>;
-	/** Clear every session-scoped grant the SDK has accumulated. Useful
-	 * after the user turns approve-all off and wants a clean slate. */
-	resetSessionApprovals(): Promise<void>;
-	lastUsed: number;
-}
+export type BridgeOpenOptions = ProviderOpenOptions;
+export type ConversationSession = ProviderSession &
+	Required<Pick<ProviderSession, 'setMode' | 'setApproveAll' | 'resetSessionApprovals'>>;
 
 interface SdkSession {
 	on(event: string, listener: (e: unknown) => void): void;
@@ -422,6 +403,47 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 
 	return session;
 }
+
+export const copilotProvider: ModelBackendProvider = {
+	id: 'copilot',
+	displayName: 'GitHub Copilot',
+	capabilities: {
+		authStatus: true,
+		modelList: true,
+		session: {
+			open: true,
+			resume: true,
+			dispose: true,
+			abort: true
+		},
+		stream: {
+			send: true,
+			contract: 'PortalEvent'
+		},
+		controls: {
+			mode: true,
+			approveAll: true,
+			resetSessionApprovals: true
+		},
+		optionalCopilotFeatures: {
+			infiniteSessionMetadata: true,
+			permissionCallbacks: true,
+			userInputCallbacks: true,
+			elicitationCallbacks: true,
+			exitPlanModeCallbacks: true,
+			autoModeSwitchCallbacks: true,
+			contextWindowEvents: true,
+			contextCompactionEvents: true,
+			fileEditEvents: true,
+			reasoningEvents: true,
+			subagentLifecycleEvents: true
+		}
+	},
+	fetchAuthStatus,
+	listModels: fetchModels,
+	openSession: open,
+	shutdown: shutdownClient
+};
 
 function parseModeSwitchToolArgs(args: unknown): { mode: 'interactive'; reason: string } {
 	if (!args || typeof args !== 'object') {

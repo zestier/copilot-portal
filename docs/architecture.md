@@ -12,17 +12,20 @@ Runs under `@sveltejs/adapter-node`. Serves:
 
 A single Node process. No separate API server.
 
-### 2. Copilot SDK bridge
+### 2. Model backend provider
 
-A server-side module (`$lib/server/copilot/`) that wraps
-[`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk).
+A server-side module (`$lib/server/copilot/`) that exposes a provider
+interface for model backends. GitHub Copilot is the default implementation via
+[`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk);
+OpenAI-compatible backends can be added behind the same provider boundary.
 Responsible for:
 
-- Spawning and managing one `CopilotClient` subprocess per portal user,
-  and opening a per-conversation **session** on top of it.
-- Translating SDK events (token deltas, tool calls, permission prompts,
-  file edits, context-window usage) into a normalized event stream the
-  frontend understands.
+- Reporting provider auth status and available models.
+- Opening/resuming/disposing per-conversation **sessions** on top of the
+  selected provider.
+- Translating provider-native streams (token deltas, tool calls, permission
+  prompts, file edits, context-window usage) into the normalized `PortalEvent`
+  stream the turn runner and frontend understand.
 - Enforcing per-session resource limits (max concurrent sessions, idle
   timeout).
 
@@ -109,14 +112,13 @@ discriminated `{ kind, ... }` body. The legacy
 
 ## Concurrency model
 
-- **One `CopilotClient` subprocess per portal user**, lazily started on
-  first use and kept in a `Map<userId, CopilotClient>` in
-  `copilot/bridge.ts`. With the documented `ALLOWED_GITHUB_LOGINS`
-  allowlist this keeps Copilot API attribution (billing, audit) tied to
-  the GitHub identity that actually sent the turn instead of whichever
-  user logged in first after process boot. In the common single-user
-  deployment there is exactly one entry.
-- **One SDK session per conversation**, kept alive until idle for N
+- **One Copilot provider client per portal user**, lazily started on first use
+  and kept by the default provider implementation in `copilot/bridge.ts`. With
+  the documented `ALLOWED_GITHUB_LOGINS` allowlist this keeps Copilot API
+  attribution (billing, audit) tied to the GitHub identity that actually sent
+  the turn instead of whichever user logged in first after process boot. In the
+  common single-user deployment there is exactly one entry.
+- **One provider session per conversation**, kept alive until idle for N
   minutes (configurable, default 15) or explicitly closed. Held in a
   small in-memory `Map<conversationId, Session>` (`copilot/pool.ts`).
 - **Concurrency is scoped by conversation id, not workdir.** The turns API

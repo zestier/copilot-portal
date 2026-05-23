@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { PageServerLoad, Actions } from './$types';
 import * as settings from '$lib/server/db/repos/settings';
 import * as tokens from '$lib/server/db/repos/tokens';
-import { fetchAuthStatus, fetchModels } from '$lib/server/copilot/bridge';
+import { fetchAuthStatus, fetchModels } from '$lib/server/copilot/providers';
 import { loadConfig } from '$lib/server/config';
 import { getDeployMetadata } from '$lib/server/deploy';
 import { log } from '$lib/server/log';
