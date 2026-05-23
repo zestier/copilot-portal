@@ -15,6 +15,10 @@
 	import Composer from './Composer.svelte';
 	import ThinkingIndicator from './ThinkingIndicator.svelte';
 	import { addInteractive, removeInteractive } from '$lib/client/interactive-queue';
+	import {
+		findToolCallRecord,
+		shouldRefreshTicketsAfterToolResult
+	} from '$lib/client/ticket-tool-refresh';
 
 	let {
 		conversation,
@@ -337,8 +341,7 @@
 				break;
 			}
 			case 'tool.result': {
-				const m = messages[messages.length - 1];
-				const tc = m?.toolCalls?.find((t) => t.id === ev.toolCallId);
+				const tc = findToolCallRecord(messages, ev.toolCallId);
 				if (tc) {
 					tc.status = ev.ok ? 'ok' : 'error';
 					tc.resultJson = safeJson(ev.output ?? ev.summary);
@@ -347,11 +350,13 @@
 					tc.partialOutput = undefined;
 					tc.progressMessage = undefined;
 				}
+				if (shouldRefreshTicketsAfterToolResult(tc, ev)) {
+					void invalidateAll();
+				}
 				break;
 			}
 			case 'tool.partial_output': {
-				const m = messages[messages.length - 1];
-				const tc = m?.toolCalls?.find((t) => t.id === ev.toolCallId);
+				const tc = findToolCallRecord(messages, ev.toolCallId);
 				// The SDK emits cumulative snapshots of the tool's stdout/stderr
 				// buffer (not deltas) so progress bars and carriage-return redraws
 				// render correctly — each event already contains everything that
@@ -360,8 +365,7 @@
 				break;
 			}
 			case 'tool.progress': {
-				const m = messages[messages.length - 1];
-				const tc = m?.toolCalls?.find((t) => t.id === ev.toolCallId);
+				const tc = findToolCallRecord(messages, ev.toolCallId);
 				if (tc) tc.progressMessage = ev.message;
 				break;
 			}
