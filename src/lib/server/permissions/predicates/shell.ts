@@ -18,6 +18,8 @@ import { isPathInWorkspace } from '../workspace';
 export interface ShellMatchContext {
 	/** Conversation's workspace root. `workspace-paths` fails closed when null. */
 	workspaceRoot: string | null;
+	/** SDK session workspace root. `session-workspace-paths` fails closed when null. */
+	sessionWorkspaceRoot?: string | null;
 	/** Whether the segment being evaluated is part of a shell pipeline
 	 * (connected to a neighboring command by `|`). Used by the rule's
 	 * `pipeline: 'must' | 'forbid'` lever. Defaults to false when
@@ -200,6 +202,13 @@ function positionalsMatch(
 			if (!ctx.workspaceRoot) return false;
 			for (const p of positionals) {
 				if (!isPathInWorkspace(p, ctx.workspaceRoot)) return false;
+			}
+			return true;
+		}
+		case 'session-workspace-paths': {
+			if (!ctx.sessionWorkspaceRoot) return false;
+			for (const p of positionals) {
+				if (!isPathInWorkspace(p, ctx.sessionWorkspaceRoot)) return false;
 			}
 			return true;
 		}

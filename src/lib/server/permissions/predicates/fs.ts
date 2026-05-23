@@ -8,6 +8,7 @@ export interface FsMatchContext {
 	permissionKind: 'read' | 'write' | 'edit';
 	target: string;
 	workspaceRoot: string | null;
+	sessionWorkspaceRoot?: string | null;
 }
 
 export function fsScopeMatches(scope: FsScope, ctx: FsMatchContext): boolean {
@@ -23,6 +24,10 @@ function fsRuleMatches(rule: FsRule, ctx: FsMatchContext): boolean {
 			return ctx.target === rule.path;
 		case 'workspace':
 			return ctx.workspaceRoot ? isPathInWorkspace(ctx.target, ctx.workspaceRoot) : false;
+		case 'session-workspace':
+			return ctx.sessionWorkspaceRoot
+				? isPathInWorkspace(ctx.target, ctx.sessionWorkspaceRoot)
+				: false;
 		case 'workspace-glob': {
 			if (!ctx.workspaceRoot) return false;
 			if (!isPathInWorkspace(ctx.target, ctx.workspaceRoot)) return false;

@@ -23,6 +23,10 @@ export function encodeScope(scope: GrantScope): string {
 	return JSON.stringify(scope);
 }
 
+export function stableScopeKey(scope: GrantScope): string {
+	return stableJson(scope);
+}
+
 export function decodeScope(raw: string | null | undefined): GrantScope | null {
 	if (raw == null || raw === '') return null;
 	let parsed: unknown;
@@ -170,7 +174,12 @@ function validateLegacyFlags(v: unknown): ShellOptionRules | null {
 function validatePositionals(v: unknown): PositionalsRule | null {
 	if (!isObject(v)) return null;
 	const kind = (v as { kind?: unknown }).kind;
-	if (kind === 'none' || kind === 'any' || kind === 'workspace-paths') {
+	if (
+		kind === 'none' ||
+		kind === 'any' ||
+		kind === 'workspace-paths' ||
+		kind === 'session-workspace-paths'
+	) {
 		return { kind } as PositionalsRule;
 	}
 	return null;
@@ -187,6 +196,9 @@ function validateFs(v: Record<string, unknown>): FsScope | null {
 			break;
 		case 'workspace':
 			parsedRule = { kind: 'workspace' };
+			break;
+		case 'session-workspace':
+			parsedRule = { kind: 'session-workspace' };
 			break;
 		case 'workspace-glob':
 			if (typeof rule.glob !== 'string' || rule.glob.length === 0) return null;
@@ -259,4 +271,15 @@ function isObject(v: unknown): v is Record<string, unknown> {
 
 function isFlagName(v: unknown): v is string {
 	return typeof v === 'string' && v.length > 0 && v.startsWith('-');
+}
+
+function stableJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+	if (value && typeof value === 'object') {
+		const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+			a.localeCompare(b)
+		);
+		return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+	}
+	return JSON.stringify(value);
 }

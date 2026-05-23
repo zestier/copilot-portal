@@ -150,6 +150,8 @@ export interface MatchGrantContext {
 	url?: string | null;
 	/** Conversation's working directory. */
 	workspaceRoot?: string | null;
+	/** SDK session workspace directory. */
+	sessionWorkspaceRoot?: string | null;
 }
 
 /**
@@ -195,6 +197,7 @@ export function matchGrantDetailed(
 		target: ctx.target ?? null,
 		url: ctx.url ?? null,
 		workspaceRoot: ctx.workspaceRoot ?? null,
+		sessionWorkspaceRoot: ctx.sessionWorkspaceRoot ?? null,
 		now
 	});
 }

@@ -268,6 +268,11 @@ describe('deriveScopeKey', () => {
 		expect(deriveScopeKey('read', { fileName: './c.ts' })).toBe('./c.ts');
 	});
 
+	it('returns path for write/edit when present', () => {
+		expect(deriveScopeKey('write', { path: '/tmp/write.txt' })).toBe('/tmp/write.txt');
+		expect(deriveScopeKey('edit', { path: '/tmp/edit.txt' })).toBe('/tmp/edit.txt');
+	});
+
 	it('falls back to args.path for write/edit/read', () => {
 		expect(deriveScopeKey('read', { args: { path: '/tmp/x' } })).toBe('/tmp/x');
 	});

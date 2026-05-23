@@ -19,6 +19,7 @@
 //      the next call learns immediately without a user prompt.
 
 import type { GrantScope, ShellRule } from '$lib/permissions/scope-types';
+import { stableScopeKey } from '$lib/permissions/scope-codec';
 import { addGrant, listGrantsForUser } from '../db/repos/settings';
 
 interface SeedSpec {
@@ -81,6 +82,7 @@ const GIT_STRUCTURED_TOOLS = [
 	'git_show_file'
 ];
 const TICKET_STRUCTURED_TOOLS = ['ticket_add', 'ticket_list', 'ticket_get', 'ticket_update'];
+const FS_RUNTIME_PERMS = ['read', 'write', 'edit'] as const;
 
 function shellGrant(rule: ShellRule): SeedSpec {
 	return { tool: 'shell', permissionKind: 'shell', scope: { kind: 'shell', rule } };
@@ -143,12 +145,24 @@ export function defaultSeedGrants(): SeedSpec[] {
 	}
 	for (const argv0 of FS_READ_TOOLS) {
 		seeds.push(shellGrant({ argv0, positionals: { kind: 'workspace-paths' } }));
+		seeds.push(shellGrant({ argv0, positionals: { kind: 'session-workspace-paths' } }));
 	}
 	for (const tool of GIT_STRUCTURED_TOOLS) {
 		seeds.push({ tool, permissionKind: 'custom-tool', scope: { kind: 'any' } });
 	}
 	for (const tool of TICKET_STRUCTURED_TOOLS) {
 		seeds.push({ tool, permissionKind: 'custom-tool', scope: { kind: 'any' } });
+	}
+	for (const perm of FS_RUNTIME_PERMS) {
+		seeds.push({
+			tool: perm,
+			permissionKind: perm,
+			scope: {
+				kind: 'fs',
+				perms: [perm],
+				rule: { kind: 'session-workspace' }
+			}
+		});
 	}
 
 	seeds.push(
@@ -236,5 +250,5 @@ export function ensureSeedGrantsForUser(userId: string): number {
 }
 
 function seedKey(tool: string, kind: string | null, scope: GrantScope, decision: string): string {
-	return `${tool}\u0000${kind ?? ''}\u0000${decision}\u0000${JSON.stringify(scope)}`;
+	return `${tool}\u0000${kind ?? ''}\u0000${decision}\u0000${stableScopeKey(scope)}`;
 }

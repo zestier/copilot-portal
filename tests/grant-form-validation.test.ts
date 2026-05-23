@@ -20,6 +20,18 @@ describe('GrantInputSchema — valid shapes', () => {
 		expect(parsed.expiresAt).toBeNull();
 	});
 
+	it('shell with session-workspace-paths positionals', () => {
+		const parsed = GrantInputSchema.parse({
+			tool: 'shell',
+			decision: 'allow',
+			scope: {
+				kind: 'shell',
+				rule: { argv0: 'cat', positionals: { kind: 'session-workspace-paths' } }
+			}
+		});
+		expect(parsed.scope.kind).toBe('shell');
+	});
+
 	it('shell with pre-subcommand and post-subcommand option rules', () => {
 		const parsed = GrantInputSchema.parse({
 			tool: 'shell',
@@ -61,6 +73,15 @@ describe('GrantInputSchema — valid shapes', () => {
 			tool: 'read',
 			decision: 'allow',
 			scope: { kind: 'fs', rule: { kind: 'workspace' } }
+		});
+		expect(parsed.scope.kind).toBe('fs');
+	});
+
+	it('fs read with session-workspace rule', () => {
+		const parsed = GrantInputSchema.parse({
+			tool: 'read',
+			decision: 'allow',
+			scope: { kind: 'fs', perms: ['read'], rule: { kind: 'session-workspace' } }
 		});
 		expect(parsed.scope.kind).toBe('fs');
 	});

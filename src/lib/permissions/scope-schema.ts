@@ -22,7 +22,8 @@ const Argv0Schema = ArgvToken.refine(
 const PositionalsSchema = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('none') }),
 	z.object({ kind: z.literal('any') }),
-	z.object({ kind: z.literal('workspace-paths') })
+	z.object({ kind: z.literal('workspace-paths') }),
+	z.object({ kind: z.literal('session-workspace-paths') })
 ]);
 
 const FlagSchema = z
@@ -78,6 +79,7 @@ const AbsolutePathSchema = z
 const FsRuleSchema = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('exact'), path: AbsolutePathSchema }),
 	z.object({ kind: z.literal('workspace') }),
+	z.object({ kind: z.literal('session-workspace') }),
 	z.object({ kind: z.literal('workspace-glob'), glob: z.string().min(1) }),
 	z.object({ kind: z.literal('prefix'), path: AbsolutePathSchema })
 ]);

@@ -16,10 +16,14 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(ws, { recursive: true, force: true }));
 
-function match(rule: ShellRule, command: string): boolean {
+function match(
+	rule: ShellRule,
+	command: string,
+	sessionWorkspaceRoot: string | null = null
+): boolean {
 	const parsed = parseShellCommand(command);
 	if (parsed.kind !== 'parsed') return false;
-	return shellRuleMatches(rule, parsed.segments, { workspaceRoot: ws });
+	return shellRuleMatches(rule, parsed.segments, { workspaceRoot: ws, sessionWorkspaceRoot });
 }
 
 describe('shell predicate — argv0', () => {
@@ -172,6 +176,13 @@ describe('shell predicate — positionals', () => {
 		const parsed = parseShellCommand('cat README.md');
 		if (parsed.kind !== 'parsed') throw new Error('parse');
 		expect(shellRuleMatches(rule, parsed.segments, { workspaceRoot: null })).toBe(false);
+	});
+
+	it('positionals=session-workspace-paths only accepts paths inside the session workspace', () => {
+		const rule: ShellRule = { argv0: 'cat', positionals: { kind: 'session-workspace-paths' } };
+		expect(match(rule, `cat ${join(ws, 'README.md')}`, ws)).toBe(true);
+		expect(match(rule, 'cat /etc/passwd', ws)).toBe(false);
+		expect(match(rule, `cat ${join(ws, 'README.md')}`, null)).toBe(false);
 	});
 });
 

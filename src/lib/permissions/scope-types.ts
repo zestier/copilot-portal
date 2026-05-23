@@ -61,8 +61,10 @@ export interface ShellRule {
 	 * option specs) are allowed.
 	 *   none             — every positional must be absent
 	 *   any              — anything goes
-	 *   workspace-paths  — every positional must resolve to a path inside
-	 *                      the conversation's workspace root
+	 *   workspace-paths          — every positional must resolve to a path
+	 *                              inside the conversation's workspace root
+	 *   session-workspace-paths  — every positional must resolve to a path
+	 *                              inside the SDK session workspace
 	 */
 	positionals?: PositionalsRule;
 	/**
@@ -77,7 +79,11 @@ export interface ShellRule {
 	pipeline?: 'must' | 'forbid';
 }
 
-export type PositionalsRule = { kind: 'none' } | { kind: 'any' } | { kind: 'workspace-paths' };
+export type PositionalsRule =
+	| { kind: 'none' }
+	| { kind: 'any' }
+	| { kind: 'workspace-paths' }
+	| { kind: 'session-workspace-paths' };
 
 /** Matches `read` / `write` / `edit` permission requests. */
 export interface FsScope {
@@ -92,6 +98,8 @@ export type FsRule =
 	| { kind: 'exact'; path: string }
 	/** Any path resolving inside the conversation's workspace root. */
 	| { kind: 'workspace' }
+	/** Any path resolving inside the SDK-provided session workspace root. */
+	| { kind: 'session-workspace' }
 	/**
 	 * Glob relative to the workspace root, token-aware (`*` matches a path
 	 * segment, `**` matches any number of segments). The path must be

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { setupLocalEnv } from './helpers/env';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 // Shared mock SDK client/session instances. These are mutated per test.
 const sdkSessionStub = {
@@ -8,6 +10,7 @@ const sdkSessionStub = {
 	send: vi.fn(),
 	abort: vi.fn(),
 	disconnect: vi.fn(),
+	workspacePath: '/tmp/copilot-session-workspace',
 	rpc: {
 		mode: {
 			set: vi.fn()
@@ -66,7 +69,9 @@ const baseOpts = {
 beforeEach(async () => {
 	// bridge.open() loads config (via bridge-stub.isStubMode → loadConfig)
 	// so we need the same AUTH_MODE=none + HOST guards that real tests use.
-	await setupLocalEnv('portal-bridge-test-');
+	const dataDir = await setupLocalEnv('portal-bridge-test-');
+	const sessionWorkspace = join(dataDir, 'session-workspace');
+	mkdirSync(sessionWorkspace, { recursive: true });
 	// Reset every stub so any test that re-implements one (e.g. the
 	// usage_info test below mutates sdkSessionStub.send) can't leak its
 	// implementation into the next test. Re-install default resolved
@@ -90,6 +95,7 @@ beforeEach(async () => {
 	clientStub.getAuthStatus.mockResolvedValue({ authenticated: true });
 	clientStub.listModels.mockResolvedValue([]);
 	clientStub.getSessionMetadata.mockResolvedValue(undefined);
+	sdkSessionStub.workspacePath = sessionWorkspace;
 	sdkSessionStub.abort.mockResolvedValue(undefined);
 	sdkSessionStub.disconnect.mockResolvedValue(undefined);
 	sdkSessionStub.rpc.mode.set.mockResolvedValue(undefined);
@@ -251,6 +257,57 @@ describe('bridge.open() session mode and permissions', () => {
 		await session.setMode('best-effort');
 
 		expect(sdkSessionStub.rpc.mode.set).toHaveBeenCalledWith({ mode: 'autopilot' });
+	});
+
+	it('auto-approves filesystem requests inside the SDK session workspace', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		await open({ ...baseOpts, userId: user.id, workingDirectory: '/workspace/project' });
+
+		const planPath = join(sdkSessionStub.workspacePath, 'plan.md');
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const result = await onPermissionRequest({
+			kind: 'write',
+			path: planPath,
+			args: { path: planPath }
+		});
+
+		expect(result).toEqual({ kind: 'approve-once' });
+	});
+
+	it('lets an explicit deny grant revoke SDK session workspace access', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const user = ensureLocalUser();
+		settings.addGrant({
+			userId: user.id,
+			conversationId: null,
+			tool: 'write',
+			permissionKind: 'write',
+			scope: {
+				kind: 'fs',
+				perms: ['write'],
+				rule: { kind: 'session-workspace' }
+			},
+			decision: 'deny'
+		});
+		await open({ ...baseOpts, userId: user.id, workingDirectory: '/workspace/project' });
+
+		const planPath = join(sdkSessionStub.workspacePath, 'plan.md');
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const result = await onPermissionRequest({
+			kind: 'write',
+			path: planPath,
+			args: { path: planPath }
+		});
+
+		expect(result).toEqual({ kind: 'reject' });
 	});
 
 	it('auto-rejects prompt-worthy permission requests in best-effort mode with the would-be prompt text', async () => {

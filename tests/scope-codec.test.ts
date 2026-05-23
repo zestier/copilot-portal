@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decodeScope, encodeScope } from '../src/lib/permissions/scope-codec';
+import { decodeScope, encodeScope, stableScopeKey } from '../src/lib/permissions/scope-codec';
 import type { GrantScope } from '../src/lib/permissions/scope-types';
 
 function roundtrip(scope: GrantScope) {
@@ -50,6 +50,13 @@ describe('scope-codec roundtrip', () => {
 		});
 	});
 
+	it('shell with session-workspace-paths positionals', () => {
+		roundtrip({
+			kind: 'shell',
+			rule: { argv0: 'cat', positionals: { kind: 'session-workspace-paths' } }
+		});
+	});
+
 	it('decodes legacy flags into the new option-rule fields', () => {
 		expect(
 			decodeScope(
@@ -81,6 +88,7 @@ describe('scope-codec roundtrip', () => {
 
 	it('fs variants', () => {
 		roundtrip({ kind: 'fs', rule: { kind: 'workspace' }, perms: ['read'] });
+		roundtrip({ kind: 'fs', rule: { kind: 'session-workspace' }, perms: ['read'] });
 		roundtrip({ kind: 'fs', rule: { kind: 'exact', path: '/tmp/x' } });
 		roundtrip({
 			kind: 'fs',
@@ -98,6 +106,18 @@ describe('scope-codec roundtrip', () => {
 		roundtrip({ kind: 'url', rule: { kind: 'exact', url: 'https://a' } });
 		roundtrip({ kind: 'url', rule: { kind: 'host', host: 'api.github.com' } });
 		roundtrip({ kind: 'url', rule: { kind: 'host-suffix', suffix: 'github.com' } });
+	});
+});
+
+describe('stableScopeKey', () => {
+	it('ignores object key insertion order', () => {
+		const a: GrantScope = { kind: 'fs', perms: ['read'], rule: { kind: 'session-workspace' } };
+		const b = {
+			kind: 'fs',
+			rule: { kind: 'session-workspace' },
+			perms: ['read']
+		} as GrantScope;
+		expect(stableScopeKey(a)).toBe(stableScopeKey(b));
 	});
 });
 

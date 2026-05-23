@@ -8,7 +8,7 @@ import { loadConfig } from '$lib/server/config';
 import { log } from '$lib/server/log';
 import type { PermissionPolicy, SessionMode, UserSettings } from '$lib/types';
 import { GrantInputSchema, permissionKindForTool } from '$lib/permissions/scope-schema';
-import { encodeScope } from '$lib/permissions/scope-codec';
+import { stableScopeKey } from '$lib/permissions/scope-codec';
 import { ensureSeedGrantsForUser } from '$lib/server/permissions/seed-grants';
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.userId) throw redirect(302, '/login');
@@ -154,7 +154,7 @@ export const actions: Actions = {
 		// (tool, kind, scope_json). Mirrors `ensureSeedGrantsForUser`.
 		const tool = input.tool;
 		const permissionKind = permissionKindForTool(tool);
-		const encoded = encodeScope(input.scope);
+		const scopeKey = stableScopeKey(input.scope);
 		const existing = settings.listGrantsForUser(locals.userId);
 		const duplicate = existing.find(
 			(g) =>
@@ -162,7 +162,7 @@ export const actions: Actions = {
 				g.tool === tool &&
 				g.permissionKind === permissionKind &&
 				g.scope !== null &&
-				encodeScope(g.scope) === encoded &&
+				stableScopeKey(g.scope) === scopeKey &&
 				g.decision === input.decision
 		);
 		if (duplicate) {

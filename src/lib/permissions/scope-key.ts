@@ -22,7 +22,7 @@ export function deriveScopeKey(
 			return req.fullCommandText ?? readArgString(req.args, 'command') ?? null;
 		case 'write':
 		case 'edit':
-			return req.fileName ?? readArgString(req.args, 'path') ?? null;
+			return req.fileName ?? req.path ?? readArgString(req.args, 'path') ?? null;
 		case 'read':
 			// SDK PermissionRequestRead carries `path`, not `fileName`.
 			return req.path ?? req.fileName ?? readArgString(req.args, 'path') ?? null;

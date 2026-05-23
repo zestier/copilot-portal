@@ -12,9 +12,14 @@
 	let { grants, form }: { grants: PermissionGrant[]; form: FormResult | null } = $props();
 
 	type GrantTool = 'shell' | 'read' | 'write' | 'edit' | 'url';
-	type ShellPositionalsKind = 'unset' | 'none' | 'any' | 'workspace-paths';
+	type ShellPositionalsKind =
+		| 'unset'
+		| 'none'
+		| 'any'
+		| 'workspace-paths'
+		| 'session-workspace-paths';
 	type ShellPipelineKind = 'unset' | 'must' | 'forbid';
-	type FsRuleKind = 'exact' | 'workspace' | 'workspace-glob' | 'prefix';
+	type FsRuleKind = 'exact' | 'workspace' | 'session-workspace' | 'workspace-glob' | 'prefix';
 	type UrlRuleKind = 'exact' | 'host' | 'host-suffix';
 
 	let newGrantTool = $state<GrantTool>('shell');
@@ -144,6 +149,9 @@
 					break;
 				case 'workspace':
 					rule = { kind: 'workspace' };
+					break;
+				case 'session-workspace':
+					rule = { kind: 'session-workspace' };
 					break;
 				case 'workspace-glob':
 					if (!fsGlob.trim()) return { json: null, error: 'glob is required' };
@@ -423,6 +431,10 @@
 							<option value="workspace-paths"
 								>workspace-paths (every positional must resolve inside the conversation's workspace)</option
 							>
+							<option value="session-workspace-paths"
+								>session-workspace-paths (every positional must resolve inside the SDK session
+								workspace)</option
+							>
 						</select>
 					</label>
 					<label>
@@ -551,6 +563,7 @@
 						Match by
 						<select bind:value={fsRuleKind}>
 							<option value="workspace">anywhere inside the workspace</option>
+							<option value="session-workspace">anywhere inside the SDK session workspace</option>
 							<option value="workspace-glob"
 								>workspace path matching a glob (e.g. src/**/*.ts)</option
 							>

@@ -95,6 +95,34 @@ describe('fs predicate', () => {
 		).toBe(false);
 	});
 
+	it('session-workspace rule matches only inside the SDK session workspace', () => {
+		const scope = { kind: 'fs' as const, rule: { kind: 'session-workspace' as const } };
+		expect(
+			fsScopeMatches(scope, {
+				permissionKind: 'read',
+				target: join(ws, 'src', 'a.ts'),
+				workspaceRoot: null,
+				sessionWorkspaceRoot: ws
+			})
+		).toBe(true);
+		expect(
+			fsScopeMatches(scope, {
+				permissionKind: 'read',
+				target: '/etc/passwd',
+				workspaceRoot: ws,
+				sessionWorkspaceRoot: ws
+			})
+		).toBe(false);
+		expect(
+			fsScopeMatches(scope, {
+				permissionKind: 'read',
+				target: join(ws, 'src', 'a.ts'),
+				workspaceRoot: ws,
+				sessionWorkspaceRoot: null
+			})
+		).toBe(false);
+	});
+
 	describe('prefix rule', () => {
 		let outside: string;
 		beforeAll(() => {

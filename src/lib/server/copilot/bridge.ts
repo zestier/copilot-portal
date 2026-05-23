@@ -131,6 +131,8 @@ interface SdkSession {
 	send(args: { prompt: string }): Promise<string>;
 	abort?(): Promise<void>;
 	disconnect(): Promise<void>;
+	/** SDK-provided infinite-session workspace (e.g. ~/.copilot/session-state/<id>). */
+	workspacePath?: string;
 	/** Public typed RPC surface exposed by the SDK's CopilotSession. We
 	 * narrow it to just the methods we touch so a preview-version drift
 	 * surfaces as a compile error here rather than a runtime mystery. */
@@ -160,6 +162,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	// the change without a recreate.
 	let approveAllTools = opts.approveAllTools === true;
 	let currentMode: SessionMode = opts.mode ?? 'interactive';
+	let sessionWorkspacePath: string | null = null;
 
 	const eventAdapter = new SdkEventAdapter({
 		conversationId: opts.conversationId,
@@ -185,7 +188,8 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		policy: opts.policy,
 		emit,
 		getApproveAll: () => approveAllTools,
-		getMode: () => currentMode
+		getMode: () => currentMode,
+		getSessionWorkspacePath: () => sessionWorkspacePath
 	});
 
 	let existingMetadata: unknown;
@@ -287,6 +291,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			sessionId: opts.conversationId
 		})) as unknown as SdkSession;
 	}
+	sessionWorkspacePath = normalizeSessionWorkspacePath(sdkSession.workspacePath);
 
 	eventAdapter.attach(sdkSession);
 
@@ -412,4 +417,10 @@ function parseModeSwitchToolArgs(args: unknown): { mode: 'interactive'; reason: 
 		throw new Error('request_mode_switch requires a non-empty reason.');
 	}
 	return { mode, reason: reason.trim() };
+}
+
+function normalizeSessionWorkspacePath(path: string | undefined): string | null {
+	const trimmed = path?.trim();
+	if (!trimmed) return null;
+	return trimmed;
 }

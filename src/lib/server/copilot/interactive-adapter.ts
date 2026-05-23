@@ -45,6 +45,7 @@ interface InteractiveAdapterOptions {
 	emit(ev: PortalEvent): void;
 	getApproveAll(): boolean;
 	getMode(): SessionMode;
+	getSessionWorkspacePath(): string | null;
 }
 
 export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
@@ -131,7 +132,8 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				shellSegments,
 				target,
 				url,
-				workspaceRoot: opts.workingDirectory ?? null
+				workspaceRoot: opts.workingDirectory ?? null,
+				sessionWorkspaceRoot: opts.getSessionWorkspacePath()
 			}
 		);
 		if (grant.outcome === 'allow') {

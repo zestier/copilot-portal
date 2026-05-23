@@ -64,6 +64,8 @@ export interface MatchQuery {
 	/** Conversation's working directory, used by structured predicates
 	 * that constrain to the workspace. */
 	workspaceRoot?: string | null;
+	/** SDK session workspace directory, used by session-workspace predicates. */
+	sessionWorkspaceRoot?: string | null;
 	/** Unix ms. Grants with `expiresAt < now` are ignored. */
 	now: number;
 }
@@ -122,7 +124,11 @@ function matchShellSegments(
 	for (let i = 0; i < segments.length; i++) {
 		const seg = segments[i];
 		const inPipeline = segmentInPipeline(segments, i);
-		const ctx = { workspaceRoot: q.workspaceRoot ?? null, inPipeline };
+		const ctx = {
+			workspaceRoot: q.workspaceRoot ?? null,
+			sessionWorkspaceRoot: q.sessionWorkspaceRoot ?? null,
+			inPipeline
+		};
 		let segAllow = false;
 		for (const r of rows) {
 			if (!grantApplies(r, q)) continue;
@@ -158,7 +164,7 @@ function rowMatchesShellSegment(
 	r: GrantRow,
 	seg: ParsedSegment,
 	q: MatchQuery,
-	ctx: { workspaceRoot: string | null; inPipeline: boolean }
+	ctx: { workspaceRoot: string | null; sessionWorkspaceRoot: string | null; inPipeline: boolean }
 ): boolean {
 	if (r.scope) {
 		switch (r.scope.kind) {
@@ -186,7 +192,8 @@ function structuredScopeMatches(scope: GrantScope, q: MatchQuery): boolean {
 			if (q.permissionKind !== 'shell') return false;
 			if (!q.shellSegments) return false;
 			return shellRuleMatches(scope.rule, q.shellSegments, {
-				workspaceRoot: q.workspaceRoot ?? null
+				workspaceRoot: q.workspaceRoot ?? null,
+				sessionWorkspaceRoot: q.sessionWorkspaceRoot ?? null
 			});
 		case 'fs': {
 			const kind = q.permissionKind;
@@ -195,7 +202,8 @@ function structuredScopeMatches(scope: GrantScope, q: MatchQuery): boolean {
 			return fsScopeMatches(scope, {
 				permissionKind: kind,
 				target: q.target,
-				workspaceRoot: q.workspaceRoot ?? null
+				workspaceRoot: q.workspaceRoot ?? null,
+				sessionWorkspaceRoot: q.sessionWorkspaceRoot ?? null
 			});
 		}
 		case 'url':

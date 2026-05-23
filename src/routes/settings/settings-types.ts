@@ -78,7 +78,7 @@ export function describeGrantScope(g: {
 			case 'any':
 				return '*';
 			case 'shell':
-				return `argv0=${s.rule.argv0}`;
+				return describeShellRule(s.rule);
 			case 'url':
 				switch (s.rule.kind) {
 					case 'exact':
@@ -96,6 +96,8 @@ export function describeGrantScope(g: {
 						return `${perms}${s.rule.path}`;
 					case 'workspace':
 						return `${perms}<workspace>`;
+					case 'session-workspace':
+						return `${perms}<session workspace>`;
 					case 'workspace-glob':
 						return `${perms}<workspace>/${s.rule.glob}`;
 					case 'prefix':
@@ -105,6 +107,20 @@ export function describeGrantScope(g: {
 		}
 	}
 	return g.scopePattern ?? '*';
+}
+
+function describeShellRule(rule: Extract<GrantScope, { kind: 'shell' }>['rule']): string {
+	const parts = [`argv0=${rule.argv0}`];
+	if (rule.subcommands && rule.subcommands.length > 0) {
+		parts.push(`subcommands=${rule.subcommands.join('|')}`);
+	}
+	if (rule.positionals) {
+		parts.push(`positionals=${rule.positionals.kind}`);
+	}
+	if (rule.pipeline) {
+		parts.push(`pipeline=${rule.pipeline}`);
+	}
+	return parts.join('; ');
 }
 
 export function formatExpiry(ms: number | null): string {
