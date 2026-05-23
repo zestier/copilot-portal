@@ -39,20 +39,22 @@ See [docs/deployment.md](docs/deployment.md) for the OAuth + tunnel setup.
 
 ## Scripts
 
-| Script                          | Purpose                                                                               |
-| ------------------------------- | ------------------------------------------------------------------------------------- |
-| `pnpm run dev`                  | Vite dev server with HMR.                                                             |
-| `pnpm run dev:isolated`         | Like `dev`, but points `DATA_DIR` at a fresh temp dir. See [AGENTS.md](AGENTS.md).    |
-| `pnpm run build`                | Production build into `build/`.                                                       |
-| `pnpm start`                    | Run the production build (`node build`).                                              |
-| `pnpm run serve`                | Supervisor that runs the build from `build.live/` and supports in-app redeploy.       |
-| `pnpm run check`                | `svelte-check` + TS.                                                                  |
-| `pnpm run lint`                 | ESLint + Prettier check.                                                              |
-| `pnpm run format`               | Prettier write.                                                                       |
-| `pnpm test`                     | Vitest unit tests.                                                                    |
-| `pnpm run test:e2e`             | Build + Playwright e2e (uses stubbed Copilot).                                        |
-| `pnpm run verify`               | Lint + check + unit + e2e. Same gate the redeploy button and the pre-commit hook run. |
-| `pnpm run release:bump-actions` | Pin GitHub Actions in `.github/workflows/` to current SHAs.                           |
+| Script                          | Purpose                                                                            |
+| ------------------------------- | ---------------------------------------------------------------------------------- |
+| `pnpm run dev`                  | Vite dev server with HMR.                                                          |
+| `pnpm run dev:isolated`         | Like `dev`, but points `DATA_DIR` at a fresh temp dir. See [AGENTS.md](AGENTS.md). |
+| `pnpm run build`                | Production build into `build/`.                                                    |
+| `pnpm start`                    | Run the production build (`node build`).                                           |
+| `pnpm run serve`                | Supervisor that runs the build from `build.live/` and supports in-app redeploy.    |
+| `pnpm run check`                | `svelte-check` + TS.                                                               |
+| `pnpm run lint`                 | ESLint + Prettier check.                                                           |
+| `pnpm run format`               | Prettier write.                                                                    |
+| `pnpm test`                     | Vitest unit tests.                                                                 |
+| `pnpm run test:e2e`             | Build + Playwright e2e (uses stubbed Copilot).                                     |
+| `pnpm run test:e2e:run`         | Playwright e2e only; expects `build/` to already exist.                            |
+| `pnpm run verify`               | Parallel lint/check/unit, then build, then e2e. Same gate redeploy/pre-commit run. |
+| `pnpm run verify:sequential`    | Sequential benchmark of the same verify phases.                                    |
+| `pnpm run release:bump-actions` | Pin GitHub Actions in `.github/workflows/` to current SHAs.                        |
 
 This project uses **pnpm** (declared via `packageManager` in `package.json`).
 Use `corepack enable` once to make pnpm available without a global install.
@@ -61,6 +63,17 @@ Use `corepack enable` once to make pnpm available without a global install.
 at `scripts/git-hooks/` (containing a `pre-commit` that runs
 `pnpm run verify`). To bypass it for an emergency commit:
 `SKIP_VERIFY=1 git commit ...`.
+
+`pnpm run verify` preserves the full quality gate: lint, Svelte/TypeScript
+check, unit tests, production build, and Playwright e2e. On this workspace
+(2026-05-23), the sequential phase baseline was lint 4.8s, check 3.5s,
+unit 3.9s, build 3.7s, and Playwright e2e 6.0s for a 22.0s total. The
+parallel runner overlaps only lint/check/unit, then runs build and e2e
+serially; that candidate completed in 15.1s. Build stays after check
+because both can write `.svelte-kit`, and e2e stays after build because it
+uses `build/`, `e2e/.tmp-data`, `playwright-report/`, and `test-results/`.
+Each child line is prefixed with its phase label so terminal, pre-commit,
+and redeploy logs identify failures clearly.
 
 ## Goals
 

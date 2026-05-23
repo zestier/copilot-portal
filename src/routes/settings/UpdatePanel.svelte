@@ -79,9 +79,9 @@
 		<p class="muted small">Run maintenance actions for this portal instance.</p>
 	</div>
 	<p class="muted small">
-		Runs <code>pnpm verify</code> (lint, type-check, unit tests, and e2e — which also rebuilds),
-		then exits so the <code>pnpm serve</code> supervisor relaunches on the refreshed code. "Pull
-		&amp; restart" also does <code>git pull</code> and <code>pnpm install</code> first.
+		Runs <code>pnpm run verify</code> (lint, type-check, unit tests, build, and e2e), then exits so
+		the <code>pnpm serve</code> supervisor relaunches on the refreshed code. "Pull &amp; restart"
+		also does <code>git pull</code> and <code>pnpm install</code> first.
 	</p>
 	<div class="deploy-buttons">
 		<button class="btn" onclick={() => redeploy({ pull: true })} disabled={deployBusy}>
