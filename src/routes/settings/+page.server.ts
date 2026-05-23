@@ -10,7 +10,7 @@ import { log } from '$lib/server/log';
 import type { PermissionPolicy, SessionMode, UserSettings } from '$lib/types';
 import { GrantInputSchema, permissionKindForTool } from '$lib/permissions/scope-schema';
 import { stableScopeKey } from '$lib/permissions/scope-codec';
-import { ensureSeedGrantsForUser } from '$lib/server/permissions/seed-grants';
+import { defaultSeedGrants, ensureSeedGrantsForUser } from '$lib/server/permissions/seed-grants';
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.userId) throw redirect(302, '/login');
 	const cfg = loadConfig();
@@ -57,7 +57,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		settings: settings.get(locals.userId) ?? settings.defaults(),
 		copilot,
 		recentDecisions: settings.listRecentDecisionsForUser(locals.userId, 25),
-		grants: settings.listGrantsForUser(locals.userId),
+		grants: markSeedGrants(settings.listGrantsForUser(locals.userId)),
 		enableRedeploy: cfg.ENABLE_REDEPLOY,
 		deploy: getDeployMetadata()
 	};
@@ -285,4 +285,36 @@ function parseGrantFormData(data: FormData, formId: string): ParseGrantResult {
 		};
 	}
 	return { ok: true, input: parsed.data };
+}
+
+function markSeedGrants(grants: settings.GrantSummary[]) {
+	const seedKeys = new Set(
+		defaultSeedGrants().map((seed) =>
+			defaultSeedGrantKey(
+				seed.tool,
+				seed.permissionKind,
+				seed.scope,
+				seed.decision === 'deny' ? 'deny' : 'allow'
+			)
+		)
+	);
+
+	return grants.map((grant) => ({
+		...grant,
+		isSeedGrant:
+			grant.conversationId === null &&
+			grant.scope !== null &&
+			seedKeys.has(
+				defaultSeedGrantKey(grant.tool, grant.permissionKind, grant.scope, grant.decision)
+			)
+	}));
+}
+
+function defaultSeedGrantKey(
+	tool: string,
+	permissionKind: string | null,
+	scope: import('$lib/permissions/scope-types').GrantScope,
+	decision: string
+) {
+	return `${tool}\u0000${permissionKind ?? ''}\u0000${decision}\u0000${stableScopeKey(scope)}`;
 }

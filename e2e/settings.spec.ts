@@ -30,8 +30,8 @@ test('settings page loads with no client-side errors', async ({ page }) => {
 	// fields render. <details> doesn't expose an ARIA role consistently,
 	// so target the <summary> text directly.
 	await page.locator('details.add-grant > summary').click();
-	await expect(page.getByRole('combobox', { name: 'Decision' })).toBeVisible();
-	await expect(page.getByRole('combobox', { name: 'Tool' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Decision', exact: true })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Tool', exact: true })).toBeVisible();
 	await expect(page.getByRole('textbox', { name: /argv0/ })).toBeVisible();
 
 	expect(errors, errors.join('\n')).toEqual([]);
@@ -59,7 +59,8 @@ test('creating a shell+workspace-paths grant adds a row to the list', async ({ p
 	await expect(row).toBeVisible();
 	await expect(row.locator('code.tool')).toHaveText('shell');
 
-	// Revoking via the existing button removes it.
+	// Revoking via the guarded button removes it after confirmation.
+	page.once('dialog', (dialog) => dialog.accept());
 	await row.getByRole('button', { name: 'Revoke' }).click();
 	await expect(row).toHaveCount(0);
 });
