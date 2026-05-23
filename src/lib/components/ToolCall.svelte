@@ -109,10 +109,15 @@
 			{/if}
 		{:else if toolCall.resultJson}
 			{#if gitDiffText}
-				<DiffView diff={gitDiffText} />
+				<DiffView diff={gitDiffText} collapsible />
 			{:else if renderedDiffs.length > 0}
 				{#each renderedDiffs as synthDiff, i (synthDiff.path + ':' + i)}
-					<DiffView path={synthDiff.path} diff={synthDiff.diff} showLineNumbers={false} />
+					<DiffView
+						path={synthDiff.path}
+						diff={synthDiff.diff}
+						showLineNumbers={false}
+						collapsible
+					/>
 				{/each}
 			{:else}
 				{#each decoded.blocks as block, i (i)}

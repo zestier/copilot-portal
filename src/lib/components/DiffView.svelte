@@ -5,64 +5,94 @@
 	let {
 		path = 'diff',
 		diff,
-		showLineNumbers = true
-	}: { path?: string; diff: string; showLineNumbers?: boolean } = $props();
+		showLineNumbers = true,
+		collapsible = false
+	}: { path?: string; diff: string; showLineNumbers?: boolean; collapsible?: boolean } = $props();
 
 	const chunks = $derived.by(() => {
 		const split = splitUnifiedDiffByFile(diff, path);
 		return split.length > 0 ? split : [{ path, diff }];
 	});
+	let collapsedFiles = $state<Record<string, boolean>>({});
 
 	function fmtNo(n: number | null): string {
 		return n == null ? '' : String(n);
+	}
+
+	function chunkKey(chunkPath: string, chunkIndex: number): string {
+		return `${chunkPath}:${chunkIndex}`;
+	}
+
+	function toggleCollapsed(key: string) {
+		collapsedFiles = { ...collapsedFiles, [key]: !collapsedFiles[key] };
 	}
 </script>
 
 <div class="diff-set">
 	{#each chunks as chunk, chunkIndex (chunk.path + ':' + chunkIndex)}
+		{@const key = chunkKey(chunk.path, chunkIndex)}
+		{@const collapsed = collapsible && collapsedFiles[key] === true}
 		{@const parsed = parseUnifiedDiff(chunk.diff)}
 		{@const stats = diffStats(parsed)}
 		{@const empty = parsed.length === 0 || parsed.every((l) => l.kind === 'meta')}
-		<div class="diff">
+		<div class="diff" class:collapsed>
 			<div class="path-bar">
+				{#if collapsible}
+					<button
+						type="button"
+						class="collapse-toggle"
+						aria-expanded={!collapsed}
+						aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${chunk.path}`}
+						onclick={() => toggleCollapsed(key)}
+					>
+						<span class="chevron" class:open={!collapsed} aria-hidden="true">▸</span>
+					</button>
+				{/if}
 				<code class="path">{chunk.path}</code>
 				<span class="stats">
 					<span class="added">+{stats.added}</span>
 					<span class="removed">−{stats.removed}</span>
 				</span>
 			</div>
-			{#if empty}
-				<div class="empty">No textual diff (file may be binary, empty, or unchanged).</div>
-			{:else}
-				<div class="lines" class:no-gutter={!showLineNumbers} role="table" aria-label="diff lines">
-					<div class="rows">
-						{#each parsed as l, i (i)}
-							{#if l.kind === 'hunk' && !showLineNumbers}
-								<!-- Suppress the @@ -L,N +L,N @@ header when we don't trust the
-								     line ranges (e.g. for diffs synthesized from edit args
-								     without full-file context). -->
-							{:else}
-								<div class={'line ' + l.kind} role="row">
-									{#if showLineNumbers}
-										<span class="gutter" role="cell" aria-label="line number"
-											>{fmtNo(l.newNo ?? l.oldNo)}</span
+			{#if !collapsed}
+				{#if empty}
+					<div class="empty">No textual diff (file may be binary, empty, or unchanged).</div>
+				{:else}
+					<div
+						class="lines"
+						class:no-gutter={!showLineNumbers}
+						role="table"
+						aria-label="diff lines"
+					>
+						<div class="rows">
+							{#each parsed as l, i (i)}
+								{#if l.kind === 'hunk' && !showLineNumbers}
+									<!-- Suppress the @@ -L,N +L,N @@ header when we don't trust the
+									     line ranges (e.g. for diffs synthesized from edit args
+									     without full-file context). -->
+								{:else}
+									<div class={'line ' + l.kind} role="row">
+										{#if showLineNumbers}
+											<span class="gutter" role="cell" aria-label="line number"
+												>{fmtNo(l.newNo ?? l.oldNo)}</span
+											>
+										{/if}
+										<span class="sign" aria-hidden="true"
+											>{l.kind === 'add'
+												? '+'
+												: l.kind === 'del'
+													? '-'
+													: l.kind === 'hunk'
+														? '@'
+														: ' '}</span
 										>
-									{/if}
-									<span class="sign" aria-hidden="true"
-										>{l.kind === 'add'
-											? '+'
-											: l.kind === 'del'
-												? '-'
-												: l.kind === 'hunk'
-													? '@'
-													: ' '}</span
-									>
-									<span class="text" role="cell">{l.text}</span>
-								</div>
-							{/if}
-						{/each}
+										<span class="text" role="cell">{l.text}</span>
+									</div>
+								{/if}
+							{/each}
+						</div>
 					</div>
-				</div>
+				{/if}
 			{/if}
 		</div>
 	{/each}
@@ -96,6 +126,33 @@
 		position: sticky;
 		top: 0;
 		z-index: 1;
+	}
+	.collapsed .path-bar {
+		border-bottom: 0;
+	}
+	.collapse-toggle {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.25rem;
+		height: 1.25rem;
+		padding: 0;
+		border: 0;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+		flex: none;
+	}
+	.collapse-toggle:hover {
+		background: var(--surface-hover);
+		color: var(--text);
+	}
+	.chevron {
+		transition: transform 0.12s ease;
+	}
+	.chevron.open {
+		transform: rotate(90deg);
 	}
 	.path {
 		font-family: var(--mono);
