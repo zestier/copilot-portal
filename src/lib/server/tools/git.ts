@@ -15,6 +15,7 @@ export interface PortalTool {
 	name: string;
 	description: string;
 	parameters: Record<string, unknown>;
+	permissionBehavior?: 'normal' | 'always-prompt';
 	handler(args: unknown): Promise<string>;
 }
 

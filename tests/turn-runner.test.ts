@@ -399,4 +399,61 @@ describe('turn-runner', () => {
 		expect(assistant?.fileEdits).toHaveLength(1);
 		expect(assistant?.fileEdits?.[0]).toMatchObject({ path: 'src/a.ts', diff: edit.diff });
 	});
+
+	it('persists manual rerun tool calls as separate attempts without overwriting the original', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'rerun',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		const originalMsg = messages.append(conv.id, { role: 'assistant', content: '' });
+		const args = { command: 'echo approved' };
+		messages.insertToolCall(originalMsg.id, {
+			id: 'tc-original',
+			tool: 'bash',
+			argsJson: JSON.stringify(args),
+			resultJson: JSON.stringify('Permission denied'),
+			status: 'denied',
+			startedAt: Date.now() - 100,
+			endedAt: Date.now() - 50,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+		acquireMock.mockResolvedValue(
+			makeFakeSession([
+				{ type: 'message.start', messageId: 'm1', role: 'assistant' },
+				{ type: 'tool.call', toolCallId: 'tc-rerun', tool: 'bash', args },
+				{ type: 'tool.result', toolCallId: 'tc-rerun', ok: true, summary: 'ok', output: 'ok' },
+				{ type: 'done' }
+			])
+		);
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt'
+			},
+			prompt: 'rerun',
+			conversationId: conv.id
+		});
+
+		for await (const { event } of turn.subscribe()) {
+			if (event.type === 'done') break;
+		}
+
+		const toolCalls = messages.listByConversation(conv.id).flatMap((m) => m.toolCalls ?? []);
+		expect(toolCalls.find((t) => t.id === 'tc-original')).toMatchObject({
+			status: 'denied'
+		});
+		expect(toolCalls.find((t) => t.id === 'tc-rerun')).toMatchObject({
+			status: 'ok'
+		});
+	});
 });

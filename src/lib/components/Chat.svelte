@@ -249,6 +249,12 @@
 		}
 	}
 
+	async function handleToolRerunStarted(turnId: string) {
+		streaming = true;
+		await refreshMessages();
+		if (!eventSource) attachStream(turnId);
+	}
+
 	function applyEvent(ev: PortalEvent) {
 		switch (ev.type) {
 			case 'message.start': {
@@ -594,6 +600,7 @@
 					conversationId={conversation.id}
 					forks={forksByMessage[m.id] ?? []}
 					onForked={refreshForks}
+					onToolRerunStarted={handleToolRerunStarted}
 				/>
 			{/each}
 			{#each pendingInteractive as p (p.requestId)}

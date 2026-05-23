@@ -105,6 +105,7 @@ interface GrantDbRow {
 	expires_at: number | null;
 	granted_at: number;
 	deny_reason: string | null;
+	args_hash: string | null;
 }
 
 function dbRowToGrant(r: GrantDbRow): GrantRow {
@@ -116,7 +117,8 @@ function dbRowToGrant(r: GrantDbRow): GrantRow {
 		decision: r.decision === 'deny' ? 'deny' : 'allow',
 		expiresAt: r.expires_at,
 		denyReason: r.deny_reason,
-		conversationId: r.conversation_id
+		conversationId: r.conversation_id,
+		argsHash: r.args_hash
 	};
 }
 
@@ -130,7 +132,7 @@ function loadCandidateGrants(userId: string, conversationId: string, tool: strin
 	const rows = getDb()
 		.prepare(
 			`SELECT user_id, conversation_id, tool, permission_kind, scope_pattern, scope_json,
-			        decision, expires_at, granted_at, deny_reason
+			        decision, expires_at, granted_at, deny_reason, args_hash
 			 FROM permission_grants
 			 WHERE user_id = ?
 			   AND (conversation_id = ? OR conversation_id IS NULL)
@@ -152,6 +154,8 @@ export interface MatchGrantContext {
 	workspaceRoot?: string | null;
 	/** SDK session workspace directory. */
 	sessionWorkspaceRoot?: string | null;
+	/** Canonical SHA-256 of the requested tool args. */
+	argsHash?: string | null;
 }
 
 /**
@@ -198,6 +202,7 @@ export function matchGrantDetailed(
 		url: ctx.url ?? null,
 		workspaceRoot: ctx.workspaceRoot ?? null,
 		sessionWorkspaceRoot: ctx.sessionWorkspaceRoot ?? null,
+		argsHash: ctx.argsHash ?? null,
 		now
 	});
 }
@@ -231,6 +236,8 @@ export interface AddGrantOptions {
 	/** Optional deny-feedback surfaced to the agent (only meaningful when
 	 * `decision === 'deny'`). */
 	denyReason?: string | null;
+	/** Optional exact-invocation constraint. When set, request args must hash to this value. */
+	argsHash?: string | null;
 }
 
 export function addGrant(opts: AddGrantOptions) {
@@ -238,8 +245,8 @@ export function addGrant(opts: AddGrantOptions) {
 		.prepare(
 			`INSERT INTO permission_grants(
 			   user_id, conversation_id, tool, permission_kind,
-			   scope_pattern, scope_json, decision, expires_at, granted_at, deny_reason
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			   scope_pattern, scope_json, decision, expires_at, granted_at, deny_reason, args_hash
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			opts.userId,
@@ -251,7 +258,8 @@ export function addGrant(opts: AddGrantOptions) {
 			opts.decision ?? 'allow',
 			opts.expiresAt ?? null,
 			Date.now(),
-			opts.denyReason ?? null
+			opts.denyReason ?? null,
+			opts.argsHash ?? null
 		);
 }
 
@@ -304,6 +312,7 @@ export interface GrantSummary {
 	expiresAt: number | null;
 	grantedAt: number;
 	denyReason: string | null;
+	argsHash: string | null;
 }
 
 /**
@@ -320,7 +329,7 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		.prepare(
 			`SELECT pg.rowid AS id, pg.conversation_id, c.title AS conversation_title,
 			        pg.tool, pg.permission_kind, pg.scope_pattern, pg.scope_json, pg.decision,
-			        pg.expires_at, pg.granted_at, pg.deny_reason
+			        pg.expires_at, pg.granted_at, pg.deny_reason, pg.args_hash
 			 FROM permission_grants pg
 			 LEFT JOIN conversations c ON c.id = pg.conversation_id
 			 WHERE pg.user_id = ?
@@ -338,6 +347,7 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		expires_at: number | null;
 		granted_at: number;
 		deny_reason: string | null;
+		args_hash: string | null;
 	}>;
 	return rows.map((r) => ({
 		id: r.id,
@@ -350,7 +360,8 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		decision: r.decision === 'deny' ? 'deny' : 'allow',
 		expiresAt: r.expires_at,
 		grantedAt: r.granted_at,
-		denyReason: r.deny_reason
+		denyReason: r.deny_reason,
+		argsHash: r.args_hash
 	}));
 }
 

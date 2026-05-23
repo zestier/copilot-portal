@@ -12,12 +12,14 @@
 		message,
 		conversationId,
 		forks = [],
-		onForked
+		onForked,
+		onToolRerunStarted
 	}: {
 		message: Message;
 		conversationId?: string;
 		forks?: Array<{ id: string; title: string; archivedAt: number | null }>;
 		onForked?: () => void;
+		onToolRerunStarted?: (turnId: string) => void;
 	} = $props();
 
 	let editing = $state(false);
@@ -366,7 +368,7 @@
 							childEdits={(message.fileEdits ?? []).filter((e) => e.parentToolCallId === p.tool.id)}
 						/>
 					{:else}
-						<ToolCall toolCall={p.tool} />
+						<ToolCall toolCall={p.tool} {conversationId} onRerunStarted={onToolRerunStarted} />
 					{/if}
 				{:else if p.kind === 'reasoning'}
 					<ReasoningBlock

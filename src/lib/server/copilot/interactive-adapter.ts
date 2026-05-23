@@ -22,6 +22,7 @@ import {
 } from '../permissions/shell-parser';
 import { log } from '../log';
 import * as messagesRepo from '../db/repos/messages';
+import { argsHash } from '../tool-invocation';
 
 interface PermissionRequestLike {
 	kind?: string;
@@ -46,6 +47,7 @@ interface InteractiveAdapterOptions {
 	getApproveAll(): boolean;
 	getMode(): SessionMode;
 	getSessionWorkspacePath(): string | null;
+	getPermissionBehavior(tool: string): 'normal' | 'always-prompt';
 }
 
 export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
@@ -74,8 +76,8 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 		const permissionKind = req.kind ?? 'unknown';
 		const summary = summarizePermissionRequest(req, tool);
 		const scopeKey = deriveScopeKey(permissionKind, req);
-		const isModeSwitchToolRequest =
-			permissionKind === 'custom-tool' && req.toolName === 'request_mode_switch';
+		const hash = hashPermissionArgs(req);
+		const alwaysPrompt = opts.getPermissionBehavior(tool) === 'always-prompt';
 
 		const audit = (decision: 'auto-allow' | 'auto-deny') => {
 			try {
@@ -111,11 +113,30 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			}
 		}
 
-		if (opts.getApproveAll()) {
+		if (!alwaysPrompt && opts.getApproveAll()) {
 			audit('auto-allow');
 			return { kind: 'approve-once' } as const;
 		}
-
+		if (alwaysPrompt) {
+			const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
+				'permission',
+				{
+					kind: 'permission',
+					tool,
+					permissionKind,
+					summary,
+					args: req.args ?? null,
+					userPolicy: opts.policy,
+					canPersistDecision: false,
+					shellAnalysis
+				}
+			);
+			if (response.decision === 'deny' || response.decision === 'deny-always') {
+				return { kind: 'reject' } as const;
+			}
+			audit('auto-allow');
+			return { kind: 'approve-once' } as const;
+		}
 		const target =
 			permissionKind === 'read' || permissionKind === 'write' || permissionKind === 'edit'
 				? scopeKey
@@ -133,7 +154,8 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				target,
 				url,
 				workspaceRoot: opts.workingDirectory ?? null,
-				sessionWorkspaceRoot: opts.getSessionWorkspacePath()
+				sessionWorkspaceRoot: opts.getSessionWorkspacePath(),
+				argsHash: hash
 			}
 		);
 		if (grant.outcome === 'allow') {
@@ -185,17 +207,18 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			audit('auto-deny');
 			return { kind: 'reject' } as const;
 		}
-		if (opts.getMode() === 'best-effort' && !isModeSwitchToolRequest) {
+		if (opts.getMode() === 'best-effort') {
 			audit('auto-deny');
+			const feedback = bestEffortPermissionFeedback({
+				tool,
+				permissionKind,
+				summary,
+				args: req.args ?? null,
+				shellAnalysis
+			});
 			return {
 				kind: 'reject',
-				feedback: bestEffortPermissionFeedback({
-					tool,
-					permissionKind,
-					summary,
-					args: req.args ?? null,
-					shellAnalysis
-				})
+				feedback
 			} as const;
 		}
 
@@ -208,12 +231,13 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				summary,
 				args: req.args ?? null,
 				userPolicy: opts.policy,
-				canPersistDecision: !isModeSwitchToolRequest,
+				canPersistDecision: true,
 				shellAnalysis
 			}
 		);
-		if (response.decision === 'deny' || response.decision === 'deny-always')
+		if (response.decision === 'deny' || response.decision === 'deny-always') {
 			return { kind: 'reject' } as const;
+		}
 		return { kind: 'approve-once' } as const;
 	};
 
@@ -300,6 +324,15 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 		onExitPlanMode,
 		onAutoModeSwitch
 	};
+}
+
+function hashPermissionArgs(req: PermissionRequestLike): string | null {
+	if (typeof req.toolCallId === 'string') {
+		const args = messagesRepo.getToolCallArgs(req.toolCallId);
+		if (args !== null) return argsHash(args);
+	}
+	if (req.args !== undefined) return argsHash(req.args);
+	return null;
 }
 
 function readForcePermissionPrompt(req: PermissionRequestLike): string | null {

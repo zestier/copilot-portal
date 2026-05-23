@@ -195,7 +195,10 @@ export function updateContentOnly(id: string, content: string) {
 export function insertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messageId'>) {
 	getDb()
 		.prepare(
-			`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at, text_offset, parent_tool_call_id)
+			`INSERT INTO tool_calls(
+			   id, message_id, tool, args_json, result_json, status, started_at, ended_at,
+			   text_offset, parent_tool_call_id
+			 )
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
@@ -215,7 +218,10 @@ export function insertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messa
 export function upsertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messageId'>) {
 	getDb()
 		.prepare(
-			`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at, text_offset, parent_tool_call_id)
+			`INSERT INTO tool_calls(
+			   id, message_id, tool, args_json, result_json, status, started_at, ended_at,
+			   text_offset, parent_tool_call_id
+			 )
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(id) DO UPDATE SET
 			   message_id = excluded.message_id,
@@ -277,6 +283,49 @@ export function updateToolCall(
 	getDb()
 		.prepare(`UPDATE tool_calls SET ${fields.join(', ')} WHERE id = ?`)
 		.run(...values);
+}
+
+export interface ToolCallWithConversation extends ToolCallRecord {
+	conversationId: string;
+	conversationUserId: string;
+	messageRole: Role;
+}
+
+export function getToolCallForConversation(
+	conversationId: string,
+	toolCallId: string
+): ToolCallWithConversation | null {
+	const row = getDb()
+		.prepare(
+			`SELECT tc.*, m.conversation_id, m.role AS message_role, c.user_id AS conversation_user_id
+			   FROM tool_calls tc
+			   JOIN messages m ON m.id = tc.message_id
+			   JOIN conversations c ON c.id = m.conversation_id
+			  WHERE tc.id = ? AND m.conversation_id = ?`
+		)
+		.get(toolCallId, conversationId) as
+		| (ToolRow & {
+				conversation_id: string;
+				conversation_user_id: string;
+				message_role: string;
+		  })
+		| undefined;
+	if (!row) return null;
+	return {
+		id: row.id,
+		messageId: row.message_id,
+		tool: row.tool,
+		argsJson: row.args_json,
+		resultJson: row.result_json,
+		status: row.status as ToolCallRecord['status'],
+		startedAt: row.started_at,
+		endedAt: row.ended_at,
+		textOffset: row.text_offset,
+		parentToolCallId: row.parent_tool_call_id,
+		conversationId: row.conversation_id,
+		conversationUserId: row.conversation_user_id,
+		messageRole: row.message_role as Role
+	};
 }
 
 export function insertFileEdit(

@@ -382,6 +382,65 @@ describe('bridge.open() session mode and permissions', () => {
 		);
 	});
 
+	it('matches manual shell rerun approvals against the persisted tool args', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const convs = await import('../src/lib/server/db/repos/conversations');
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const { argsHash } = await import('../src/lib/server/tool-invocation');
+		const user = ensureLocalUser();
+		convs.create(user.id, {
+			id: baseOpts.conversationId,
+			title: 'rerun',
+			workdir: baseOpts.workingDirectory,
+			model: baseOpts.model
+		});
+		const msg = messages.append(baseOpts.conversationId, { role: 'assistant', content: '' });
+		const args = {
+			command: 'node -e "process.exit(7)"',
+			description: 'Trigger harmless nonzero failure',
+			mode: 'sync',
+			initial_wait: 30
+		};
+		messages.insertToolCall(msg.id, {
+			id: 'tc-rerun-shell',
+			tool: 'bash',
+			argsJson: JSON.stringify(args),
+			resultJson: null,
+			status: 'pending',
+			startedAt: Date.now(),
+			endedAt: null,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+		settings.addGrant({
+			userId: user.id,
+			conversationId: baseOpts.conversationId,
+			tool: 'shell',
+			permissionKind: null,
+			scopePattern: null,
+			scope: null,
+			decision: 'allow',
+			argsHash: argsHash(args),
+			expiresAt: Date.now() + 60_000
+		});
+		await open({ ...baseOpts, userId: user.id });
+
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const result = await onPermissionRequest({
+			kind: 'shell',
+			toolName: 'shell',
+			toolCallId: 'tc-rerun-shell',
+			fullCommandText: 'node -e "process.exit(7)"',
+			args: { command: 'node -e "process.exit(7)"' }
+		});
+
+		expect(result).toEqual({ kind: 'approve-once' });
+	});
+
 	it('raises a one-time prompt for shell git escalation even in best-effort mode', async () => {
 		const { open } = await importBridge();
 		const interactive = await import('../src/lib/server/copilot/interactive-requests');
@@ -545,6 +604,42 @@ describe('bridge.open() session mode and permissions', () => {
 		const { open } = await importBridge();
 		const interactive = await import('../src/lib/server/copilot/interactive-requests');
 		const session = await open({ ...baseOpts, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'custom-tool',
+				toolName: 'request_mode_switch',
+				toolDescription:
+					'Request switching this conversation to interactive mode when blocked by permissions.',
+				args: { mode: 'interactive', reason: 'Need extra permission to continue.' }
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'request_mode_switch',
+				permissionKind: 'custom-tool',
+				canPersistDecision: false
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('always prompts request_mode_switch even when approve-all is enabled', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const session = await open({ ...baseOpts, approveAllTools: true });
 		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
 			req: unknown
 		) => Promise<unknown>;

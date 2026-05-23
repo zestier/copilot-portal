@@ -37,6 +37,7 @@ export interface GrantRow {
 	scope: GrantScope | null;
 	decision: GrantDecision;
 	expiresAt: number | null;
+	argsHash: string | null;
 	/** Optional feedback for deny grants — surfaced to the agent via the
 	 * SDK's `PermissionDecisionReject.feedback` field. Ignored on allow
 	 * rows. NULL means no custom feedback. */
@@ -68,6 +69,8 @@ export interface MatchQuery {
 	sessionWorkspaceRoot?: string | null;
 	/** Unix ms. Grants with `expiresAt < now` are ignored. */
 	now: number;
+	/** Canonical SHA-256 of the requested tool args. */
+	argsHash?: string | null;
 }
 
 /**
@@ -102,6 +105,8 @@ export function matchGrants(rows: GrantRow[], q: MatchQuery): MatchOutcome {
  * — we just pick a reason to surface).
  */
 export function matchGrantsDetailed(rows: GrantRow[], q: MatchQuery): DetailedMatchOutcome {
+	const exactArgsAllow = matchExactArgsAllow(rows, q);
+	if (exactArgsAllow) return { outcome: 'allow', denyReason: null };
 	if (q.permissionKind === 'shell' && q.shellSegments && q.shellSegments.length > 0) {
 		return matchShellSegments(rows, q, q.shellSegments);
 	}
@@ -113,6 +118,18 @@ export function matchGrantsDetailed(rows: GrantRow[], q: MatchQuery): DetailedMa
 		sawAllow = true;
 	}
 	return { outcome: sawAllow ? 'allow' : 'none', denyReason: null };
+}
+
+function matchExactArgsAllow(rows: GrantRow[], q: MatchQuery): boolean {
+	if (!q.argsHash) return false;
+	for (const r of rows) {
+		if (r.decision !== 'allow') continue;
+		if (!r.argsHash) continue;
+		if (!grantApplies(r, q)) continue;
+		if (!rowScopeMatches(r, q)) continue;
+		return true;
+	}
+	return false;
 }
 
 function matchShellSegments(
@@ -157,6 +174,7 @@ function grantApplies(r: GrantRow, q: MatchQuery): boolean {
 	if (r.expiresAt !== null && r.expiresAt < q.now) return false;
 	if (!toolMatches(r.tool, q.tool)) return false;
 	if (!kindMatches(r.permissionKind, q.permissionKind)) return false;
+	if (r.argsHash && r.argsHash !== q.argsHash) return false;
 	return true;
 }
 

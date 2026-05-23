@@ -163,6 +163,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	let approveAllTools = opts.approveAllTools === true;
 	let currentMode: SessionMode = opts.mode ?? 'interactive';
 	let sessionWorkspacePath: string | null = null;
+	const toolPermissionBehavior = new Map<string, 'normal' | 'always-prompt'>();
 
 	const eventAdapter = new SdkEventAdapter({
 		conversationId: opts.conversationId,
@@ -189,7 +190,8 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		emit,
 		getApproveAll: () => approveAllTools,
 		getMode: () => currentMode,
-		getSessionWorkspacePath: () => sessionWorkspacePath
+		getSessionWorkspacePath: () => sessionWorkspacePath,
+		getPermissionBehavior: (tool) => toolPermissionBehavior.get(tool) ?? 'normal'
 	});
 
 	let existingMetadata: unknown;
@@ -215,6 +217,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			}),
 			{
 				name: 'request_mode_switch',
+				permissionBehavior: 'always-prompt',
 				description:
 					'Request switching this conversation to interactive mode when you are blocked in best-effort mode because a needed permission keeps being denied. Use only after trying reasonable alternatives.',
 				parameters: {
@@ -267,6 +270,11 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		onExitPlanMode,
 		onAutoModeSwitch
 	};
+	for (const tool of sessionConfig.tools) {
+		if (tool.permissionBehavior === 'always-prompt' || tool.permissionBehavior === 'normal') {
+			toolPermissionBehavior.set(tool.name, tool.permissionBehavior);
+		}
+	}
 
 	let sdkSession: SdkSession;
 	if (existingMetadata) {

@@ -7,7 +7,17 @@
 	import { summarizeToolCall } from '$lib/client/tool-summary';
 	import { decodeToolResult, shouldRenderToolResultAsMarkdown } from '$lib/client/tool-result';
 
-	let { toolCall }: { toolCall: ToolCallRecord } = $props();
+	let {
+		toolCall,
+		conversationId,
+		onRerunStarted
+	}: {
+		toolCall: ToolCallRecord;
+		conversationId?: string;
+		onRerunStarted?: (turnId: string) => void;
+	} = $props();
+	let rerunning = $state(false);
+	let rerunError = $state<string | null>(null);
 
 	// Default-closed; users opt in to seeing args + result by clicking.
 	// We don't auto-expand while pending: the summary header already
@@ -35,7 +45,7 @@
 			case 'error':
 				return '✗';
 			case 'denied':
-				return '⛔';
+				return '✗';
 			default:
 				return '⏳';
 		}
@@ -52,6 +62,15 @@
 	const renderedDiffs = $derived(toolCall.status === 'ok' ? synthesizeDiffs(toolCall) : []);
 	const gitDiffText = $derived(
 		toolCall.status === 'ok' && toolCall.tool === 'git_diff' ? decoded.fallbackText : null
+	);
+	const rerunDisabledReason = $derived.by(() => {
+		if (toolCall.status !== 'denied' && toolCall.status !== 'error') return null;
+		if (!conversationId) return 'Conversation context is unavailable.';
+		if (toolCall.parentToolCallId) return 'Nested sub-agent tool calls cannot be rerun yet.';
+		return null;
+	});
+	const canRerun = $derived(
+		(toolCall.status === 'denied' || toolCall.status === 'error') && rerunDisabledReason === null
 	);
 	// For shell-style tools, surface the actual command so a viewer
 	// doesn't have to expand "Arguments" to see what ran. We thread it
@@ -71,6 +90,52 @@
 		}
 		return null;
 	});
+
+	function requiresSideEffectConfirmation() {
+		return toolCall.tool !== 'view' && toolCall.tool !== 'git_show_file';
+	}
+
+	async function rerunWithApproval() {
+		if (!conversationId || rerunning || !canRerun) return;
+		rerunError = null;
+		const sideEffect = requiresSideEffectConfirmation();
+		const ok = window.confirm(
+			[
+				'Rerun this exact failed tool call with a short-lived approval?',
+				'',
+				`Tool: ${toolCall.tool}`,
+				sideEffect
+					? 'Risk: this tool may have side effects if repeated.'
+					: 'Risk: read-only rerun.',
+				'',
+				'Arguments:',
+				toolCall.argsJson
+			].join('\n')
+		);
+		if (!ok) return;
+		rerunning = true;
+		try {
+			const r = await fetch(
+				`/api/conversations/${conversationId}/tool-calls/${toolCall.id}/rerun`,
+				{
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ confirmed: sideEffect })
+				}
+			);
+			if (!r.ok) {
+				const body = await r.text();
+				rerunError = body || `Rerun failed (${r.status})`;
+				return;
+			}
+			const data = (await r.json()) as { turnId: string };
+			onRerunStarted?.(data.turnId);
+		} catch (e) {
+			rerunError = e instanceof Error ? e.message : String(e);
+		} finally {
+			rerunning = false;
+		}
+	}
 </script>
 
 <details class="tool" class:open class:is-pending={pending} {open} ontoggle={onToggle}>
@@ -91,6 +156,26 @@
 			<summary class="disclosure">Arguments</summary>
 			<pre><code>{toolCall.argsJson}</code></pre>
 		</details>
+
+		{#if toolCall.status === 'denied' || toolCall.status === 'error'}
+			<div class="rerun">
+				<button
+					type="button"
+					class="rerun-btn"
+					onclick={rerunWithApproval}
+					disabled={!canRerun || rerunning}
+					title={rerunDisabledReason ?? 'Review exact args, grant short-lived approval, and rerun'}
+				>
+					{rerunning ? 'Rerunning…' : 'Rerun with approval'}
+				</button>
+				{#if rerunDisabledReason}
+					<span class="muted small">{rerunDisabledReason}</span>
+				{/if}
+				{#if rerunError}
+					<span class="error small">{rerunError}</span>
+				{/if}
+			</div>
+		{/if}
 
 		{#if pending}
 			{#if shellCommand || toolCall.partialOutput}
@@ -195,6 +280,29 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
+	}
+	.rerun {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.rerun-btn {
+		font: inherit;
+		font-size: var(--fs-sm);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--surface);
+		color: var(--text);
+		padding: 0.25rem 0.5rem;
+		cursor: pointer;
+	}
+	.rerun-btn:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+	.error {
+		color: var(--danger, #ff6b6b);
 	}
 	.disclosure {
 		cursor: pointer;

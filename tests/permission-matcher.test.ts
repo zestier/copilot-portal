@@ -19,6 +19,7 @@ function grant(partial: Partial<GrantRow> = {}): GrantRow {
 		scope: null,
 		decision: 'allow',
 		expiresAt: null,
+		argsHash: null,
 		denyReason: null,
 		conversationId: null,
 		...partial
@@ -76,6 +77,36 @@ describe('matchGrants precedence', () => {
 		const rows = [grant({ decision: 'allow' }), grant({ decision: 'deny', scopePattern: 'rm *' })];
 		expect(
 			matchGrants(rows, { tool: 'shell', permissionKind: 'shell', scopeKey: 'rm -rf /', now: NOW })
+		).toBe('deny');
+	});
+
+	it('exact-args short-lived allow grants override broader denies', () => {
+		const rows = [
+			grant({ decision: 'deny', scopePattern: 'cat *' }),
+			grant({
+				decision: 'allow',
+				scopePattern: null,
+				argsHash: 'rerun-hash',
+				expiresAt: NOW + 60_000
+			})
+		];
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'cat package.json',
+				argsHash: 'rerun-hash',
+				now: NOW
+			})
+		).toBe('allow');
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'cat package.json',
+				argsHash: 'other-hash',
+				now: NOW
+			})
 		).toBe('deny');
 	});
 
