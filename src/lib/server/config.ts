@@ -69,10 +69,16 @@ const Schema = z
 	})
 	.superRefine((cfg, ctx) => {
 		if (cfg.AUTH_MODE === 'none') {
-			if (!cfg.I_KNOW_THIS_IS_LOCAL || cfg.HOST !== '127.0.0.1') {
+			// 127.0.0.1: loopback-only, the safe default.
+			// 0.0.0.0: every interface — only acceptable when the operator
+			// has fenced the listener off some other way (container with no
+			// published port, private network, authenticating reverse proxy).
+			// Still gated on the explicit I_KNOW_THIS_IS_LOCAL opt-in.
+			const allowedHosts = new Set(['127.0.0.1', '0.0.0.0']);
+			if (!cfg.I_KNOW_THIS_IS_LOCAL || !allowedHosts.has(cfg.HOST)) {
 				ctx.addIssue({
 					code: z.ZodIssueCode.custom,
-					message: 'AUTH_MODE=none requires HOST=127.0.0.1 and I_KNOW_THIS_IS_LOCAL=1.'
+					message: 'AUTH_MODE=none requires HOST=127.0.0.1 (or 0.0.0.0) and I_KNOW_THIS_IS_LOCAL=1.'
 				});
 			}
 		} else {

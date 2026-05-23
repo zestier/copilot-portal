@@ -1,0 +1,283 @@
+// Pure helpers for the permission-grant matcher. SQL lives in the
+// settings repo; this module only knows about pattern shapes and
+// precedence rules so it can be exercised by unit tests without a DB.
+//
+// Two grant shapes coexist:
+//   * Legacy (`scopePattern`)   — substring glob over the derived scope-key.
+//   * Structured (`scope`)      — typed predicate per permission kind
+//                                 (shell argv, fs containment, url host).
+// When both are present on a row, structured wins; we never glob over a
+// row that has a typed shape.
+
+export { deriveScopeKey } from '../../permissions/scope-key';
+
+import type { GrantScope } from '../../permissions/scope-types';
+import type { ParsedSegment } from './shell-parser';
+import { shellRuleMatches, shellRuleMatchesSegment } from './predicates/shell';
+import { fsScopeMatches } from './predicates/fs';
+import { urlScopeMatches } from './predicates/url';
+
+export type GrantDecision = 'allow' | 'deny';
+export type MatchOutcome = 'allow' | 'deny' | 'none';
+
+export interface DetailedMatchOutcome {
+	outcome: MatchOutcome;
+	/** When `outcome === 'deny'`, the matched grant's `denyReason`
+	 * (if any). Otherwise null. Used by the bridge to populate
+	 * `feedback` on the SDK's `{kind:'reject'}` response. */
+	denyReason: string | null;
+}
+
+export interface GrantRow {
+	tool: string;
+	permissionKind: string | null;
+	scopePattern: string | null;
+	/** Structured grant. When set, the legacy `scopePattern` is ignored
+	 * for this row. NULL on legacy rows. */
+	scope: GrantScope | null;
+	decision: GrantDecision;
+	expiresAt: number | null;
+	argsHash: string | null;
+	/** Optional feedback for deny grants — surfaced to the agent via the
+	 * SDK's `PermissionDecisionReject.feedback` field. Ignored on allow
+	 * rows. NULL means no custom feedback. */
+	denyReason: string | null;
+	/**
+	 * NULL = user-global grant. Used by callers that mix conversation-scoped
+	 * and user-global rows; matchGrants does not itself filter on this.
+	 */
+	conversationId: string | null;
+}
+
+export interface MatchQuery {
+	tool: string;
+	permissionKind: string;
+	/** Legacy scope-key (string). NULL when the caller couldn't derive
+	 * one; only wildcard legacy grants will match. */
+	scopeKey: string | null;
+	/** Parsed shell command for structured shell grants. Omitted for
+	 * non-shell requests or when the parser rejected the command. */
+	shellSegments?: ParsedSegment[] | null;
+	/** Target path for fs requests (`read` / `write` / `edit`). */
+	target?: string | null;
+	/** Target URL for `url` requests. */
+	url?: string | null;
+	/** Conversation's working directory, used by structured predicates
+	 * that constrain to the workspace. */
+	workspaceRoot?: string | null;
+	/** SDK session workspace directory, used by session-workspace predicates. */
+	sessionWorkspaceRoot?: string | null;
+	/** Unix ms. Grants with `expiresAt < now` are ignored. */
+	now: number;
+	/** Canonical SHA-256 of the requested tool args. */
+	argsHash?: string | null;
+}
+
+/**
+ * Decide allow / deny / none against an in-memory list of candidate
+ * grants. Precedence:
+ *
+ *   1. Any matching `deny` grant wins.
+ *   2. Otherwise any matching `allow` grant wins.
+ *   3. Otherwise `none` — caller falls back to policy.
+ *
+ * "Match" means tool matches (exact or wildcard `*`), permission_kind
+ * matches (exact, NULL = any, or `*`), and the scope pattern matches
+ * the supplied scopeKey (NULL pattern = any, glob with `*` otherwise).
+ * Expired grants are skipped.
+ *
+ * For shell requests with multiple parsed segments (e.g. `cd ./src &&
+ * git diff`), each segment is evaluated independently against the grant
+ * set: the request is allowed only if every segment has at least one
+ * matching allow grant, and is denied if any segment is denied. This
+ * lets a `cd` grant cover the prefix while a `git` grant covers the
+ * tail without requiring a single rule that knows about both.
+ */
+export function matchGrants(rows: GrantRow[], q: MatchQuery): MatchOutcome {
+	return matchGrantsDetailed(rows, q).outcome;
+}
+
+/**
+ * Like `matchGrants`, but additionally returns the matched deny grant's
+ * `denyReason` (when one fired). For `allow` / `none` outcomes, the
+ * reason is always null. When multiple deny grants would match, the
+ * first one with a non-null reason wins (deny precedence is unchanged
+ * — we just pick a reason to surface).
+ */
+export function matchGrantsDetailed(rows: GrantRow[], q: MatchQuery): DetailedMatchOutcome {
+	const exactArgsAllow = matchExactArgsAllow(rows, q);
+	if (exactArgsAllow) return { outcome: 'allow', denyReason: null };
+	if (q.permissionKind === 'shell' && q.shellSegments && q.shellSegments.length > 0) {
+		return matchShellSegments(rows, q, q.shellSegments);
+	}
+	let sawAllow = false;
+	for (const r of rows) {
+		if (!grantApplies(r, q)) continue;
+		if (!rowScopeMatches(r, q)) continue;
+		if (r.decision === 'deny') return { outcome: 'deny', denyReason: r.denyReason };
+		sawAllow = true;
+	}
+	return { outcome: sawAllow ? 'allow' : 'none', denyReason: null };
+}
+
+function matchExactArgsAllow(rows: GrantRow[], q: MatchQuery): boolean {
+	if (!q.argsHash) return false;
+	for (const r of rows) {
+		if (r.decision !== 'allow') continue;
+		if (!r.argsHash) continue;
+		if (!grantApplies(r, q)) continue;
+		if (!rowScopeMatches(r, q)) continue;
+		return true;
+	}
+	return false;
+}
+
+function matchShellSegments(
+	rows: GrantRow[],
+	q: MatchQuery,
+	segments: ParsedSegment[]
+): DetailedMatchOutcome {
+	let allAllowed = true;
+	for (let i = 0; i < segments.length; i++) {
+		const seg = segments[i];
+		const inPipeline = segmentInPipeline(segments, i);
+		const ctx = {
+			workspaceRoot: q.workspaceRoot ?? null,
+			sessionWorkspaceRoot: q.sessionWorkspaceRoot ?? null,
+			inPipeline
+		};
+		let segAllow = false;
+		for (const r of rows) {
+			if (!grantApplies(r, q)) continue;
+			if (!rowMatchesShellSegment(r, seg, q, ctx)) continue;
+			if (r.decision === 'deny') return { outcome: 'deny', denyReason: r.denyReason };
+			segAllow = true;
+		}
+		if (!segAllow) allAllowed = false;
+	}
+	return { outcome: allAllowed ? 'allow' : 'none', denyReason: null };
+}
+
+/**
+ * A segment is "in a pipeline" iff it's connected to a neighbor by `|`
+ * — either it's followed by `|`, or the previous segment was followed
+ * by `|`. Used by the structured shell predicate to enforce
+ * `pipeline: 'must' | 'forbid'` on a ShellRule.
+ */
+function segmentInPipeline(segments: ParsedSegment[], i: number): boolean {
+	if (segments[i].followingOp === '|') return true;
+	if (i > 0 && segments[i - 1].followingOp === '|') return true;
+	return false;
+}
+
+function grantApplies(r: GrantRow, q: MatchQuery): boolean {
+	if (r.expiresAt !== null && r.expiresAt < q.now) return false;
+	if (!toolMatches(r.tool, q.tool)) return false;
+	if (!kindMatches(r.permissionKind, q.permissionKind)) return false;
+	if (r.argsHash && r.argsHash !== q.argsHash) return false;
+	return true;
+}
+
+function rowMatchesShellSegment(
+	r: GrantRow,
+	seg: ParsedSegment,
+	q: MatchQuery,
+	ctx: { workspaceRoot: string | null; sessionWorkspaceRoot: string | null; inPipeline: boolean }
+): boolean {
+	if (r.scope) {
+		switch (r.scope.kind) {
+			case 'any':
+				return true;
+			case 'shell':
+				return shellRuleMatchesSegment(r.scope.rule, seg, ctx);
+			default:
+				return false;
+		}
+	}
+	return scopeMatches(r.scopePattern, q.scopeKey);
+}
+
+function rowScopeMatches(r: GrantRow, q: MatchQuery): boolean {
+	if (r.scope) return structuredScopeMatches(r.scope, q);
+	return scopeMatches(r.scopePattern, q.scopeKey);
+}
+
+function structuredScopeMatches(scope: GrantScope, q: MatchQuery): boolean {
+	switch (scope.kind) {
+		case 'any':
+			return true;
+		case 'shell':
+			if (q.permissionKind !== 'shell') return false;
+			if (!q.shellSegments) return false;
+			return shellRuleMatches(scope.rule, q.shellSegments, {
+				workspaceRoot: q.workspaceRoot ?? null,
+				sessionWorkspaceRoot: q.sessionWorkspaceRoot ?? null
+			});
+		case 'fs': {
+			const kind = q.permissionKind;
+			if (kind !== 'read' && kind !== 'write' && kind !== 'edit') return false;
+			if (!q.target) return false;
+			return fsScopeMatches(scope, {
+				permissionKind: kind,
+				target: q.target,
+				workspaceRoot: q.workspaceRoot ?? null,
+				sessionWorkspaceRoot: q.sessionWorkspaceRoot ?? null
+			});
+		}
+		case 'url':
+			if (q.permissionKind !== 'url') return false;
+			if (!q.url) return false;
+			return urlScopeMatches(scope, { url: q.url });
+	}
+}
+
+function toolMatches(grant: string, want: string): boolean {
+	return grant === '*' || grant === want;
+}
+
+function kindMatches(grant: string | null, want: string): boolean {
+	if (grant === null || grant === '*') return true;
+	return grant === want;
+}
+
+function scopeMatches(pattern: string | null, scopeKey: string | null): boolean {
+	if (pattern === null || pattern === '' || pattern === '*') return true;
+	if (scopeKey === null) return false;
+	return globToRegex(pattern).test(scopeKey);
+}
+
+const GLOB_CACHE = new Map<string, RegExp>();
+
+/**
+ * Tiny glob → RegExp. `*` matches any run of characters (including
+ * empty, including `/`); everything else is a literal. We deliberately
+ * keep it minimal — the scope vocabulary is shell commands, file paths,
+ * and URLs, and users want simple "starts with" patterns like
+ * `git status*`, `./src/*`, `https://api.github.com/*`. A richer
+ * minimatch-style grammar can come later if there's demand.
+ */
+export function globToRegex(pattern: string): RegExp {
+	const cached = GLOB_CACHE.get(pattern);
+	if (cached) return cached;
+	let re = '^';
+	for (const ch of pattern) {
+		if (ch === '*') re += '.*';
+		else re += ch.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+	}
+	re += '$';
+	const r = new RegExp(re);
+	GLOB_CACHE.set(pattern, r);
+	return r;
+}
+
+/**
+ * Derive a scope key from the SDK's permission-request payload. Returns
+ * null if no meaningful scope can be extracted; the matcher will then
+ * only fire for wildcard-pattern grants.
+ *
+ * @deprecated Re-exported from `$lib/permissions/scope-key` so the dialog
+ * can use the same logic without pulling in server-only modules. Server
+ * code may import this name; new client code should import from
+ * `$lib/permissions/scope-key`.
+ */
+export {};

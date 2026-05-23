@@ -6,16 +6,40 @@ accordingly: it is **never** safe to expose unauthenticated.
 
 ## Threat model
 
-| Actor                     | Capability we must prevent                                   |
-|---------------------------|--------------------------------------------------------------|
-| Random internet stranger  | Any access (no anonymous reads, no chat).                    |
-| Someone with the URL      | Same — URL knowledge is not auth.                            |
-| Logged-in user (you)      | Bounded by Copilot CLI's own sandboxing + permission prompts.|
+| Actor                     | Capability we must prevent                                      |
+| ------------------------- | ---------------------------------------------------------------- |
+| Random internet stranger  | Any access (no anonymous reads, no chat).                       |
+| Someone with the URL      | Same — URL knowledge is not auth.                               |
+| Logged-in user (you)      | Accidental action; not host compromise by an already-trusted user. |
 | Malicious tool output     | Cannot inject HTML/script into the chat UI (sanitize all assistant markdown). |
-| XSS on `vscode.dev`-style | Mitigated by strict CSP and no inline scripts in dev/prod.   |
+| XSS on `vscode.dev`-style | Mitigated by strict CSP and no inline scripts in dev/prod.      |
 
-We are not trying to defend the *host machine* from a logged-in user — that's
-out of scope; this is single-tenant.
+## Trust model
+
+Copilot Portal is a self-hosted control surface for a trusted operator, not a
+multi-tenant sandbox. Anyone who can use a conversation can ask an agent to read
+and edit the configured workdir, request shell commands, mutate git state, start
+long-running processes, and trigger whatever external side effects the host
+allows. Permission prompts are an operator-confirmation UX and audit trail; they
+are not a security boundary between mutually distrusting portal users.
+
+The intended boundary is therefore **outside the portal**:
+
+- Bind locally, or put the app behind an authenticating proxy/tunnel such as
+  Cloudflare Access.
+- Only allow identities that you would also trust with a terminal on the host
+  and the selected `PROJECT_ROOT`.
+- Treat features such as redeploy, global permission grants, arbitrary workdir
+  selection, and same-workdir concurrent conversations as capabilities of that
+  trusted operator model, not as isolation guarantees.
+- If you need isolation between users, repositories, or experiments, run
+  separate portal instances with separate `DATA_DIR`s and `PROJECT_ROOT`s (or
+  use OS/container isolation outside the app).
+
+Security work inside the portal focuses on preventing unauthenticated access,
+cross-user credential attribution mistakes, path traversal in read-only browser
+routes, XSS, CSRF, and accidental permission broadening. It does **not** try to
+defend the host from a logged-in trusted user.
 
 ## Auth modes
 
@@ -44,12 +68,17 @@ a session cookie. Rate-limited (5 attempts / 15 min / IP).
 
 ### `none`
 
-Disables auth. **Only** honored when `HOST=127.0.0.1` *and* an explicit
-`I_KNOW_THIS_IS_LOCAL=1` is set. Refuses to start otherwise.
+Disables auth. **Only** honored when `HOST=127.0.0.1` (or `0.0.0.0`) *and*
+an explicit `I_KNOW_THIS_IS_LOCAL=1` is set. Refuses to start otherwise.
+Use `0.0.0.0` only when reachability is fenced off some other way — e.g.
+a container with no published port, a private network, or an
+authenticating reverse proxy in front.
 
 ## Session cookies
 
-- Signed JWT (`HS256`) with `sub=<userId>`, `iat`, `exp`.
+- HMAC-SHA256-signed compact payload: `base64url(JSON({sub, iat, exp})).base64url(sig)`.
+  Resembles a JWT but is not one (no header, no algorithm negotiation —
+  see `src/lib/server/auth/session.ts`). The signing key is `SESSION_SECRET`.
 - Stored as `__Host-portal_session` (forces `Secure`, `Path=/`, no
   `Domain=`).
 - Rotated on each successful auth.
@@ -70,30 +99,62 @@ Disables auth. **Only** honored when `HOST=127.0.0.1` *and* an explicit
 The Copilot subscription auth used by the SDK is distinct from the portal's
 login token.
 
-Three strategies, configurable per user:
+Two strategies, configurable per user:
 
-1. **Forward portal-issued GitHub OAuth token** — simplest; works if your
-   OAuth app's user-to-server token has Copilot entitlement. The token is
-   read from encrypted storage and injected into the SDK subprocess as
-   `COPILOT_GITHUB_TOKEN` in its environment. Never logged, never echoed
-   to the client.
-2. **Pre-run `copilot auth login`** on the host — the SDK picks up the
-   stored CLI credentials. The portal does no token handling. Best for
-   single-user home installs.
-3. **BYOK** — user pastes an OpenAI/Anthropic key in `/settings`; stored
+1. **Pre-run `copilot auth login`** on the host — the SDK picks up the
+   stored CLI credentials. Recommended for single-user home installs and
+   the path that works out of the box.
+2. **BYOK** — user pastes an OpenAI/Anthropic key in `/settings`; stored
    encrypted; forwarded as the appropriate env var. Limits model selection
    accordingly.
 
+The portal stores **no** GitHub OAuth access token by default. With
+`scope=read:user` (set in `src/lib/server/auth/github.ts`) the token has
+no Copilot entitlement, so persisting it would just keep an
+encrypted-but-useless credential at rest. The SDK falls back to whatever
+the host's `copilot auth login` produced. If you've widened the OAuth
+scope and want the OAuth token forwarded to the SDK, re-add a
+`setGithubToken(user.id, token)` call in `src/routes/auth/callback/+server.ts`
+— the read paths in the bridge plumbing still consume it. The
+`getGithubToken`/`setGithubToken` helpers in `src/lib/server/db/repos/tokens.ts`
+remain available for that, and for BYOK key storage which uses the same
+table.
+
+The fallback chain the SDK sees, in order, is:
+`tokens.getGithubToken(userId)` → `COPILOT_GITHUB_TOKEN` env → undefined
+(host CLI creds via `useLoggedInUser`).
+
+Whatever token the SDK ends up using is never logged and never echoed
+back to the client.
+
+The portal keeps one Copilot SDK subprocess per portal user (see
+`src/lib/server/copilot/bridge.ts`). When `ALLOWED_GITHUB_LOGINS` lists
+multiple users, each gets their own client so Copilot API calls are
+attributed to the right GitHub identity instead of whoever logged in
+first after process boot.
+
 ## Working-directory containment
 
-- Conversations are pinned to a directory at creation; it cannot be changed
-  after the first message. (Renaming via settings is a delete + recreate.)
-- The portal enforces that the directory is within an allowlist
-  (`DATA_DIR/workspaces/` by default, plus any explicit
-  `ALLOWED_WORKDIRS` entries). Symlinks resolved with `realpath`; any
-  resolution outside the allowlist is rejected.
-- The Copilot CLI itself does additional containment within that directory;
-  we don't try to second-guess it.
+- The authoritative workdir is the persisted `conversations.workdir`
+  row. New conversations default to `PROJECT_ROOT` (env, defaulting to
+  the server process's cwd), but can override it; the Copilot SDK and
+  the conversation-scoped file/git routes both resolve from that same
+  row. Legacy stored paths under `DATA_DIR/workspaces/<id>/` still fold
+  back to `PROJECT_ROOT` via `src/lib/server/workdir.ts`.
+- The workdir is not a per-conversation sandbox. Any conversations that point
+  at the same path share the same files, git state, running services, caches,
+  and external side effects; permission prompts and snapshots do not make that
+  state transactional.
+- No allowlist is enforced. The portal is a single-trusted-user app;
+  if you can log in, you can already make the agent run shell
+  commands, so policing the chosen directory adds no real defence.
+- The read-only file browser and git endpoints (`/api/conversations/[id]/fs/*`,
+  `/api/conversations/[id]/git/*`) constrain paths to the workspace
+  root's realpath; symlinks that resolve outside it are rejected, and
+  `git` is spawned with `shell: false`, hard timeouts, and output
+  size caps.
+- The Copilot CLI itself does additional containment within that
+  directory; we don't try to second-guess it.
 
 ## Tool permissions
 
@@ -112,12 +173,17 @@ Three strategies, configurable per user:
   `DOMPurify` (see `src/lib/client/markdown.ts`). Assistant content is
   never injected into SSR HTML; the chat transcript is hydrated and
   rendered in the browser, where DOMPurify uses the real DOM.
-- A strict default CSP is sent from `hooks.server.ts`:
+- A strict default CSP is sent. Inline-script-emitting pages use
+  SvelteKit's hash-mode CSP integration (`kit.csp.directives` in
+  `svelte.config.js`) so we can omit `'unsafe-inline'` from `script-src`;
+  a matching CSP for non-HTML responses (API JSON, SSE) is set in
+  `src/hooks.server.ts`:
   - `default-src 'self'`
-  - `script-src 'self'` (no `unsafe-inline`; SvelteKit hashes inline scripts)
+  - `script-src 'self'` (hashes for inline hydration scripts auto-injected
+    by SvelteKit; the pre-hydrate bootstrap lives at `/prehydrate.js`)
   - `style-src 'self' 'unsafe-inline'` (Svelte component styles)
   - `connect-src 'self'`
-  - `img-src 'self' data:`
+  - `img-src 'self' data: https://avatars.githubusercontent.com`
   - `frame-ancestors 'none'`
 
 ## Rate limiting

@@ -57,9 +57,14 @@ test('Files tab lists workspace contents and reads a file', async ({ page, reque
 
 	await page.goto(`/conversations/${id}`);
 	await page.getByRole('tab', { name: 'Files' }).click();
+	await expect(page).toHaveURL(`/conversations/${id}?tab=files`);
 	await expect(page.getByRole('button', { name: /hello\.txt/ })).toBeVisible();
 	await page.getByRole('button', { name: /hello\.txt/ }).click();
 	await expect(page.locator('pre.file-view')).toContainText('greetings');
+	await page.reload();
+	await expect(page).toHaveURL(`/conversations/${id}?tab=files`);
+	await expect(page.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
+	await expect(page.getByRole('button', { name: /hello\.txt/ })).toBeVisible();
 });
 
 test('Files tab reports git status when workspace is a repo', async ({ request }) => {
@@ -161,5 +166,5 @@ test('Changes tab lists modified files with +/- stats and a working diff', async
 	// At least one add and one del line are rendered with line numbers.
 	await expect(diff.locator('.line.add').first()).toBeVisible();
 	await expect(diff.locator('.line.del').first()).toBeVisible();
-	await expect(diff.locator('.line.add .gutter.new').first()).not.toHaveText('');
+	await expect(diff.locator('.line.add .gutter').first()).not.toHaveText('');
 });

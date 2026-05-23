@@ -24,7 +24,7 @@ table. No ORM, no migration framework.
 CREATE TABLE users (
   id              TEXT PRIMARY KEY,         -- ULID
   github_login    TEXT UNIQUE NOT NULL,
-  github_id       INTEGER UNIQUE NOT NULL,
+  github_id       INTEGER UNIQUE,           -- null for the local-only `AUTH_MODE=none` user
   display_name    TEXT,
   avatar_url      TEXT,
   created_at      INTEGER NOT NULL,         -- unix ms
@@ -43,7 +43,7 @@ CREATE TABLE user_settings (
   user_id            TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   default_model      TEXT,
   default_workdir    TEXT,
-  default_policy     TEXT NOT NULL DEFAULT 'prompt',  -- 'prompt'|'allow-readonly'|'allow-all'|'deny-all'
+  default_policy     TEXT NOT NULL DEFAULT 'prompt',  -- 'prompt'|'allow-all'|'deny-all'
   theme              TEXT NOT NULL DEFAULT 'dark',
   updated_at         INTEGER NOT NULL
 );
@@ -117,8 +117,9 @@ CREATE TABLE schema_migrations (
 
 ## Turn snapshots (edit-and-rerun)
 
-Added in migration `005_turn_snapshots.sql`. Backs the "edit an earlier
-message and rewind the workdir" feature.
+Added in migration `005_turn_snapshots.sql`. Backs edit/retry forks by storing
+manual restore points for the workdir. It does **not** make conversations
+transactional or automatically rewind files.
 
 ```sql
 CREATE TABLE turn_snapshots (
@@ -135,7 +136,7 @@ ALTER TABLE conversations ADD COLUMN forked_from_message_id TEXT;
 ```
 
 The actual file state is **not** stored in SQLite. Each snapshot is a real
-git commit written under the conversation's workdir at
+git commit written under the workdir's git repo at
 `refs/portal/turns/{pre|post}/{messageId}`. `kind='pre'` is captured
 before running a user turn; `kind='post'` is captured after the
 assistant's reply persists. Trees are content-addressed so identical
@@ -147,24 +148,32 @@ private — it never overlaps `refs/heads/*` or `refs/tags/*`.
 
 When a user edits a previous message, the portal:
 
-1. Looks up the `pre` snapshot for that message.
+1. Looks up the `pre` snapshot for that message (or `post` for the
+   retry-from-assistant flavour) — for surfacing in the UI and as a
+   manual restore point only.
 2. Creates a new conversation with `forked_from_conversation_id` /
-   `forked_from_message_id` set.
-3. Materialises a fresh managed workdir from that snapshot commit (via a
-   shallow local `git fetch` of just that commit, then check it out).
-4. Clones the message rows strictly before the edited one into the new
-   conversation, then appends the edited content as a fresh user message.
-5. Starts a brand-new SDK session under the new conversation id. No
+   `forked_from_message_id` set, sharing the source's `workdir`.
+3. Clones the message rows strictly before the edited one into the new
+   conversation, then appends the edited content as a fresh user message
+   (for the edit flavour; the retry flavour clones up to and including
+   the assistant target and appends nothing).
+4. Starts a brand-new SDK session under the new conversation id. No
    prior conversation events are seeded into the SDK in v1 — the agent
-   starts fresh from the edited turn. The cloned message rows exist for
-   UI continuity only.
+   starts fresh from the next prompt, using the live shared workdir. The
+   cloned message rows exist for UI continuity only.
 
 Limitations (v1):
 
-- Only portal-managed workdirs (under `$DATA_DIR/workspaces/`) can be
-  forked. Bring-your-own workdirs are rejected with a clear 422.
+- The fork shares the source's workdir. The portal does **not**
+  automatically roll the files back to the snapshot — multiple
+  conversations live in one tree, so a unilateral rewind would clobber
+  other in-flight work. The snapshot ref is left in the repo so the
+  user can `git diff`/`git restore` against it manually if they want
+  to reproduce the prior state.
+- A conversation boundary is a transcript/session boundary only. It is not a
+  filesystem, git, process, network, or database isolation boundary.
 - Side effects outside the workdir (DB writes, network calls) are not
-  rolled back. Forks rewind files only.
+  rolled back. Snapshots track files only.
 - Submodule/LFS state is out of scope.
 
 

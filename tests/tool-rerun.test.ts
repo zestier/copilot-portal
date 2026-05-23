@@ -1,0 +1,149 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setupLocalEnv } from './helpers/env';
+import { argsHash } from '../src/lib/server/tool-invocation';
+
+const startTurnMock = vi.fn();
+const getTurnMock = vi.fn();
+
+vi.mock('../src/lib/server/copilot/turn-runner', () => ({
+	getTurn: (...args: unknown[]) => getTurnMock(...args),
+	startTurn: (...args: unknown[]) => startTurnMock(...args)
+}));
+
+function request(body: unknown = {}) {
+	return new Request('http://localhost/rerun', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+}
+
+describe('tool-call rerun endpoint', () => {
+	beforeEach(async () => {
+		await setupLocalEnv('portal-tool-rerun-');
+		startTurnMock.mockReset();
+		getTurnMock.mockReset();
+		getTurnMock.mockReturnValue(null);
+		startTurnMock.mockResolvedValue({
+			id: 'turn-rerun',
+			conversationId: 'conv',
+			startedAt: Date.now(),
+			endedAt: null,
+			status: 'running',
+			subscribe: async function* () {},
+			abort: async () => {}
+		});
+	});
+
+	async function fixture() {
+		const users = await import('../src/lib/server/db/repos/users');
+		const convs = await import('../src/lib/server/db/repos/conversations');
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const user = users.ensureLocalUser();
+		const conv = convs.create(user.id, { title: 't', workdir: '/tmp', model: null });
+		const msg = messages.append(conv.id, { role: 'assistant', content: '' });
+		const args = { command: 'echo approved' };
+		messages.insertToolCall(msg.id, {
+			id: 'tc-denied',
+			tool: 'bash',
+			argsJson: JSON.stringify(args),
+			resultJson: JSON.stringify('Permission denied'),
+			status: 'denied',
+			startedAt: Date.now() - 100,
+			endedAt: Date.now(),
+			textOffset: 0,
+			parentToolCallId: null
+		});
+		return { user, conv, messages };
+	}
+
+	it('creates a short-lived exact approval and starts a labeled rerun turn', async () => {
+		const { user, conv } = await fixture();
+		const { POST } =
+			await import('../src/routes/api/conversations/[id]/tool-calls/[toolCallId]/rerun/+server');
+
+		const response = await POST({
+			params: { id: conv.id, toolCallId: 'tc-denied' },
+			locals: { userId: user.id },
+			request: request({ confirmed: true })
+		} as never);
+
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { turnId: string; grantExpiresAt: number };
+		expect(body.turnId).toBe('turn-rerun');
+		expect(body.grantExpiresAt).toBeGreaterThan(Date.now());
+		expect(body.grantExpiresAt).toBeLessThanOrEqual(Date.now() + 2 * 60_000 + 1_000);
+
+		const settings = await import('../src/lib/server/db/repos/settings');
+		expect(settings.listGrantsForUser(user.id).find((g) => g.tool === 'shell')).toMatchObject({
+			conversationId: conv.id,
+			permissionKind: null,
+			argsHash: argsHash({ command: 'echo approved' }),
+			decision: 'allow',
+			expiresAt: expect.any(Number)
+		});
+		expect(startTurnMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				conversationId: conv.id,
+				prompt: expect.stringContaining('Invoke exactly the tool below')
+			})
+		);
+		expect(
+			conv &&
+				(await import('../src/lib/server/db/repos/messages')).listByConversation(conv.id).at(-1)
+		).toMatchObject({
+			role: 'user',
+			content: expect.stringContaining('Manual tool rerun')
+		});
+	});
+
+	it('reruns generic failed calls with the same short-lived exact-args approval shape', async () => {
+		const { user, conv, messages } = await fixture();
+		const msg = messages.append(conv.id, { role: 'assistant', content: '' });
+		const args = { path: 'src/missing.ts' };
+		messages.insertToolCall(msg.id, {
+			id: 'tc-error',
+			tool: 'view',
+			argsJson: JSON.stringify(args),
+			resultJson: JSON.stringify('File not found'),
+			status: 'error',
+			startedAt: Date.now() - 100,
+			endedAt: Date.now(),
+			textOffset: 0,
+			parentToolCallId: null
+		});
+		const { POST } =
+			await import('../src/routes/api/conversations/[id]/tool-calls/[toolCallId]/rerun/+server');
+
+		const response = await POST({
+			params: { id: conv.id, toolCallId: 'tc-error' },
+			locals: { userId: user.id },
+			request: request({ confirmed: true })
+		} as never);
+
+		expect(response.status).toBe(200);
+		const settings = await import('../src/lib/server/db/repos/settings');
+		expect(settings.listGrantsForUser(user.id).find((g) => g.tool === 'view')).toMatchObject({
+			conversationId: conv.id,
+			permissionKind: null,
+			argsHash: argsHash(args),
+			decision: 'allow',
+			expiresAt: expect.any(Number)
+		});
+		expect(startTurnMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prompt: expect.stringContaining('Invoke exactly the tool below')
+			})
+		);
+		expect(
+			messages
+				.listByConversation(conv.id)
+				.flatMap((m) => m.toolCalls ?? [])
+				.find((t) => t.id === 'tc-error')
+		).toMatchObject({
+			id: 'tc-error',
+			status: 'error',
+			resultJson: JSON.stringify('File not found')
+		});
+	});
+});

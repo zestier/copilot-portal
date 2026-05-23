@@ -92,6 +92,12 @@ with explicit approval, and review the diffs in the UI.
    for HTTP, configurable). Heartbeat events every 15 s on the SSE stream.
 3. **Workspace strategy.** Do we ever want to let a conversation operate
    against a *bare-cloned* repo we manage, vs. a directory the user
-   provides? Probably phase 4+.
+   provides? See the "Caveat: conversations are not independent" section
+   in the README — today every conversation defaults to `PROJECT_ROOT`
+   and shares one working tree, which is the underlying reason this
+   question matters. A managed-clone-per-conversation model would
+   address it but is non-trivial (worktrees only solve part of the
+   problem; package caches, ports, external side effects still leak).
+   Probably phase 4+.
 4. **Telemetry.** None planned. Confirm the SDK doesn't phone home for
    anything beyond what the user expects from Copilot itself.

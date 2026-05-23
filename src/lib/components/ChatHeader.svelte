@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Conversation, ConversationUsage } from '$lib/types';
+	import type { Conversation, ConversationUsage, SessionMode } from '$lib/types';
 	import ContextMeter from './ContextMeter.svelte';
 
 	let {
@@ -7,7 +7,10 @@
 		conversation,
 		parent = null,
 		usage = null,
-		recentCompaction = null
+		recentCompaction = null,
+		mode,
+		approveAllTools,
+		onSettingsChange
 	}: {
 		title: string;
 		conversation: Conversation;
@@ -19,9 +22,97 @@
 		} | null;
 		usage?: ConversationUsage | null;
 		recentCompaction?: { tokensRemoved?: number; messagesRemoved?: number } | null;
+		mode: SessionMode;
+		approveAllTools: boolean;
+		// Fires with the optimistic patch right before the PATCH request,
+		// so the parent can mirror state without waiting for the SSE echo.
+		onSettingsChange?: (patch: { mode?: SessionMode; approveAllTools?: boolean }) => void;
 	} = $props();
 
 	let expanded = $state(false);
+	let savingMode = $state(false);
+	let savingApprove = $state(false);
+	let resetting = $state(false);
+	let resetFlash = $state<'ok' | 'err' | null>(null);
+	let resetTimer: ReturnType<typeof setTimeout> | null = null;
+
+	const MODES: { value: SessionMode; label: string; hint: string }[] = [
+		{
+			value: 'interactive',
+			label: 'Interactive',
+			hint: 'Normal chat; tools prompt for permission.'
+		},
+		{
+			value: 'plan',
+			label: 'Plan',
+			hint: 'Plan-only; destructive tools blocked until you exit plan mode.'
+		},
+		{
+			value: 'autopilot',
+			label: 'Autopilot',
+			hint: 'Agent decides when to switch into less-supervised execution.'
+		},
+		{
+			value: 'best-effort',
+			label: 'Best effort',
+			hint: 'Autopilot-style execution, but permission prompts auto-reject with feedback.'
+		}
+	];
+
+	async function patchSession(body: { mode?: SessionMode; approveAllTools?: boolean }) {
+		const res = await fetch(`/api/conversations/${conversation.id}/session`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		});
+		if (!res.ok) throw new Error(`session patch failed: ${res.status}`);
+	}
+
+	async function chooseMode(next: SessionMode) {
+		if (next === mode || savingMode) return;
+		savingMode = true;
+		const prev = mode;
+		onSettingsChange?.({ mode: next });
+		try {
+			await patchSession({ mode: next });
+		} catch {
+			onSettingsChange?.({ mode: prev });
+		} finally {
+			savingMode = false;
+		}
+	}
+
+	async function toggleApproveAll(e: Event) {
+		const next = (e.currentTarget as HTMLInputElement).checked;
+		if (savingApprove) return;
+		savingApprove = true;
+		const prev = approveAllTools;
+		onSettingsChange?.({ approveAllTools: next });
+		try {
+			await patchSession({ approveAllTools: next });
+		} catch {
+			onSettingsChange?.({ approveAllTools: prev });
+		} finally {
+			savingApprove = false;
+		}
+	}
+
+	async function resetApprovals() {
+		if (resetting) return;
+		resetting = true;
+		try {
+			const res = await fetch(`/api/conversations/${conversation.id}/session`, {
+				method: 'POST'
+			});
+			resetFlash = res.ok ? 'ok' : 'err';
+		} catch {
+			resetFlash = 'err';
+		} finally {
+			resetting = false;
+			if (resetTimer) clearTimeout(resetTimer);
+			resetTimer = setTimeout(() => (resetFlash = null), 2400);
+		}
+	}
 
 	const miniPct = $derived.by(() => {
 		if (!usage || usage.tokenLimit <= 0) return 0;
@@ -105,6 +196,63 @@
 					</div>
 				{/if}
 				<ContextMeter {usage} {recentCompaction} />
+				<div class="session-settings" role="group" aria-label="Session settings">
+					<div class="setting-row">
+						<span class="setting-label">Mode</span>
+						<div class="seg" role="radiogroup" aria-label="Session mode" aria-busy={savingMode}>
+							{#each MODES as opt (opt.value)}
+								<button
+									type="button"
+									role="radio"
+									aria-checked={mode === opt.value}
+									class="seg-btn"
+									class:active={mode === opt.value}
+									title={opt.hint}
+									disabled={savingMode}
+									onclick={() => chooseMode(opt.value)}
+								>
+									{opt.label}
+								</button>
+							{/each}
+						</div>
+					</div>
+					<div class="setting-row">
+						<label class="approve-toggle">
+							<input
+								type="checkbox"
+								checked={approveAllTools}
+								disabled={savingApprove}
+								onchange={toggleApproveAll}
+							/>
+							<span>Approve all tool calls</span>
+						</label>
+						<button
+							type="button"
+							class="reset-btn"
+							disabled={resetting}
+							onclick={resetApprovals}
+							title="Clear the runtime's session-scoped approvals."
+						>
+							{resetting ? 'Resetting…' : 'Reset session approvals'}
+						</button>
+						{#if resetFlash === 'ok'}
+							<span class="reset-flash ok" aria-live="polite">Cleared</span>
+						{:else if resetFlash === 'err'}
+							<span class="reset-flash err" aria-live="polite">Failed</span>
+						{/if}
+					</div>
+					{#if approveAllTools}
+						<p class="approve-warning" role="note">
+							Every tool call is auto-approved for this conversation. Audit entries still record
+							each one as <code>auto-allow</code>.
+						</p>
+					{:else if mode === 'best-effort'}
+						<p class="approve-warning" role="note">
+							Permission prompts are auto-rejected in this conversation. The agent can keep trying
+							alternatives, but it must stop once extra permission is truly required.
+						</p>
+					{/if}
+				</div>
 			</div>
 		</div>
 	</div>
@@ -233,5 +381,99 @@
 		.mini-fill {
 			transition: none;
 		}
+	}
+	.session-settings {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		padding-top: var(--space-2);
+		border-top: 1px dashed var(--border);
+	}
+	.setting-row {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		flex-wrap: wrap;
+	}
+	.setting-label {
+		opacity: 0.6;
+		min-width: 3.5rem;
+	}
+	.seg {
+		display: inline-flex;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		overflow: hidden;
+		background: var(--surface-2);
+	}
+	.seg-btn {
+		background: transparent;
+		border: 0;
+		color: inherit;
+		font: inherit;
+		padding: 2px 10px;
+		cursor: pointer;
+		transition: background 0.12s ease;
+	}
+	.seg-btn + .seg-btn {
+		border-left: 1px solid var(--border);
+	}
+	.seg-btn:hover:not(:disabled) {
+		background: var(--surface-3, var(--surface-2));
+	}
+	.seg-btn.active {
+		background: var(--accent);
+		color: var(--accent-fg, white);
+	}
+	.seg-btn:disabled {
+		opacity: 0.5;
+		cursor: progress;
+	}
+	.approve-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+		cursor: pointer;
+	}
+	.approve-toggle input[type='checkbox'] {
+		margin: 0;
+	}
+	.reset-btn {
+		background: var(--surface-2);
+		border: 1px solid var(--border);
+		color: inherit;
+		font: inherit;
+		font-size: var(--fs-xs);
+		padding: 2px 8px;
+		border-radius: 4px;
+		cursor: pointer;
+	}
+	.reset-btn:hover:not(:disabled) {
+		background: var(--surface-3, var(--surface-2));
+	}
+	.reset-btn:disabled {
+		opacity: 0.5;
+		cursor: progress;
+	}
+	.reset-flash {
+		font-size: var(--fs-xs);
+	}
+	.reset-flash.ok {
+		color: var(--success);
+	}
+	.reset-flash.err {
+		color: var(--danger);
+	}
+	.approve-warning {
+		margin: 0;
+		padding: var(--space-1) var(--space-2);
+		background: color-mix(in srgb, var(--warning) 14%, transparent);
+		border-left: 2px solid var(--warning);
+		border-radius: 3px;
+		font-size: var(--fs-xs);
+	}
+	.approve-warning code {
+		font-family: var(--mono);
+		font-size: 0.95em;
 	}
 </style>

@@ -44,6 +44,16 @@
 		gitRefreshToken++;
 	}
 
+	function clearSelectionAndRefresh() {
+		selectedPath = null;
+		selectedStatus = null;
+		fileData = null;
+		fileError = null;
+		diffText = '';
+		diffError = null;
+		bumpGitRefresh();
+	}
+
 	async function loadFile(path: string) {
 		fileLoading = true;
 		fileError = null;
@@ -155,7 +165,11 @@
 
 <div class="browser">
 	<div class="left">
-		<GitStatusHeader {conversationId} refreshToken={gitRefreshToken} />
+		<GitStatusHeader
+			{conversationId}
+			refreshToken={gitRefreshToken}
+			onrevert={clearSelectionAndRefresh}
+		/>
 		{#if pane === 'files'}
 			<div class="pane-body">
 				<FileTree
@@ -317,8 +331,10 @@
 		display: flex;
 		flex-direction: column;
 		min-height: 0;
+		min-width: 0;
 		border-right: 1px solid var(--border);
 		background: var(--surface);
+		overflow: hidden;
 	}
 	.right {
 		display: flex;
@@ -352,8 +368,10 @@
 	.pane-body {
 		flex: 1;
 		min-height: 0;
+		min-width: 0;
 		display: flex;
 		flex-direction: column;
+		overflow: hidden;
 	}
 	.header {
 		padding: var(--space-2) var(--space-3);
@@ -410,12 +428,14 @@
 		border-right: 1px solid var(--border);
 		background: var(--surface);
 		min-height: 0;
+		min-width: 0;
 	}
 	.commit-file {
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
 		width: 100%;
+		min-width: 0;
 		text-align: left;
 		background: transparent;
 		color: var(--text);
@@ -433,6 +453,8 @@
 		outline-offset: -1px;
 	}
 	.commit-file .path {
+		flex: 1 1 auto;
+		min-width: 0;
 		font-family: var(--mono);
 		font-size: var(--fs-sm);
 		overflow: hidden;
@@ -478,6 +500,7 @@
 	.status-pill {
 		font-family: var(--mono);
 		font-weight: 600;
+		flex: 0 0 auto;
 	}
 
 	@media (max-width: 768px) {

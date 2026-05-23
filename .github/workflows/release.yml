@@ -79,11 +79,14 @@ jobs:
           # Push without tags; the `merge` job assembles the tagged
           # manifest list from the resulting digests.
           outputs: type=image,name=${{ steps.image.outputs.value }},push-by-digest=true,name-canonical=true,push=true
-          # Scope cache to the release ref and arch so unrelated
-          # workflows (CI, PR builds) cannot poison the cache used here
-          # and the two arch legs don't trample each other.
-          cache-from: type=gha,scope=release-${{ github.ref_name }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=release-${{ github.ref_name }}-${{ matrix.arch }}
+          # No buildx GHA cache: releases are infrequent and almost
+          # always include source/lockfile changes that invalidate the
+          # interesting layers anyway, so the hit rate is low. More
+          # importantly, a writable cache is a supply-chain risk: GHA
+          # cache reads fall back across refs, so a compromised run on
+          # any branch could plant a layer that a tagged release later
+          # restores. Provenance attestations cover the manifest, not
+          # the trustworthiness of the cache that produced it.
           provenance: mode=max
           sbom: true
 

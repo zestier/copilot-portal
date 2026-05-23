@@ -16,14 +16,14 @@ type RedeployEvent =
 	| { type: 'done'; ok: true; restarting: true }
 	| { type: 'done'; ok: false; failedStep?: string; code?: number; message?: string };
 
-// `pnpm run verify` (the last build step) ends with `pnpm run test:e2e`,
-// which in turn runs `pnpm run build`. The supervisor (scripts/serve.mjs)
-// runs the server out of its own `build.live/` copy and only refreshes it
-// between restarts, so the build inside verify can overwrite `build/`
-// freely without thrashing the chunks the live process is lazy-loading.
-// On success we exit and the supervisor relaunches on the refreshed code;
-// on failure (lint, type-check, unit tests, build, or e2e) the live tree
-// is untouched.
+// `pnpm run verify` overlaps independent lint/check/unit phases, then runs
+// one production build and Playwright e2e against that build. The supervisor
+// (scripts/serve.mjs) runs the server out of its own `build.live/` copy and
+// only refreshes it between restarts, so the build inside verify can overwrite
+// `build/` freely without thrashing the chunks the live process is lazy-loading.
+// On success we exit and the supervisor relaunches on the refreshed code; on
+// failure (lint, type-check, unit tests, build, or e2e) the live tree is
+// untouched.
 const PULL_STEPS: Step[] = [
 	{ label: 'git fetch', cmd: 'git fetch --all --prune' },
 	{ label: 'git pull', cmd: 'git pull --ff-only' },

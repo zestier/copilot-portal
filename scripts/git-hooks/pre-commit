@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run the full verification suite before allowing a commit. Mirrors what
 # the redeploy button executes, so anything that passes here is safe to
-# ship. If this becomes too slow, fix the tests — don't add skips.
+# ship. The verify runner may overlap independent phases, but it still
+# requires lint, check, unit, build, and e2e to pass. If this becomes too
+# slow, fix the tests — don't add skips.
 set -eu
 
 # Allow an explicit escape hatch for emergencies (e.g. mid-rebase fixups).

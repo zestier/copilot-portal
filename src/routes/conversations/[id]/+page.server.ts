@@ -2,21 +2,41 @@ import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
+import * as tickets from '$lib/server/db/repos/tickets';
 import * as usage from '$lib/server/db/repos/usage';
 import { getTurn } from '$lib/server/copilot/turn-runner';
+import { listForConversation as listPendingInteractive } from '$lib/server/copilot/interactive-requests';
+import { ticketWorkspaceFromConversation } from '$lib/server/ticket-workspace';
+import { isTicketChatMode, ticketChatPrompt } from '$lib/tickets/chat';
 
-export const load: PageServerLoad = ({ params, locals }) => {
+export const load: PageServerLoad = ({ params, locals, url }) => {
 	if (!locals.userId) throw error(401);
 	const conv = convs.get(params.id, locals.userId);
 	if (!conv) throw error(404);
 	const msgs = messages.listByConversation(conv.id);
 	const contextUsage = usage.get(conv.id);
+	let initialComposer = '';
+	const draftTicketId = url.searchParams.get('draftTicketId');
+	if (draftTicketId && msgs.length === 0) {
+		const ticket = tickets.get(draftTicketId, locals.userId);
+		if (!ticket || ticket.workspaceKey !== ticketWorkspaceFromConversation(conv.workdir)) {
+			throw error(404);
+		}
+		const requestedMode = url.searchParams.get('ticketMode');
+		const mode = isTicketChatMode(requestedMode) ? requestedMode : 'do';
+		initialComposer = ticketChatPrompt(ticket, mode);
+	}
 
 	// Surface any in-flight turn so the client can reattach its
 	// EventSource on page load. Only running turns count — finished but
 	// still-cached turns would just replay then immediately yield `done`.
 	const turn = getTurn(conv.id);
 	const activeTurnId = turn && turn.status === 'running' ? turn.id : null;
+
+	// Snapshot any prompts currently waiting on a user response so a fresh
+	// page load shows them immediately, without waiting for the SSE stream
+	// to (re-)emit the `interactive.request` event.
+	const pendingInteractive = listPendingInteractive(conv.id);
 
 	// If this conversation was forked, surface parent info for a
 	// breadcrumb. Resolves silently to null if the parent was deleted or
@@ -45,5 +65,13 @@ export const load: PageServerLoad = ({ params, locals }) => {
 		}
 	}
 
-	return { conversation: conv, messages: msgs, contextUsage, parent, activeTurnId };
+	return {
+		conversation: conv,
+		messages: msgs,
+		contextUsage,
+		parent,
+		activeTurnId,
+		pendingInteractive,
+		initialComposer
+	};
 };

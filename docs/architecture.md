@@ -18,10 +18,13 @@ A server-side module (`$lib/server/copilot/`) that wraps
 [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk).
 Responsible for:
 
-- Spawning and managing the bundled `copilot` CLI subprocess per session.
+- Spawning and managing one `CopilotClient` subprocess per portal user,
+  and opening a per-conversation **session** on top of it.
 - Translating SDK events (token deltas, tool calls, permission prompts,
-  file edits) into a normalized event stream the frontend understands.
-- Enforcing per-session resource limits (max concurrent sessions, idle timeout).
+  file edits, context-window usage) into a normalized event stream the
+  frontend understands.
+- Enforcing per-session resource limits (max concurrent sessions, idle
+  timeout).
 
 ### 3. Session store (SQLite)
 
@@ -34,12 +37,19 @@ A single `portal.db` file holding:
 
 See [persistence.md](persistence.md).
 
-### 4. Working-directory sandbox
+### 4. Working directory
 
-Each conversation is pinned to a working directory on the host. The agent
-operates within that directory (this is how the Copilot CLI scopes file ops).
-By default `~/.copilot-portal/workspaces/<conversation-id>/`. Users can pin
-existing repos.
+Each conversation carries its own persisted `workdir`. New conversations
+default to `PROJECT_ROOT`, but can override it; the Copilot SDK, turn
+snapshots, and the file/git routes all resolve from that conversation row.
+Legacy `DATA_DIR/workspaces/<id>/` paths still fold back to `PROJECT_ROOT`
+via `src/lib/server/workdir.ts`.
+
+The `workdir` is a real directory, not a sandbox clone. Conversations that
+point at the same path share one filesystem, git repository, package cache,
+database files, and long-lived side effects. The portal records per-message
+snapshots for inspection, but it does not isolate or transactionally roll back
+the working tree per conversation.
 
 ### 5. Cloudflare Tunnel (optional, deployment-time)
 
@@ -83,31 +93,50 @@ Server → client SSE events, one JSON object per `data:` line:
 | `message.delta`       | `{ messageId, text }`                                |
 | `message.end`         | `{ messageId }`                                      |
 | `tool.call`           | `{ toolCallId, tool, args }`                         |
-| `tool.permission`     | `{ toolCallId, tool, args, requestId }` (needs ack)  |
+| `interactive.request` | `{ request: InteractiveRequestView }` (needs ack)    |
+| `interactive.resolved`| `{ requestId, kind, outcome }`                       |
 | `tool.result`         | `{ toolCallId, ok, summary, output? }`               |
 | `file.edit`           | `{ path, diff }`                                     |
 | `error`               | `{ code, message }`                                  |
 | `done`                | `{}`                                                 |
 
-Permission acknowledgements are a separate POST:
-`POST /api/conversations/:id/permissions/:requestId { decision: "allow-once" | "allow-always" | "deny" }`.
+Interactive acknowledgements (permission, auto-mode-switch, user-input,
+elicitation, exit-plan-mode, plus info-only sampling/mcp_oauth/external_tool)
+all flow through one endpoint:
+`POST /api/conversations/:id/interactive/:requestId` with a
+discriminated `{ kind, ... }` body. The legacy
+`/permissions/:requestId` endpoint remains as a one-release shim.
 
 ## Concurrency model
 
-- **One SDK client per conversation**, kept alive until idle for N minutes
-  (configurable, default 15) or explicitly closed.
-- A small in-memory `Map<conversationId, SdkClient>` in the server process.
-- Idle reaper runs every minute. On shutdown, all clients are closed cleanly.
-- New messages to an idle/closed conversation transparently respawn the client
-  and resume from persisted history.
+- **One `CopilotClient` subprocess per portal user**, lazily started on
+  first use and kept in a `Map<userId, CopilotClient>` in
+  `copilot/bridge.ts`. With the documented `ALLOWED_GITHUB_LOGINS`
+  allowlist this keeps Copilot API attribution (billing, audit) tied to
+  the GitHub identity that actually sent the turn instead of whichever
+  user logged in first after process boot. In the common single-user
+  deployment there is exactly one entry.
+- **One SDK session per conversation**, kept alive until idle for N
+  minutes (configurable, default 15) or explicitly closed. Held in a
+  small in-memory `Map<conversationId, Session>` (`copilot/pool.ts`).
+- **Concurrency is scoped by conversation id, not workdir.** The turns API
+  rejects a second running turn for the same conversation, but two different
+  conversations that reference the same `workdir` can run at the same time and
+  interleave filesystem/git side effects. Treat same-workdir conversations like
+  separate chat transcripts sharing one keyboard.
+- Idle reaper runs every minute. On shutdown, all sessions are closed
+  and the shared client is stopped cleanly.
+- New messages to an idle/closed conversation transparently respawn the
+  session and resume from persisted history.
 
 ## Failure modes and recovery
 
 - **CLI subprocess crash** — SDK surfaces an error; the bridge marks the
-  client dead, persists a system message in the conversation, and the next
-  user message respawns.
+  shared client dead, persists a system message in the conversation, and
+  the next user message respawns it.
 - **Network error to Copilot backend** — surfaced as a normal `error` event;
   user can retry without losing conversation state.
-- **Server restart** — conversations are durable in SQLite. SDK clients are
-  ephemeral and recreated on demand. Any in-flight assistant turn that was
-  not finalized is marked `interrupted` and shown as such in the UI.
+- **Server restart** — conversations are durable in SQLite. SDK sessions
+  and the shared client are ephemeral and recreated on demand. Any
+  in-flight assistant turn that was not finalized is marked `interrupted`
+  and shown as such in the UI.

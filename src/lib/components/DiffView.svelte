@@ -1,43 +1,110 @@
 <script lang="ts">
+	import { splitUnifiedDiffByFile } from '$lib/client/diff-synth';
 	import { parseUnifiedDiff, diffStats } from '$lib/client/diff-parser';
 
-	let { path, diff }: { path: string; diff: string } = $props();
-	const parsed = $derived(parseUnifiedDiff(diff));
-	const stats = $derived(diffStats(parsed));
-	const empty = $derived(parsed.length === 0 || parsed.every((l) => l.kind === 'meta'));
+	let {
+		path = 'diff',
+		diff,
+		showLineNumbers = true,
+		collapsible = false
+	}: { path?: string; diff: string; showLineNumbers?: boolean; collapsible?: boolean } = $props();
+
+	const chunks = $derived.by(() => {
+		const split = splitUnifiedDiffByFile(diff, path);
+		return split.length > 0 ? split : [{ path, diff }];
+	});
+	let collapsedFiles = $state<Record<string, boolean>>({});
 
 	function fmtNo(n: number | null): string {
 		return n == null ? '' : String(n);
 	}
+
+	function chunkKey(chunkPath: string, chunkIndex: number): string {
+		return `${chunkPath}:${chunkIndex}`;
+	}
+
+	function toggleCollapsed(key: string) {
+		collapsedFiles = { ...collapsedFiles, [key]: !collapsedFiles[key] };
+	}
 </script>
 
-<div class="diff">
-	<div class="path-bar">
-		<code class="path">{path}</code>
-		<span class="stats">
-			<span class="added">+{stats.added}</span>
-			<span class="removed">−{stats.removed}</span>
-		</span>
-	</div>
-	{#if empty}
-		<div class="empty">No textual diff (file may be binary, empty, or unchanged).</div>
-	{:else}
-		<div class="lines" role="table" aria-label="diff lines">
-			{#each parsed as l, i (i)}
-				<div class={'line ' + l.kind} role="row">
-					<span class="gutter old" role="cell" aria-label="old line number">{fmtNo(l.oldNo)}</span>
-					<span class="gutter new" role="cell" aria-label="new line number">{fmtNo(l.newNo)}</span>
-					<span class="sign" aria-hidden="true"
-						>{l.kind === 'add' ? '+' : l.kind === 'del' ? '-' : l.kind === 'hunk' ? '@' : ' '}</span
+<div class="diff-set">
+	{#each chunks as chunk, chunkIndex (chunk.path + ':' + chunkIndex)}
+		{@const key = chunkKey(chunk.path, chunkIndex)}
+		{@const collapsed = collapsible && collapsedFiles[key] === true}
+		{@const parsed = parseUnifiedDiff(chunk.diff)}
+		{@const stats = diffStats(parsed)}
+		{@const empty = parsed.length === 0 || parsed.every((l) => l.kind === 'meta')}
+		<div class="diff" class:collapsed>
+			<div class="path-bar">
+				{#if collapsible}
+					<button
+						type="button"
+						class="collapse-toggle"
+						aria-expanded={!collapsed}
+						aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${chunk.path}`}
+						onclick={() => toggleCollapsed(key)}
 					>
-					<span class="text" role="cell">{l.text}</span>
-				</div>
-			{/each}
+						<span class="chevron" class:open={!collapsed} aria-hidden="true">▸</span>
+					</button>
+				{/if}
+				<code class="path">{chunk.path}</code>
+				<span class="stats">
+					<span class="added">+{stats.added}</span>
+					<span class="removed">−{stats.removed}</span>
+				</span>
+			</div>
+			{#if !collapsed}
+				{#if empty}
+					<div class="empty">No textual diff (file may be binary, empty, or unchanged).</div>
+				{:else}
+					<div
+						class="lines"
+						class:no-gutter={!showLineNumbers}
+						role="table"
+						aria-label="diff lines"
+					>
+						<div class="rows">
+							{#each parsed as l, i (i)}
+								{#if l.kind === 'hunk' && !showLineNumbers}
+									<!-- Suppress the @@ -L,N +L,N @@ header when we don't trust the
+									     line ranges (e.g. for diffs synthesized from edit args
+									     without full-file context). -->
+								{:else}
+									<div class={'line ' + l.kind} role="row">
+										{#if showLineNumbers}
+											<span class="gutter" role="cell" aria-label="line number"
+												>{fmtNo(l.newNo ?? l.oldNo)}</span
+											>
+										{/if}
+										<span class="sign" aria-hidden="true"
+											>{l.kind === 'add'
+												? '+'
+												: l.kind === 'del'
+													? '-'
+													: l.kind === 'hunk'
+														? '@'
+														: ' '}</span
+										>
+										<span class="text" role="cell">{l.text}</span>
+									</div>
+								{/if}
+							{/each}
+						</div>
+					</div>
+				{/if}
+			{/if}
 		</div>
-	{/if}
+	{/each}
 </div>
 
 <style>
+	.diff-set {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		min-height: 0;
+	}
 	.diff {
 		display: flex;
 		flex-direction: column;
@@ -59,6 +126,33 @@
 		position: sticky;
 		top: 0;
 		z-index: 1;
+	}
+	.collapsed .path-bar {
+		border-bottom: 0;
+	}
+	.collapse-toggle {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.25rem;
+		height: 1.25rem;
+		padding: 0;
+		border: 0;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+		flex: none;
+	}
+	.collapse-toggle:hover {
+		background: var(--surface-hover);
+		color: var(--text);
+	}
+	.chevron {
+		transition: transform 0.12s ease;
+	}
+	.chevron.open {
+		transform: rotate(90deg);
 	}
 	.path {
 		font-family: var(--mono);
@@ -93,11 +187,18 @@
 		font-size: 0.82em;
 		line-height: 1.45;
 	}
+	.rows {
+		width: max-content;
+		min-width: 100%;
+	}
 	.line {
 		display: grid;
-		grid-template-columns: 3.5em 3.5em 1em 1fr;
+		grid-template-columns: 3.5em 1em max-content;
 		align-items: baseline;
 		white-space: pre;
+	}
+	.no-gutter .line {
+		grid-template-columns: 1em max-content;
 	}
 	.gutter {
 		text-align: right;
@@ -107,9 +208,6 @@
 		border-right: 1px solid var(--border);
 		user-select: none;
 		font-variant-numeric: tabular-nums;
-	}
-	.gutter.new {
-		border-right: 1px solid var(--border);
 	}
 	.sign {
 		text-align: center;
@@ -121,7 +219,8 @@
 		overflow-wrap: anywhere;
 		white-space: pre;
 	}
-	.line.add {
+	.line.add .sign,
+	.line.add .text {
 		background: color-mix(in srgb, var(--success) 12%, transparent);
 	}
 	.line.add .text,
@@ -132,7 +231,8 @@
 		background: color-mix(in srgb, var(--success) 20%, transparent);
 		color: var(--success);
 	}
-	.line.del {
+	.line.del .sign,
+	.line.del .text {
 		background: color-mix(in srgb, var(--danger) 12%, transparent);
 	}
 	.line.del .text,

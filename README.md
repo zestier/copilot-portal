@@ -5,8 +5,11 @@ on top of the official [`github/copilot-sdk`](https://github.com/github/copilot-
 Intended to be run on a personal/home machine and exposed via a Cloudflare Tunnel
 (or similar) for remote access from a phone or laptop.
 
-> **Status:** Initial implementation (Phases 0–2 of the roadmap). The
-> Copilot SDK is pinned to `@github/copilot-sdk@^0.3.0` (preview).
+> **Status:** Phases 0–3 of the roadmap are implemented (single-user
+> local chat, tools/permissions/diffs, OAuth + Cloudflare Tunnel
+> deployment, plus a read-only git-aware file browser and edit/retry
+> forking). The Copilot SDK is pinned to `@github/copilot-sdk@1.0.0-beta.4`
+> (preview); see `package.json`.
 
 ## Quick start (local, no auth)
 
@@ -36,16 +39,22 @@ See [docs/deployment.md](docs/deployment.md) for the OAuth + tunnel setup.
 
 ## Scripts
 
-| Script              | Purpose                                                                               |
-| ------------------- | ------------------------------------------------------------------------------------- |
-| `pnpm run dev`      | Vite dev server with HMR.                                                             |
-| `pnpm run build`    | Production build into `build/`.                                                       |
-| `pnpm start`        | Run the production build (`node build`).                                              |
-| `pnpm run check`    | `svelte-check` + TS.                                                                  |
-| `pnpm run lint`     | ESLint + Prettier check.                                                              |
-| `pnpm test`         | Vitest unit tests.                                                                    |
-| `pnpm run test:e2e` | Build + Playwright e2e (uses stubbed Copilot).                                        |
-| `pnpm run verify`   | Lint + check + unit + e2e. Same gate the redeploy button and the pre-commit hook run. |
+| Script                          | Purpose                                                                            |
+| ------------------------------- | ---------------------------------------------------------------------------------- |
+| `pnpm run dev`                  | Vite dev server with HMR.                                                          |
+| `pnpm run dev:isolated`         | Like `dev`, but points `DATA_DIR` at a fresh temp dir. See [AGENTS.md](AGENTS.md). |
+| `pnpm run build`                | Production build into `build/`.                                                    |
+| `pnpm start`                    | Run the production build (`node build`).                                           |
+| `pnpm run serve`                | Supervisor that runs the build from `build.live/` and supports in-app redeploy.    |
+| `pnpm run check`                | `svelte-check` + TS.                                                               |
+| `pnpm run lint`                 | ESLint + Prettier check.                                                           |
+| `pnpm run format`               | Prettier write.                                                                    |
+| `pnpm test`                     | Vitest unit tests.                                                                 |
+| `pnpm run test:e2e`             | Build + Playwright e2e (uses stubbed Copilot).                                     |
+| `pnpm run test:e2e:run`         | Playwright e2e only; expects `build/` to already exist.                            |
+| `pnpm run verify`               | Parallel lint/check/unit, then build, then e2e. Same gate redeploy/pre-commit run. |
+| `pnpm run verify:sequential`    | Sequential benchmark of the same verify phases.                                    |
+| `pnpm run release:bump-actions` | Pin GitHub Actions in `.github/workflows/` to current SHAs.                        |
 
 This project uses **pnpm** (declared via `packageManager` in `package.json`).
 Use `corepack enable` once to make pnpm available without a global install.
@@ -54,6 +63,17 @@ Use `corepack enable` once to make pnpm available without a global install.
 at `scripts/git-hooks/` (containing a `pre-commit` that runs
 `pnpm run verify`). To bypass it for an emergency commit:
 `SKIP_VERIFY=1 git commit ...`.
+
+`pnpm run verify` preserves the full quality gate: lint, Svelte/TypeScript
+check, unit tests, production build, and Playwright e2e. On this workspace
+(2026-05-23), the sequential phase baseline was lint 4.8s, check 3.5s,
+unit 3.9s, build 3.7s, and Playwright e2e 6.0s for a 22.0s total. The
+parallel runner overlaps only lint/check/unit, then runs build and e2e
+serially; that candidate completed in 15.1s. Build stays after check
+because both can write `.svelte-kit`, and e2e stays after build because it
+uses `build/`, `e2e/.tmp-data`, `playwright-report/`, and `test-results/`.
+Each child line is prefixed with its phase label so terminal, pre-commit,
+and redeploy logs identify failures clearly.
 
 ## Goals
 
@@ -73,6 +93,47 @@ at `scripts/git-hooks/` (containing a `pre-commit` that runs
 - Full feature parity with VS Code Copilot Chat (no native diff view editor,
   no inline-edit-in-file UX beyond showing the diff produced by the agent).
 - Mobile-native apps. Web is responsive; that's enough.
+
+## Caveat: conversations are not independent
+
+Conversations share one host: one filesystem, one git repo, one set of
+package-manager caches, one set of long-lived side effects (pushed
+branches, deployed services, mutated databases, sent webhooks). The
+portal models conversations as if they were independent tabs, but the
+substrate underneath them is not. This is not unique to this portal —
+Copilot CLI, VS Code Copilot Chat, and similar tools all share the same
+limitation — but the portal makes it easier to forget, because you can
+fire off a second conversation from your phone while the first is still
+running on your laptop.
+
+Treat the portal like a single keyboard:
+
+- Don't run two conversations concurrently against the same repo. Side
+  effects will interleave, the working tree will reflect the union of
+  both turns, and edit/retry forking will replay onto whatever state
+  the _other_ conversation left behind.
+- "Allow always" permission grants are scoped to the user, not the
+  conversation. A grant approved in one conversation auto-allows the
+  same shape in every other conversation.
+- Snapshots (`src/lib/server/snapshots.ts`) are forensic, not
+  transactional. There is no "roll back what this conversation did."
+- If `PROJECT_ROOT` points at this repo, the agent can edit the
+  portal's own source while it's running. Vite HMR will pick the edits
+  up mid-turn.
+
+If you need real isolation, run separate portal instances with separate
+`PROJECT_ROOT`s (and ideally separate `DATA_DIR`s) — e.g. one per repo
+you want to work on concurrently.
+
+## Trust model
+
+The portal is designed for a trusted self-hosted operator, not for mutually
+distrusting tenants. Anyone allowed to use it should be someone you would trust
+with a terminal in the configured `PROJECT_ROOT`: agents can request shell
+commands, edit files, mutate git state, and perform external side effects. Use
+loopback binding or an authenticating proxy/tunnel as the real access boundary;
+inside the portal, permission prompts are confirmation and audit UX, not a
+host-sandbox guarantee. See [docs/auth-and-security.md](docs/auth-and-security.md).
 
 ## Document index
 

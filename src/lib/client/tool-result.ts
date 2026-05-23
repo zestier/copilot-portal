@@ -1,0 +1,127 @@
+// Decodes the `resultJson` field on a ToolCallRecord into a normalized
+// list of typed blocks the UI can render. The Copilot SDK's
+// `tool.execution_complete` event ships a `result` object with shape:
+//
+//   { content, detailedContent?, contents?: ContentBlock[] }
+//
+// where ContentBlock is a typed union (text / terminal / image / audio /
+// resource_link / resource). Older shapes (plain string, raw error
+// object) also occur — we normalize them all into a Block[].
+
+export type ResultBlock =
+	| { kind: 'text'; text: string }
+	| { kind: 'terminal'; text: string; exitCode?: number; cwd?: string }
+	| { kind: 'image'; data: string; mimeType: string }
+	| { kind: 'audio'; data: string; mimeType: string }
+	| { kind: 'resource_link'; name: string; uri: string; description?: string }
+	| { kind: 'resource'; uri: string; mimeType?: string; text?: string };
+
+export interface DecodedResult {
+	blocks: ResultBlock[];
+	// Best-effort plain text fallback (used as the body of a Raw
+	// disclosure, or when nothing structured is available).
+	fallbackText: string | null;
+}
+
+const markdownResultTools = new Set([
+	'ask_user',
+	'exit_plan_mode',
+	'read_agent',
+	'report_intent',
+	'request_mode_switch',
+	'task_complete'
+]);
+
+export function shouldRenderToolResultAsMarkdown(tool: string): boolean {
+	return markdownResultTools.has(tool.toLowerCase());
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return v != null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function decodeContents(arr: unknown[]): ResultBlock[] {
+	const out: ResultBlock[] = [];
+	for (const item of arr) {
+		if (!isRecord(item)) continue;
+		const t = item.type;
+		if (t === 'text' && typeof item.text === 'string') {
+			out.push({ kind: 'text', text: item.text });
+		} else if (t === 'terminal' && typeof item.text === 'string') {
+			out.push({
+				kind: 'terminal',
+				text: item.text,
+				exitCode: typeof item.exitCode === 'number' ? item.exitCode : undefined,
+				cwd: typeof item.cwd === 'string' ? item.cwd : undefined
+			});
+		} else if (
+			t === 'image' &&
+			typeof item.data === 'string' &&
+			typeof item.mimeType === 'string'
+		) {
+			out.push({ kind: 'image', data: item.data, mimeType: item.mimeType });
+		} else if (
+			t === 'audio' &&
+			typeof item.data === 'string' &&
+			typeof item.mimeType === 'string'
+		) {
+			out.push({ kind: 'audio', data: item.data, mimeType: item.mimeType });
+		} else if (
+			t === 'resource_link' &&
+			typeof item.name === 'string' &&
+			typeof item.uri === 'string'
+		) {
+			out.push({
+				kind: 'resource_link',
+				name: item.name,
+				uri: item.uri,
+				description: typeof item.description === 'string' ? item.description : undefined
+			});
+		} else if (t === 'resource' && isRecord(item.resource)) {
+			const r = item.resource;
+			if (typeof r.uri === 'string') {
+				out.push({
+					kind: 'resource',
+					uri: r.uri,
+					mimeType: typeof r.mimeType === 'string' ? r.mimeType : undefined,
+					text: typeof r.text === 'string' ? r.text : undefined
+				});
+			}
+		}
+	}
+	return out;
+}
+
+export function decodeToolResult(resultJson: string | null): DecodedResult {
+	if (!resultJson) return { blocks: [], fallbackText: null };
+	let v: unknown;
+	try {
+		v = JSON.parse(resultJson);
+	} catch {
+		return { blocks: [{ kind: 'text', text: resultJson }], fallbackText: resultJson };
+	}
+	if (typeof v === 'string') {
+		return { blocks: [{ kind: 'text', text: v }], fallbackText: v };
+	}
+	if (!isRecord(v)) {
+		const txt = JSON.stringify(v, null, 2);
+		return { blocks: [{ kind: 'text', text: txt }], fallbackText: txt };
+	}
+	if (Array.isArray(v.contents) && v.contents.length > 0) {
+		const blocks = decodeContents(v.contents);
+		if (blocks.length > 0) {
+			const fallback =
+				(typeof v.detailedContent === 'string' && v.detailedContent) ||
+				(typeof v.content === 'string' && v.content) ||
+				null;
+			return { blocks, fallbackText: fallback };
+		}
+	}
+	const text =
+		(typeof v.detailedContent === 'string' && v.detailedContent) ||
+		(typeof v.content === 'string' && v.content) ||
+		null;
+	if (text) return { blocks: [{ kind: 'text', text }], fallbackText: text };
+	const txt = JSON.stringify(v, null, 2);
+	return { blocks: [{ kind: 'text', text: txt }], fallbackText: txt };
+}

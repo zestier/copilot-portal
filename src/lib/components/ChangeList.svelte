@@ -176,7 +176,9 @@
 		flex-direction: column;
 		height: 100%;
 		min-height: 0;
+		min-width: 0;
 		font-size: var(--fs-sm);
+		overflow: hidden;
 	}
 	.panel-toolbar {
 		display: flex;
@@ -253,6 +255,7 @@
 		overflow: auto;
 		flex: 1;
 		min-height: 0;
+		min-width: 0;
 		padding: var(--space-1) 0;
 	}
 	.summary {
@@ -260,12 +263,15 @@
 		gap: var(--space-2);
 		align-items: baseline;
 		padding: var(--space-1) var(--space-3);
+		min-width: 0;
 	}
 	.row {
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
 		width: 100%;
+		min-width: 0;
+		max-width: 100%;
 		text-align: left;
 		background: transparent;
 		border: 0;
@@ -297,6 +303,7 @@
 	.status-pill {
 		font-family: var(--mono);
 		font-weight: 600;
+		flex: 0 0 auto;
 	}
 	.flags {
 		flex: 0 0 auto;

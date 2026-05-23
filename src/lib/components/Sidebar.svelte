@@ -1,15 +1,25 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { tick } from 'svelte';
-	import type { Conversation, User } from '$lib/types';
+	import type { Conversation, User, WorkspaceTicket } from '$lib/types';
 	import Alert from '$lib/components/ui/Alert.svelte';
+	import type { TicketChatMode } from '$lib/client/tickets';
+	import { ticketChatPrompt, ticketChatTitle } from '$lib/client/tickets';
+	import { createTicketDraftChat } from '$lib/client/ticket-chat-launch';
+	import { archiveWorkspaceTicket } from '$lib/client/ticket-archive';
 
 	let {
 		conversations,
+		tickets,
+		ticketCount,
+		ticketWorkspace,
 		user,
 		onnavigate
 	}: {
 		conversations: Conversation[];
+		tickets: WorkspaceTicket[];
+		ticketCount: number;
+		ticketWorkspace: string | null;
 		user: User | null;
 		onnavigate?: () => void;
 	} = $props();
@@ -21,6 +31,13 @@
 	let selectMode = $state(false);
 	let selected = $state(new Set<string>());
 	let bulkBusy = $state(false);
+	let ticketsOpen = $state(false);
+	let ticketDraftOpen = $state(false);
+	let ticketTitle = $state('');
+	let ticketBusy = $state(false);
+	let ticketLaunchId = $state<string | null>(null);
+	let ticketArchiveId = $state<string | null>(null);
+	let expandedTicketIds = $state(new Set<string>());
 	let errorMsg = $state<string | null>(null);
 	let errorTimer: ReturnType<typeof setTimeout> | null = null;
 	let firstMenuItem: HTMLButtonElement | null = $state(null);
@@ -67,6 +84,157 @@
 		await invalidateAll();
 		onnavigate?.();
 		location.href = `/conversations/${body.conversation.id}`;
+	}
+
+	async function addTicket() {
+		const title = ticketTitle.trim();
+		if (!title || !ticketWorkspace || ticketBusy) return;
+		ticketBusy = true;
+		try {
+			const ok = await api(
+				'/api/tickets',
+				{
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ title, workspace: ticketWorkspace })
+				},
+				'Add ticket'
+			);
+			if (ok) {
+				ticketTitle = '';
+				ticketDraftOpen = false;
+				await invalidateAll();
+			}
+		} finally {
+			ticketBusy = false;
+		}
+	}
+
+	function toggleTickets() {
+		ticketsOpen = !ticketsOpen;
+		if (!ticketsOpen) ticketDraftOpen = false;
+	}
+
+	function toggleTicketDraft() {
+		if (!ticketWorkspace) return;
+		ticketsOpen = true;
+		ticketDraftOpen = !ticketDraftOpen;
+	}
+
+	function isTicketExpanded(ticketId: string): boolean {
+		return expandedTicketIds.has(ticketId);
+	}
+
+	function toggleTicketExpanded(ticketId: string) {
+		const next = new Set(expandedTicketIds);
+		if (next.has(ticketId)) {
+			next.delete(ticketId);
+		} else {
+			next.add(ticketId);
+		}
+		expandedTicketIds = next;
+	}
+
+	function collapseTicket(ticketId: string) {
+		const next = new Set(expandedTicketIds);
+		next.delete(ticketId);
+		expandedTicketIds = next;
+	}
+
+	async function launchTicketChat(ticket: WorkspaceTicket, mode: TicketChatMode) {
+		if (ticketLaunchId || ticketArchiveId === ticket.id) return;
+		ticketLaunchId = ticket.id;
+		let conversationId: string | null = null;
+		try {
+			const convRes = await fetch('/api/conversations', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					title: ticketChatTitle(ticket, mode),
+					workdir: ticketWorkspace ?? undefined
+				})
+			});
+			if (!convRes.ok) {
+				flashError(`Could not create chat (${convRes.status})`);
+				return;
+			}
+			const body = await convRes.json();
+			conversationId = body.conversation.id;
+			const turnRes = await fetch(`/api/conversations/${conversationId}/turns`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ content: ticketChatPrompt(ticket, mode) })
+			});
+			if (!turnRes.ok) {
+				await api(
+					`/api/conversations/${conversationId}`,
+					{ method: 'DELETE' },
+					'Clean up failed ticket chat'
+				);
+				flashError(`Could not launch ticket chat (${turnRes.status})`);
+				return;
+			}
+			await invalidateAll();
+			onnavigate?.();
+			location.href = `/conversations/${conversationId}`;
+		} catch {
+			if (conversationId) {
+				await api(
+					`/api/conversations/${conversationId}`,
+					{ method: 'DELETE' },
+					'Clean up failed ticket chat'
+				);
+			}
+			flashError('Could not launch ticket chat');
+		} finally {
+			ticketLaunchId = null;
+		}
+	}
+
+	async function openTicketDraft(ticket: WorkspaceTicket, mode: TicketChatMode = 'do') {
+		if (ticketLaunchId || ticketArchiveId === ticket.id) return;
+		ticketLaunchId = ticket.id;
+		try {
+			const result = await createTicketDraftChat({
+				ticket,
+				mode,
+				workdir: ticketWorkspace,
+				fetcher: fetch
+			});
+			if (!result.ok) {
+				flashError(`Could not create chat (${result.status ?? 'network'})`);
+				return;
+			}
+			await invalidateAll();
+			onnavigate?.();
+			location.href = result.href;
+		} catch {
+			flashError('Could not open ticket draft');
+		} finally {
+			ticketLaunchId = null;
+		}
+	}
+
+	async function archiveTicket(ticket: WorkspaceTicket) {
+		if (ticketArchiveId || ticketLaunchId) return;
+		ticketArchiveId = ticket.id;
+		try {
+			const result = await archiveWorkspaceTicket({
+				ticketId: ticket.id,
+				workspace: ticketWorkspace,
+				fetcher: fetch
+			});
+			if (!result.ok) {
+				flashError(`Remove ticket failed (${result.status ?? 'network'})`);
+				return;
+			}
+			collapseTicket(ticket.id);
+			await invalidateAll();
+		} catch {
+			flashError('Remove ticket failed');
+		} finally {
+			ticketArchiveId = null;
+		}
 	}
 
 	async function openMenu(id: string) {
@@ -239,6 +407,132 @@
 			</button>
 		</div>
 	</div>
+
+	<section class="tickets" aria-label="Workspace tickets">
+		<div class="tickets-head">
+			<button
+				class="section-toggle tickets-toggle"
+				aria-expanded={ticketsOpen}
+				aria-controls="workspace-ticket-list"
+				onclick={toggleTickets}
+			>
+				<span class="caret" class:open={ticketsOpen}>▸</span>
+				Tickets ({ticketCount})
+			</button>
+			<button
+				class="btn sm ghost"
+				title="Add ticket"
+				aria-label="Add ticket"
+				disabled={!ticketWorkspace}
+				onclick={toggleTicketDraft}
+			>
+				+
+			</button>
+		</div>
+		{#if ticketsOpen}
+			<div id="workspace-ticket-list">
+				{#if ticketDraftOpen}
+					<form
+						class="ticket-form"
+						onsubmit={(e) => {
+							e.preventDefault();
+							addTicket();
+						}}
+					>
+						<input
+							bind:value={ticketTitle}
+							maxlength="200"
+							placeholder="Do this later..."
+							aria-label="Ticket title"
+							disabled={ticketBusy}
+						/>
+						<button class="btn sm" disabled={ticketBusy || !ticketTitle.trim()}>Add</button>
+					</form>
+				{/if}
+				{#if tickets.length === 0}
+					<p class="muted empty ticket-empty">No open tickets.</p>
+				{:else}
+					<div class="ticket-list">
+						{#each tickets as ticket (ticket.id)}
+							<div class="ticket">
+								<div class="ticket-row">
+									<button
+										class="ticket-disclosure"
+										title={ticket.title}
+										aria-expanded={isTicketExpanded(ticket.id)}
+										aria-controls={`ticket-details-${ticket.id}`}
+										onclick={() => toggleTicketExpanded(ticket.id)}
+									>
+										<span class="caret ticket-caret" class:open={isTicketExpanded(ticket.id)}
+											>▸</span
+										>
+										<span class="ticket-title">{ticket.title}</span>
+									</button>
+								</div>
+								{#if isTicketExpanded(ticket.id)}
+									<div class="ticket-expanded" id={`ticket-details-${ticket.id}`}>
+										<div
+											class="ticket-actions"
+											role="group"
+											aria-label={`Actions for ${ticket.title}`}
+										>
+											<button
+												class="ticket-action"
+												title="Start implementation chat"
+												aria-label={`Do ticket: ${ticket.title}`}
+												disabled={ticketLaunchId !== null || ticketArchiveId === ticket.id}
+												onclick={() => launchTicketChat(ticket, 'do')}
+											>
+												Do
+											</button>
+											<button
+												class="ticket-action"
+												title="Open editable draft chat"
+												aria-label={`Open draft for ticket: ${ticket.title}`}
+												disabled={ticketLaunchId !== null || ticketArchiveId === ticket.id}
+												onclick={() => openTicketDraft(ticket)}
+											>
+												Draft
+											</button>
+											<button
+												class="ticket-action"
+												title="Start ticket refinement chat"
+												aria-label={`Refine ticket: ${ticket.title}`}
+												disabled={ticketLaunchId !== null || ticketArchiveId === ticket.id}
+												onclick={() => launchTicketChat(ticket, 'refine')}
+											>
+												Refine
+											</button>
+											<button
+												class="ticket-action danger"
+												title="Remove ticket from open list"
+												aria-label={`Remove ticket: ${ticket.title}`}
+												disabled={ticketLaunchId !== null || ticketArchiveId === ticket.id}
+												onclick={() => archiveTicket(ticket)}
+											>
+												Remove
+											</button>
+										</div>
+										<div class="ticket-details">
+											{#if ticket.body.trim()}
+												<div class="ticket-body">{ticket.body}</div>
+											{:else}
+												<div class="ticket-body muted">No details.</div>
+											{/if}
+											<div class="ticket-meta muted">ID: {ticket.id}</div>
+										</div>
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+					{#if ticketCount > tickets.length}
+						<p class="muted ticket-more">Showing latest {tickets.length} open tickets.</p>
+					{/if}
+				{/if}
+			</div>
+		{/if}
+	</section>
 
 	{#if errorMsg}
 		<div class="error-wrap">
@@ -475,6 +769,150 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-2);
+	}
+	.tickets {
+		padding: 0 var(--space-3) var(--space-2);
+		border-bottom: 1px solid var(--border);
+		margin-bottom: var(--space-2);
+	}
+	.tickets-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+		margin-bottom: var(--space-1);
+	}
+	.tickets-toggle {
+		flex: 1;
+		min-width: 0;
+		padding: var(--space-1) 0;
+	}
+	.ticket-form {
+		display: flex;
+		gap: var(--space-1);
+		margin-bottom: var(--space-2);
+	}
+	.ticket-form input {
+		min-width: 0;
+		flex: 1;
+		padding: 0.25rem 0.4rem;
+	}
+	.ticket-empty {
+		padding: 0;
+		margin: var(--space-1) 0 var(--space-2);
+		font-size: var(--fs-sm);
+	}
+	.ticket-more {
+		margin: calc(-1 * var(--space-1)) 0 var(--space-2);
+		font-size: var(--fs-xs);
+	}
+	.ticket-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		margin-bottom: var(--space-2);
+	}
+	.ticket {
+		border-radius: var(--radius-sm);
+		min-width: 0;
+		padding: 0.25rem 0.35rem;
+	}
+	.ticket:hover,
+	.ticket:focus-within {
+		background: var(--surface-2);
+	}
+	.ticket-row {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-width: 0;
+	}
+	.ticket-disclosure {
+		display: flex;
+		min-width: 0;
+		flex: 1;
+		align-items: center;
+		gap: 0.25rem;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+		padding: 0;
+		text-align: left;
+	}
+	.ticket-disclosure:hover,
+	.ticket-disclosure:focus-visible {
+		color: var(--text);
+		outline: none;
+	}
+	.ticket-caret {
+		color: var(--text-muted);
+		font-size: var(--fs-xs);
+		flex-shrink: 0;
+	}
+	.ticket-action {
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+		font-size: var(--fs-xs);
+		padding: 0.1rem 0.35rem;
+		flex-shrink: 0;
+	}
+	.ticket-action:hover,
+	.ticket-action:focus-visible {
+		color: var(--text);
+		border-color: var(--accent);
+		outline: none;
+	}
+	.ticket-action.danger {
+		margin-left: auto;
+		color: var(--danger);
+		border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+	}
+	.ticket-action.danger:hover,
+	.ticket-action.danger:focus-visible {
+		color: var(--danger-text);
+		border-color: var(--danger);
+		background: var(--danger);
+	}
+	.ticket-action:disabled {
+		cursor: wait;
+		opacity: 0.65;
+	}
+	.ticket-title {
+		min-width: 0;
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: var(--fs-sm);
+	}
+	.ticket-expanded {
+		min-width: 0;
+	}
+	.ticket-details {
+		margin: 0.3rem 0 0.15rem 1rem;
+		font-size: var(--fs-xs);
+		line-height: 1.35;
+		color: var(--text);
+	}
+	.ticket-body {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.ticket-meta {
+		margin-top: 0.25rem;
+		font-family: var(--font-mono);
+		overflow-wrap: anywhere;
+	}
+	.ticket-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.3rem;
+		margin: 0.3rem 0 0 1rem;
+		min-width: 0;
 	}
 	.count {
 		font-size: var(--fs-xs);

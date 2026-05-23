@@ -17,6 +17,9 @@ import * as convs from '../db/repos/conversations';
 import * as usageRepo from '../db/repos/usage';
 import * as pool from './pool';
 import { deriveTitle, isDefaultTitle } from '../title';
+import * as interactiveRequests from './interactive-requests';
+import { PORTAL_PRELUDE } from './portal-prelude';
+import { isStubMode } from './bridge-stub';
 import { AsyncQueue } from './async-queue';
 import { snapshot as takeSnapshot } from '../snapshots';
 import type { BridgeOpenOptions } from './bridge';
@@ -30,22 +33,18 @@ interface PendingTool {
 	status: 'pending' | 'ok' | 'error';
 	startedAt: number;
 	endedAt: number | null;
-	textOffset: number;
-}
-
-interface PendingEdit {
-	path: string;
-	diff: string;
-	textOffset: number;
+	textOffset: number | null;
+	parentToolCallId: string | null;
 }
 
 interface PendingReasoning {
 	id: string;
 	segmentIndex: number;
 	text: string;
-	textOffset: number;
+	textOffset: number | null;
 	startedAt: number;
 	durationMs: number | null;
+	parentToolCallId: string | null;
 }
 
 // A single event in the turn's transcript, paired with its monotonic id.
@@ -137,6 +136,15 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	// surface an event MUST go through here so that ids stay contiguous
 	// and aligned with the replay buffer.
 	function emit(ev: PortalEvent) {
+		// Live-only events (per-tool partial output, progress messages):
+		// fan out to active subscribers but do NOT append to the event log.
+		// Reconnects don't replay them; the authoritative final state comes
+		// from `tool.result`.
+		if (ev.type === 'tool.partial_output' || ev.type === 'tool.progress') {
+			const wrapped: IdentifiedEvent = { id: -1, event: ev };
+			for (const q of subscribers) q.push(wrapped);
+			return;
+		}
 		const id = eventLog.length;
 		eventLog.push(ev);
 		const wrapped: IdentifiedEvent = { id, event: ev };
@@ -157,6 +165,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		},
 		async abort() {
 			turnAc.abort();
+			interactiveRequests.cancelConversation(opts.conversationId, 'turn_aborted');
 			try {
 				await session.abort();
 			} catch {
@@ -170,12 +179,24 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	// Accumulators for persistence.
 	let assistantBuf = '';
 	let assistantId: string | null = null;
+	let persistedAssistantId: string | null = null;
 	const pendingTools = new Map<string, PendingTool>();
-	const pendingEdits: PendingEdit[] = [];
 	// Reasoning segments keyed by the segmentId minted in the bridge. Order
 	// of insertion matches stream order, which is what we persist.
 	const pendingReasoning = new Map<string, PendingReasoning>();
+	const persistedFileEditKeys = new Set<string>();
 	let nextReasoningIndex = 0;
+
+	function ensurePersistedAssistant(): string {
+		if (persistedAssistantId) return persistedAssistantId;
+		const persisted = messages.append(opts.conversationId, {
+			role: 'assistant',
+			content: assistantBuf,
+			status: 'streaming'
+		});
+		persistedAssistantId = persisted.id;
+		return persisted.id;
+	}
 
 	function dispatch(ev: PortalEvent) {
 		// Suppress the SDK's `done` event: we always emit our own terminal
@@ -186,28 +207,42 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 
 		emit(ev);
 
-		if (ev.type === 'message.start') assistantId = ev.messageId;
-		else if (ev.type === 'message.delta') {
+		if (ev.type === 'message.start') {
+			assistantId = ev.messageId;
+			ensurePersistedAssistant();
+		} else if (ev.type === 'message.delta') {
 			assistantBuf += ev.text;
+			messages.updateContentOnly(ensurePersistedAssistant(), assistantBuf);
 		} else if (ev.type === 'message.reasoning') {
+			const persistedId = ensurePersistedAssistant();
 			let seg = pendingReasoning.get(ev.segmentId);
 			if (!seg) {
+				const isChild = !!ev.parentToolCallId;
 				seg = {
-					id: ulid(),
+					id: ev.segmentId,
 					segmentIndex: nextReasoningIndex++,
 					text: '',
-					textOffset: assistantBuf.length,
+					// Child reasoning isn't anchored to the outer assistant text;
+					// it's rendered inside the SubagentCall card instead.
+					textOffset: isChild ? null : assistantBuf.length,
 					startedAt: Date.now(),
-					durationMs: null
+					durationMs: null,
+					parentToolCallId: ev.parentToolCallId ?? null
 				};
 				pendingReasoning.set(ev.segmentId, seg);
 			}
 			seg.text += ev.text;
+			messages.upsertReasoningBlock(persistedId, seg);
 		} else if (ev.type === 'message.reasoning.end') {
 			const seg = pendingReasoning.get(ev.segmentId);
-			if (seg) seg.durationMs = ev.durationMs;
+			if (seg) {
+				seg.durationMs = ev.durationMs;
+				messages.upsertReasoningBlock(ensurePersistedAssistant(), seg);
+			}
 		} else if (ev.type === 'tool.call') {
-			pendingTools.set(ev.toolCallId, {
+			const isChild = !!ev.parentToolCallId;
+			const persistedId = ensurePersistedAssistant();
+			const tool: PendingTool = {
 				toolCallId: ev.toolCallId,
 				tool: ev.tool,
 				argsJson: safeJson(ev.args),
@@ -215,7 +250,20 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				status: 'pending',
 				startedAt: Date.now(),
 				endedAt: null,
-				textOffset: assistantBuf.length
+				textOffset: isChild ? null : assistantBuf.length,
+				parentToolCallId: ev.parentToolCallId ?? null
+			};
+			pendingTools.set(ev.toolCallId, tool);
+			messages.upsertToolCall(persistedId, {
+				id: tool.toolCallId,
+				tool: tool.tool,
+				argsJson: tool.argsJson,
+				resultJson: tool.resultJson,
+				status: tool.status,
+				startedAt: tool.startedAt,
+				endedAt: tool.endedAt,
+				textOffset: tool.textOffset,
+				parentToolCallId: tool.parentToolCallId
 			});
 		} else if (ev.type === 'tool.result') {
 			const tc = pendingTools.get(ev.toolCallId);
@@ -223,13 +271,29 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				tc.status = ev.ok ? 'ok' : 'error';
 				tc.resultJson = safeJson(ev.output ?? ev.summary);
 				tc.endedAt = Date.now();
+				messages.updateToolCall(ev.toolCallId, {
+					status: tc.status,
+					resultJson: tc.resultJson,
+					endedAt: tc.endedAt
+				});
 			}
+		} else if (ev.type === 'subagent.lifecycle') {
+			messages.updateBackgroundAgentLifecycle(ev.toolCallId, ev.agentId, ev.status);
 		} else if (ev.type === 'file.edit') {
-			pendingEdits.push({
-				path: ev.path,
-				diff: ev.diff,
-				textOffset: assistantBuf.length
-			});
+			const isChild = !!ev.parentToolCallId;
+			const textOffset = isChild ? null : assistantBuf.length;
+			const parentToolCallId = ev.parentToolCallId ?? null;
+			const key = JSON.stringify([ev.path, ev.diff, textOffset, parentToolCallId]);
+			if (!persistedFileEditKeys.has(key)) {
+				persistedFileEditKeys.add(key);
+				messages.insertFileEdit(
+					ensurePersistedAssistant(),
+					ev.path,
+					ev.diff,
+					textOffset,
+					parentToolCallId
+				);
+			}
 		} else if (ev.type === 'context.usage') {
 			try {
 				usageRepo.upsert(opts.conversationId, {
@@ -249,9 +313,23 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		}
 	}
 
+	// Prepend a portal-context block telling the agent it's running through
+	// a permission gateway and that reject `feedback` is authoritative.
+	// The user's message itself is preserved verbatim after the block;
+	// this only changes what the agent sees, not what we persist (the raw
+	// user content was already stored by the turns route before we got
+	// here).
+	//
+	// Skip in stub mode: the deterministic test stub echoes whatever it
+	// receives, so dumping the prelude into its reply breaks tests that
+	// assert on the literal user prompt and wastes tokens against a
+	// fixed-string responder that wouldn't act on the guidance anyway.
+	const prelude = isStubMode() ? '' : PORTAL_PRELUDE;
+	const promptToSend = prelude ? `${prelude}\n\n${opts.prompt}` : opts.prompt;
+
 	turn.finishedPromise = (async () => {
 		try {
-			for await (const ev of session.send(opts.prompt, turnAc.signal)) {
+			for await (const ev of session.send(promptToSend, turnAc.signal)) {
 				dispatch(ev);
 			}
 		} catch (e) {
@@ -267,48 +345,20 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		} finally {
 			const status: 'interrupted' | 'complete' = turnAc.signal.aborted ? 'interrupted' : 'complete';
 
-			// Persist assistant message + tool calls + file edits.
-			let persistedAssistantId: string | null = null;
 			try {
-				if (
-					assistantBuf ||
-					assistantId ||
-					pendingTools.size ||
-					pendingEdits.length ||
-					pendingReasoning.size
-				) {
-					const persisted = messages.append(opts.conversationId, {
-						role: 'assistant',
-						content: assistantBuf,
-						status
-					});
-					persistedAssistantId = persisted.id;
+				if (persistedAssistantId || assistantBuf || assistantId || pendingTools.size) {
+					const id = ensurePersistedAssistant();
+					messages.updateContent(id, assistantBuf, status);
 					for (const t of pendingTools.values()) {
-						messages.insertToolCall(persisted.id, {
-							id: t.toolCallId,
-							tool: t.tool,
-							argsJson: t.argsJson,
-							resultJson: t.resultJson,
-							status: t.status === 'pending' ? 'error' : t.status,
-							startedAt: t.startedAt,
-							endedAt: t.endedAt,
-							textOffset: t.textOffset
-						});
-					}
-					for (const e of pendingEdits) {
-						messages.insertFileEdit(persisted.id, e.path, e.diff, e.textOffset);
-					}
-					// Preserve insertion order so segment_index stays monotonic
-					// with the stream.
-					for (const seg of pendingReasoning.values()) {
-						messages.insertReasoningBlock(persisted.id, {
-							id: seg.id,
-							segmentIndex: seg.segmentIndex,
-							text: seg.text,
-							textOffset: seg.textOffset,
-							startedAt: seg.startedAt,
-							durationMs: seg.durationMs
-						});
+						if (t.status === 'pending') {
+							t.status = 'error';
+							t.endedAt = Date.now();
+							messages.updateToolCall(t.toolCallId, {
+								resultJson: t.resultJson,
+								status: t.status,
+								endedAt: t.endedAt
+							});
+						}
 					}
 				}
 				convs.touch(opts.conversationId);

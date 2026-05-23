@@ -88,6 +88,9 @@
 		<aside class="sidebar" class:open={sidebarOpen} aria-hidden={!sidebarOpen}>
 			<Sidebar
 				conversations={data.conversations}
+				tickets={data.tickets}
+				ticketCount={data.ticketCount}
+				ticketWorkspace={data.ticketWorkspace}
 				user={data.user}
 				onnavigate={closeOnMobileNavigate}
 			/>

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { setupLocalEnv } from './helpers/env';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 // Shared mock SDK client/session instances. These are mutated per test.
 const sdkSessionStub = {
@@ -7,7 +9,17 @@ const sdkSessionStub = {
 	off: vi.fn(),
 	send: vi.fn(),
 	abort: vi.fn(),
-	disconnect: vi.fn()
+	disconnect: vi.fn(),
+	workspacePath: '/tmp/copilot-session-workspace',
+	rpc: {
+		mode: {
+			set: vi.fn()
+		},
+		permissions: {
+			setApproveAll: vi.fn(),
+			resetSessionApprovals: vi.fn()
+		}
+	}
 };
 
 const clientStub = {
@@ -20,21 +32,29 @@ const clientStub = {
 	getSessionMetadata: vi.fn()
 };
 
+// Count how many times `new CopilotClient(...)` runs so tests can
+// distinguish "one shared client" from "one per portal user". The mock
+// constructor still returns the same `clientStub` instance — what we
+// care about is how many distinct construction calls happened.
+const clientCtor = vi.fn();
+
 vi.mock('@github/copilot-sdk', () => {
 	class CopilotClient {
-		constructor() {
+		constructor(...args: unknown[]) {
+			clientCtor(...args);
 			return clientStub as unknown as CopilotClient;
 		}
 	}
 	return { CopilotClient };
 });
 
-// Import after the mock is registered. The bridge module caches the client
-// in a module-level `sharedClient`, so we use vi.resetModules between tests
-// to force a fresh import (and a fresh `new CopilotClient(...)` call which
-// still returns our stub).
+// Import after the mock is registered. The bridge module caches a
+// CopilotClient per portal `userId`; we use vi.resetModules() between
+// tests to force a fresh import (and a fresh `new CopilotClient(...)`
+// call which still returns our stub).
 async function importBridge() {
 	vi.resetModules();
+	clientCtor.mockClear();
 	return await import('../src/lib/server/copilot/bridge');
 }
 
@@ -49,13 +69,25 @@ const baseOpts = {
 beforeEach(async () => {
 	// bridge.open() loads config (via bridge-stub.isStubMode → loadConfig)
 	// so we need the same AUTH_MODE=none + HOST guards that real tests use.
-	await setupLocalEnv('portal-bridge-test-');
+	const dataDir = await setupLocalEnv('portal-bridge-test-');
+	const sessionWorkspace = join(dataDir, 'session-workspace');
+	mkdirSync(sessionWorkspace, { recursive: true });
 	// Reset every stub so any test that re-implements one (e.g. the
 	// usage_info test below mutates sdkSessionStub.send) can't leak its
 	// implementation into the next test. Re-install default resolved
 	// values for the methods bridge expects to be promise-returning.
 	for (const fn of Object.values(clientStub)) fn.mockReset();
-	for (const fn of Object.values(sdkSessionStub)) fn.mockReset();
+	for (const fn of [
+		sdkSessionStub.on,
+		sdkSessionStub.off,
+		sdkSessionStub.send,
+		sdkSessionStub.abort,
+		sdkSessionStub.disconnect,
+		sdkSessionStub.rpc.mode.set,
+		sdkSessionStub.rpc.permissions.setApproveAll,
+		sdkSessionStub.rpc.permissions.resetSessionApprovals
+	])
+		fn.mockReset();
 	clientStub.start.mockResolvedValue(undefined);
 	clientStub.stop.mockResolvedValue(undefined);
 	clientStub.createSession.mockResolvedValue(sdkSessionStub);
@@ -63,8 +95,12 @@ beforeEach(async () => {
 	clientStub.getAuthStatus.mockResolvedValue({ authenticated: true });
 	clientStub.listModels.mockResolvedValue([]);
 	clientStub.getSessionMetadata.mockResolvedValue(undefined);
+	sdkSessionStub.workspacePath = sessionWorkspace;
 	sdkSessionStub.abort.mockResolvedValue(undefined);
 	sdkSessionStub.disconnect.mockResolvedValue(undefined);
+	sdkSessionStub.rpc.mode.set.mockResolvedValue(undefined);
+	sdkSessionStub.rpc.permissions.setApproveAll.mockResolvedValue({ success: true });
+	sdkSessionStub.rpc.permissions.resetSessionApprovals.mockResolvedValue(undefined);
 });
 
 describe('bridge.open() session resume behavior', () => {
@@ -186,6 +222,630 @@ describe('bridge.open() context-usage event translation', () => {
 	});
 });
 
+describe('bridge.open() session mode and permissions', () => {
+	it('injects portal tools', async () => {
+		const { open } = await importBridge();
+		await open({ ...baseOpts, mode: 'best-effort' });
+
+		const tools = clientStub.createSession.mock.calls[0][0].tools as Array<{
+			name: string;
+			description?: string;
+		}>;
+		expect(tools).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ name: 'git_status' }),
+				expect.objectContaining({ name: 'git_diff' }),
+				expect.objectContaining({ name: 'git_log' }),
+				expect.objectContaining({ name: 'git_show_commit' }),
+				expect.objectContaining({ name: 'git_show_file' }),
+				expect.objectContaining({ name: 'ticket_add' }),
+				expect.objectContaining({ name: 'ticket_list' }),
+				expect.objectContaining({ name: 'ticket_get' }),
+				expect.objectContaining({ name: 'ticket_update' }),
+				expect.objectContaining({
+					name: 'permission_capabilities',
+					description: expect.stringContaining('allowed alternatives')
+				}),
+				expect.objectContaining({
+					name: 'request_mode_switch',
+					description: expect.stringContaining('interactive mode')
+				})
+			])
+		);
+	});
+
+	it('permission_capabilities reports effective alternatives without raw grant internals', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const convs = await import('../src/lib/server/db/repos/conversations');
+		const user = ensureLocalUser();
+		convs.create(user.id, {
+			id: baseOpts.conversationId,
+			title: 'test',
+			workdir: baseOpts.workingDirectory,
+			model: baseOpts.model
+		});
+		settings.addGrant({
+			userId: user.id,
+			conversationId: null,
+			tool: 'url_fetcher',
+			permissionKind: 'url',
+			scope: { kind: 'url', rule: { kind: 'host', host: 'api.example.test' } }
+		});
+		settings.addGrant({
+			userId: user.id,
+			conversationId: baseOpts.conversationId,
+			tool: 'read',
+			permissionKind: 'read',
+			scope: {
+				kind: 'fs',
+				perms: ['read'],
+				rule: { kind: 'path', root: 'absolute', behavior: 'exact', value: '/secret/file.txt' }
+			},
+			decision: 'deny',
+			denyReason: 'Do not expose this exact path in capability output.'
+		});
+		await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+
+		const tools = clientStub.createSession.mock.calls[0][0].tools as Array<{
+			name: string;
+			handler(args: unknown): Promise<string>;
+		}>;
+		const tool = tools.find((t) => t.name === 'permission_capabilities');
+		expect(tool).toBeTruthy();
+
+		const response = JSON.parse(
+			await tool!.handler({ permissionKind: 'url', toolName: 'url_fetcher' })
+		) as {
+			mode: string;
+			bestEffort: boolean;
+			capabilities: Array<{
+				permissionKind: string;
+				status: string;
+				allowed?: Array<{ summary: string }>;
+			}>;
+			escalation: {
+				forcePermissionPrompt: { supported: boolean };
+				requestModeSwitch: { supported: boolean };
+			};
+		};
+
+		expect(response).toMatchObject({
+			mode: 'best-effort',
+			bestEffort: true,
+			escalation: {
+				forcePermissionPrompt: { supported: true },
+				requestModeSwitch: { supported: true }
+			}
+		});
+		expect(response.capabilities).toEqual([
+			expect.objectContaining({
+				permissionKind: 'url',
+				status: 'allowed',
+				allowed: [
+					expect.objectContaining({
+						summary: expect.stringContaining('api.example.test')
+					})
+				]
+			})
+		]);
+
+		const readResponseText = await tool!.handler({ permissionKind: 'read' });
+		expect(readResponseText).not.toContain('/secret/file.txt');
+		expect(readResponseText).not.toContain('Do not expose this exact path');
+		expect(readResponseText).toContain('specific absolute exact rule');
+	});
+
+	it('maps best-effort mode to autopilot on the runtime RPC', async () => {
+		const { open } = await importBridge();
+		const session = await open({ ...baseOpts, mode: 'best-effort' });
+
+		await session.setMode('best-effort');
+
+		expect(sdkSessionStub.rpc.mode.set).toHaveBeenCalledWith({ mode: 'autopilot' });
+	});
+
+	it('auto-approves filesystem requests inside the SDK session workspace', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		await open({ ...baseOpts, userId: user.id, workingDirectory: '/workspace/project' });
+
+		const planPath = join(sdkSessionStub.workspacePath, 'plan.md');
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const result = await onPermissionRequest({
+			kind: 'write',
+			path: planPath,
+			args: { path: planPath }
+		});
+
+		expect(result).toEqual({ kind: 'approve-once' });
+	});
+
+	it('lets an explicit deny grant revoke SDK session workspace access', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const user = ensureLocalUser();
+		settings.addGrant({
+			userId: user.id,
+			conversationId: null,
+			tool: 'write',
+			permissionKind: 'write',
+			scope: {
+				kind: 'fs',
+				perms: ['write'],
+				rule: { kind: 'path', root: 'session-workspace', behavior: 'any' }
+			},
+			decision: 'deny'
+		});
+		await open({ ...baseOpts, userId: user.id, workingDirectory: '/workspace/project' });
+
+		const planPath = join(sdkSessionStub.workspacePath, 'plan.md');
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const result = await onPermissionRequest({
+			kind: 'write',
+			path: planPath,
+			args: { path: planPath }
+		});
+
+		expect(result).toEqual({ kind: 'reject' });
+	});
+
+	it('auto-rejects prompt-worthy permission requests in best-effort mode with concise feedback', async () => {
+		const { open } = await importBridge();
+		await open({ ...baseOpts, mode: 'best-effort' });
+
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const result = await onPermissionRequest({
+			kind: 'shell',
+			toolName: 'shell',
+			fullCommandText: "printf 'best-effort demo\\n' > /tmp/copilot-best-effort-demo.txt"
+		});
+
+		expect(result).toEqual(
+			expect.objectContaining({
+				kind: 'reject',
+				feedback: expect.stringContaining('best-effort')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('A shell permission request was auto-rejected')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('Try a structured tool')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('request_mode_switch')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('forcePermissionPrompt')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('permission_capabilities')
+			})
+		);
+		const feedback = (result as { feedback: string }).feedback;
+		expect(feedback).not.toContain('The user would have been asked to approve:');
+		expect(feedback).not.toContain('shell (shell)');
+		expect(feedback).not.toContain(
+			"printf 'best-effort demo\\n' > /tmp/copilot-best-effort-demo.txt"
+		);
+		expect(feedback).not.toContain('Reason: redirection');
+
+		const cases = [
+			{
+				request: { kind: 'read', toolName: 'view', path: '/var/private/read-secret.txt' },
+				expectedKind: 'read',
+				expectedHint: 'structured read/search tools',
+				forbiddenDetail: '/var/private/read-secret.txt'
+			},
+			{
+				request: {
+					kind: 'write',
+					toolName: 'create',
+					path: '/var/private/write-secret.txt'
+				},
+				expectedKind: 'write',
+				expectedHint: 'structured workspace edit/create workflow',
+				forbiddenDetail: '/var/private/write-secret.txt'
+			},
+			{
+				request: { kind: 'edit', toolName: 'edit', path: '/var/private/edit-secret.txt' },
+				expectedKind: 'edit',
+				expectedHint: 'structured workspace edit/create workflow',
+				forbiddenDetail: '/var/private/edit-secret.txt'
+			},
+			{
+				request: {
+					kind: 'url',
+					toolName: 'web_fetch',
+					url: 'https://example.com/private-token'
+				},
+				expectedKind: 'url',
+				expectedHint: 'local source or another non-network approach',
+				forbiddenDetail: 'https://example.com/private-token'
+			}
+		];
+
+		for (const c of cases) {
+			const kindResult = await onPermissionRequest(c.request);
+			expect(kindResult).toEqual(
+				expect.objectContaining({
+					kind: 'reject',
+					feedback: expect.stringContaining(
+						`A ${c.expectedKind} permission request was auto-rejected`
+					)
+				})
+			);
+			const kindFeedback = (kindResult as { feedback: string }).feedback;
+			expect(kindFeedback).toContain(c.expectedHint);
+			expect(kindFeedback).toContain('permission_capabilities');
+			expect(kindFeedback).toContain('forcePermissionPrompt');
+			expect(kindFeedback).toContain('request_mode_switch');
+			expect(kindFeedback).not.toContain(c.forbiddenDetail);
+		}
+	});
+
+	it('auto-rejects shell git commands with structured-tool feedback', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		await open({ ...baseOpts, userId: user.id });
+
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const result = await onPermissionRequest({
+			kind: 'shell',
+			toolName: 'shell',
+			fullCommandText: 'git status --short',
+			args: { command: 'git status --short' }
+		});
+
+		expect(result).toEqual(
+			expect.objectContaining({
+				kind: 'reject',
+				feedback: expect.stringContaining('git_status')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
+				feedback: expect.stringContaining('forcePermissionPrompt')
+			})
+		);
+	});
+
+	it('matches manual shell rerun approvals against the persisted tool args', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const convs = await import('../src/lib/server/db/repos/conversations');
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const { argsHash } = await import('../src/lib/server/tool-invocation');
+		const user = ensureLocalUser();
+		convs.create(user.id, {
+			id: baseOpts.conversationId,
+			title: 'rerun',
+			workdir: baseOpts.workingDirectory,
+			model: baseOpts.model
+		});
+		const msg = messages.append(baseOpts.conversationId, { role: 'assistant', content: '' });
+		const args = {
+			command: 'node -e "process.exit(7)"',
+			description: 'Trigger harmless nonzero failure',
+			mode: 'sync',
+			initial_wait: 30
+		};
+		messages.insertToolCall(msg.id, {
+			id: 'tc-rerun-shell',
+			tool: 'bash',
+			argsJson: JSON.stringify(args),
+			resultJson: null,
+			status: 'pending',
+			startedAt: Date.now(),
+			endedAt: null,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+		settings.addGrant({
+			userId: user.id,
+			conversationId: baseOpts.conversationId,
+			tool: 'shell',
+			permissionKind: null,
+			scopePattern: null,
+			scope: null,
+			decision: 'allow',
+			argsHash: argsHash(args),
+			expiresAt: Date.now() + 60_000
+		});
+		await open({ ...baseOpts, userId: user.id });
+
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const result = await onPermissionRequest({
+			kind: 'shell',
+			toolName: 'shell',
+			toolCallId: 'tc-rerun-shell',
+			fullCommandText: 'node -e "process.exit(7)"',
+			args: { command: 'node -e "process.exit(7)"' }
+		});
+
+		expect(result).toEqual({ kind: 'approve-once' });
+	});
+
+	it('raises a one-time prompt for shell git escalation even in best-effort mode', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const reason =
+			'Structured Git tools do not expose reflog expiration, and this exact command is needed for cleanup.';
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'shell',
+				toolName: 'shell',
+				fullCommandText: 'git reflog expire --expire=now --all',
+				args: {
+					command: 'git reflog expire --expire=now --all',
+					forcePermissionPrompt: reason
+				}
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'shell',
+				permissionKind: 'shell',
+				canPersistDecision: false,
+				escalationReason: reason
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('recognizes top-level forcePermissionPrompt for escalation', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const reason =
+			'User explicitly requested a commit; structured Git tools cannot commit changes.';
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'shell',
+				toolName: 'shell',
+				fullCommandText: 'git commit -m x',
+				forcePermissionPrompt: reason,
+				args: { command: 'git commit -m x' }
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'shell',
+				permissionKind: 'shell',
+				canPersistDecision: false,
+				escalationReason: reason
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('recognizes forcePermissionPrompt from persisted tool args via toolCallId', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const convs = await import('../src/lib/server/db/repos/conversations');
+		const user = ensureLocalUser();
+		const conv = convs.create(user.id, {
+			id: baseOpts.conversationId,
+			title: 'test',
+			workdir: baseOpts.workingDirectory,
+			model: baseOpts.model
+		});
+		const assistant = messages.append(conv.id, {
+			role: 'assistant',
+			content: '',
+			status: 'streaming'
+		});
+		const reason =
+			'User explicitly requested committing these reviewed local changes; structured Git tools cannot commit.';
+		messages.insertToolCall(assistant.id, {
+			id: 'git-commit-tool',
+			tool: 'shell',
+			argsJson: JSON.stringify({
+				command: 'git commit -m x',
+				forcePermissionPrompt: reason
+			}),
+			resultJson: null,
+			status: 'pending',
+			startedAt: Date.now(),
+			endedAt: null,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'shell',
+				toolName: 'shell',
+				toolCallId: 'git-commit-tool',
+				fullCommandText: 'git commit -m x',
+				args: { command: 'git commit -m x' }
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		let seen: Awaited<ReturnType<typeof iter.next>> | null = null;
+		for (let i = 0; i < 5; i++) {
+			const next = await iter.next();
+			if (next.value?.type === 'interactive.request') {
+				seen = next;
+				break;
+			}
+		}
+		expect(seen?.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'shell',
+				permissionKind: 'shell',
+				canPersistDecision: false,
+				escalationReason: reason
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('does not auto-deny the request_mode_switch tool in best-effort mode', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const session = await open({ ...baseOpts, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'custom-tool',
+				toolName: 'request_mode_switch',
+				toolDescription:
+					'Request switching this conversation to interactive mode when blocked by permissions.',
+				args: { mode: 'interactive', reason: 'Need extra permission to continue.' }
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'request_mode_switch',
+				permissionKind: 'custom-tool',
+				canPersistDecision: false
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('always prompts request_mode_switch even when approve-all is enabled', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const session = await open({ ...baseOpts, approveAllTools: true });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'custom-tool',
+				toolName: 'request_mode_switch',
+				toolDescription:
+					'Request switching this conversation to interactive mode when blocked by permissions.',
+				args: { mode: 'interactive', reason: 'Need extra permission to continue.' }
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'request_mode_switch',
+				permissionKind: 'custom-tool',
+				canPersistDecision: false
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('switches to interactive mode when request_mode_switch runs', async () => {
+		const { open } = await importBridge();
+		await open({ ...baseOpts, mode: 'best-effort' });
+
+		const tools = clientStub.createSession.mock.calls[0][0].tools as Array<{
+			name: string;
+			handler: (args: unknown) => Promise<unknown>;
+		}>;
+		const tool = tools.find((t) => t.name === 'request_mode_switch');
+		expect(tool).toBeTruthy();
+		sdkSessionStub.rpc.mode.set.mockClear();
+
+		const result = await tool!.handler({
+			mode: 'interactive',
+			reason: 'Need to request an additional permission.'
+		});
+
+		expect(sdkSessionStub.rpc.mode.set).toHaveBeenCalledWith({ mode: 'interactive' });
+		expect(result).toBe(
+			'Switched conversation to interactive mode. Reason: Need to request an additional permission.'
+		);
+	});
+});
+
 describe('bridge.open() reasoning segmentation', () => {
 	it('opens a new reasoning segment after a visible delta or tool call, and emits .end on close', async () => {
 		clientStub.getSessionMetadata.mockResolvedValue(undefined);
@@ -244,5 +904,124 @@ describe('bridge.open() reasoning segmentation', () => {
 		expect(firstEndIdx).toBeLessThan(toolCallIdx);
 		expect(secondEndIdx).toBeGreaterThanOrEqual(0);
 		expect(secondEndIdx).toBeLessThan(firstDeltaIdx);
+	});
+});
+
+describe('bridge.open() tool live-streaming events', () => {
+	it('forwards tool.execution_partial_result and tool.execution_progress as portal events', async () => {
+		clientStub.getSessionMetadata.mockResolvedValue(undefined);
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			const handlers = new Map<string, (e: unknown) => void>(
+				sdkSessionStub.on.mock.calls.map((c) => [c[0] as string, c[1] as (e: unknown) => void])
+			);
+			handlers.get('tool.execution_start')?.({
+				data: { toolCallId: 't1', toolName: 'bash', arguments: { command: 'echo hi' } }
+			});
+			handlers.get('tool.execution_progress')?.({
+				data: { toolCallId: 't1', progressMessage: 'Connecting…' }
+			});
+			handlers.get('tool.execution_partial_result')?.({
+				data: { toolCallId: 't1', partialOutput: 'hi\n' }
+			});
+			handlers.get('tool.execution_partial_result')?.({
+				data: { toolCallId: 't1', partialOutput: 'world\n' }
+			});
+			handlers.get('tool.execution_complete')?.({
+				data: { toolCallId: 't1', success: true, result: { content: 'hi\nworld\n' } }
+			});
+			handlers.get('session.idle')?.({});
+			return 'msg-id';
+		});
+
+		const { open } = await importBridge();
+		const session = await open(baseOpts);
+		const ac = new AbortController();
+		const events: { type: string; toolCallId?: string; output?: string; message?: string }[] = [];
+		for await (const ev of session.send('hi', ac.signal)) {
+			events.push(ev as (typeof events)[number]);
+			if (ev.type === 'done') break;
+		}
+
+		const partials = events.filter((e) => e.type === 'tool.partial_output');
+		expect(partials.map((p) => p.output)).toEqual(['hi\n', 'world\n']);
+		const progress = events.find((e) => e.type === 'tool.progress');
+		expect(progress?.message).toBe('Connecting…');
+
+		// Order: progress + partials must arrive between tool.call and tool.result.
+		const callIdx = events.findIndex((e) => e.type === 'tool.call');
+		const resultIdx = events.findIndex((e) => e.type === 'tool.result');
+		const progressIdx = events.findIndex((e) => e.type === 'tool.progress');
+		const firstPartialIdx = events.findIndex((e) => e.type === 'tool.partial_output');
+		expect(callIdx).toBeGreaterThanOrEqual(0);
+		expect(resultIdx).toBeGreaterThan(callIdx);
+		expect(progressIdx).toBeGreaterThan(callIdx);
+		expect(progressIdx).toBeLessThan(resultIdx);
+		expect(firstPartialIdx).toBeGreaterThan(progressIdx);
+		expect(firstPartialIdx).toBeLessThan(resultIdx);
+	});
+
+	it('drops empty partial_output and progress payloads', async () => {
+		clientStub.getSessionMetadata.mockResolvedValue(undefined);
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			const handlers = new Map<string, (e: unknown) => void>(
+				sdkSessionStub.on.mock.calls.map((c) => [c[0] as string, c[1] as (e: unknown) => void])
+			);
+			handlers.get('tool.execution_start')?.({
+				data: { toolCallId: 't1', toolName: 'bash', arguments: {} }
+			});
+			handlers.get('tool.execution_partial_result')?.({
+				data: { toolCallId: 't1', partialOutput: '' }
+			});
+			handlers.get('tool.execution_progress')?.({
+				data: { toolCallId: 't1', progressMessage: '' }
+			});
+			handlers.get('tool.execution_complete')?.({
+				data: { toolCallId: 't1', success: true, result: null }
+			});
+			handlers.get('session.idle')?.({});
+			return 'msg-id';
+		});
+
+		const { open } = await importBridge();
+		const session = await open(baseOpts);
+		const ac = new AbortController();
+		const events: { type: string }[] = [];
+		for await (const ev of session.send('hi', ac.signal)) {
+			events.push(ev as { type: string });
+			if (ev.type === 'done') break;
+		}
+		expect(events.find((e) => e.type === 'tool.partial_output')).toBeUndefined();
+		expect(events.find((e) => e.type === 'tool.progress')).toBeUndefined();
+	});
+});
+
+describe('bridge.open() per-user CopilotClient caching', () => {
+	it('reuses one CopilotClient when the same userId opens multiple sessions', async () => {
+		const { open } = await importBridge();
+
+		await open({ ...baseOpts, conversationId: 'conv-a', userId: 'alice' });
+		await open({ ...baseOpts, conversationId: 'conv-b', userId: 'alice' });
+
+		expect(clientCtor).toHaveBeenCalledTimes(1);
+	});
+
+	it('starts a separate CopilotClient for each distinct userId', async () => {
+		const { open } = await importBridge();
+
+		await open({ ...baseOpts, conversationId: 'conv-a', userId: 'alice', authToken: 'tok-A' });
+		await open({ ...baseOpts, conversationId: 'conv-b', userId: 'bob', authToken: 'tok-B' });
+
+		// One construction per portal user. This is the guard against the
+		// "first-logged-in-user's token serves every other user" bug.
+		expect(clientCtor).toHaveBeenCalledTimes(2);
+		// Each construction sees that user's own token. The bridge wires
+		// gitHubToken from opts.authToken, so we can assert the SDK was
+		// handed the right credentials per user.
+		const firstArgs = clientCtor.mock.calls[0][0] as { gitHubToken?: string };
+		const secondArgs = clientCtor.mock.calls[1][0] as { gitHubToken?: string };
+		expect(firstArgs.gitHubToken).toBe('tok-A');
+		expect(secondArgs.gitHubToken).toBe('tok-B');
 	});
 });

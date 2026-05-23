@@ -1,6 +1,6 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
-import type { Conversation } from '$lib/types';
+import { normalizeSessionMode, type Conversation, type SessionMode } from '$lib/types';
 
 interface ConvRow {
 	id: string;
@@ -13,15 +13,20 @@ interface ConvRow {
 	archived_at: number | null;
 	forked_from_conversation_id: string | null;
 	forked_from_message_id: string | null;
+	mode: string | null;
+	approve_all_tools: number | null;
 }
 
 function rowToConv(r: ConvRow): Conversation {
+	const mode = normalizeSessionMode(r.mode);
 	return {
 		id: r.id,
 		userId: r.user_id,
 		title: r.title,
 		workdir: r.workdir,
 		model: r.model,
+		mode,
+		approveAllTools: r.approve_all_tools === 1,
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
 		archivedAt: r.archived_at,
@@ -71,6 +76,7 @@ export interface CreateInput {
 	title: string;
 	workdir: string;
 	model: string | null;
+	mode?: SessionMode;
 	id?: string;
 	forkedFromConversationId?: string | null;
 	forkedFromMessageId?: string | null;
@@ -90,20 +96,23 @@ export function create(userId: string, input: CreateInput): Conversation {
 	const now = Date.now();
 	const forkConv = input.forkedFromConversationId ?? null;
 	const forkMsg = input.forkedFromMessageId ?? null;
+	const mode = input.mode ?? 'interactive';
 	getDb()
 		.prepare(
 			`INSERT INTO conversations(
-			   id, user_id, title, workdir, model, created_at, updated_at,
+			   id, user_id, title, workdir, model, mode, created_at, updated_at,
 			   forked_from_conversation_id, forked_from_message_id
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
-		.run(id, userId, input.title, input.workdir, input.model, now, now, forkConv, forkMsg);
+		.run(id, userId, input.title, input.workdir, input.model, mode, now, now, forkConv, forkMsg);
 	return {
 		id,
 		userId,
 		title: input.title,
 		workdir: input.workdir,
 		model: input.model,
+		mode,
+		approveAllTools: false,
 		createdAt: now,
 		updatedAt: now,
 		archivedAt: null,
@@ -116,6 +125,38 @@ export function rename(id: string, userId: string, title: string): boolean {
 	const r = getDb()
 		.prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?')
 		.run(title, Date.now(), id, userId);
+	return r.changes > 0;
+}
+
+/**
+ * Update per-conversation session settings (mode and/or approve-all bypass).
+ * Returns true iff a row was modified. The bridge reads these on each
+ * `pool.acquire` so a recreated session inherits the latest values; the
+ * /session PATCH endpoint additionally pushes them to the live SDK session
+ * via `session.setMode` / `session.setApproveAll`.
+ */
+export function updateSessionSettings(
+	id: string,
+	userId: string,
+	patch: { mode?: SessionMode; approveAllTools?: boolean }
+): boolean {
+	const sets: string[] = [];
+	const args: Array<string | number> = [];
+	if (patch.mode !== undefined) {
+		sets.push('mode = ?');
+		args.push(patch.mode);
+	}
+	if (patch.approveAllTools !== undefined) {
+		sets.push('approve_all_tools = ?');
+		args.push(patch.approveAllTools ? 1 : 0);
+	}
+	if (sets.length === 0) return false;
+	sets.push('updated_at = ?');
+	args.push(Date.now());
+	args.push(id, userId);
+	const r = getDb()
+		.prepare(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`)
+		.run(...args);
 	return r.changes > 0;
 }
 

@@ -160,31 +160,43 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 
 function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {
 	const db = getDb();
+	messages.ensureBackgroundAgentLifecycleTable(db);
 	const baseTs = Date.now() - prefix.length - 1;
 	const insertMsg = db.prepare(
 		`INSERT INTO messages(id, conversation_id, role, content, status, error_code, created_at, reasoning, reasoning_duration_ms)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`
 	);
 	const insertTool = db.prepare(
-		`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at, text_offset)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at, text_offset, parent_tool_call_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	);
+	const insertLifecycle = db.prepare(
+		`INSERT INTO background_agent_lifecycles(tool_call_id, agent_id, status, started_at, ended_at)
+		 VALUES (?, ?, ?, ?, ?)`
 	);
 	const insertEdit = db.prepare(
-		`INSERT INTO file_edits(id, message_id, path, diff, created_at, text_offset)
-		 VALUES (?, ?, ?, ?, ?, ?)`
+		`INSERT INTO file_edits(id, message_id, path, diff, created_at, text_offset, parent_tool_call_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`
 	);
 	const insertReasoning = db.prepare(
-		`INSERT INTO reasoning_blocks(id, message_id, segment_index, text, text_offset, started_at, duration_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`
+		`INSERT INTO reasoning_blocks(id, message_id, segment_index, text, text_offset, started_at, duration_ms, parent_tool_call_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	);
 	const tx = db.transaction(() => {
 		prefix.forEach((m, i) => {
 			const newId = ulid();
 			const ts = baseTs + i;
 			insertMsg.run(newId, targetConvId, m.role, m.content, m.status, m.errorCode, ts);
+			// Remap tool_call ids so parent_tool_call_id references stay
+			// internally consistent within the cloned message.
+			const toolIdRemap = new Map<string, string>();
 			for (const t of m.toolCalls ?? []) {
+				toolIdRemap.set(t.id, ulid());
+			}
+			for (const t of m.toolCalls ?? []) {
+				const remappedToolId = toolIdRemap.get(t.id)!;
 				insertTool.run(
-					ulid(),
+					remappedToolId,
 					newId,
 					t.tool,
 					t.argsJson,
@@ -192,11 +204,29 @@ function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {
 					t.status,
 					t.startedAt,
 					t.endedAt,
-					t.textOffset
+					t.textOffset,
+					t.parentToolCallId ? (toolIdRemap.get(t.parentToolCallId) ?? null) : null
 				);
+				if (t.backgroundAgentStatus && t.backgroundAgentId && t.backgroundAgentStartedAt != null) {
+					insertLifecycle.run(
+						remappedToolId,
+						t.backgroundAgentId,
+						t.backgroundAgentStatus,
+						t.backgroundAgentStartedAt,
+						t.backgroundAgentEndedAt ?? null
+					);
+				}
 			}
 			for (const e of m.fileEdits ?? []) {
-				insertEdit.run(ulid(), newId, e.path, e.diff, ts, e.textOffset);
+				insertEdit.run(
+					ulid(),
+					newId,
+					e.path,
+					e.diff,
+					ts,
+					e.textOffset,
+					e.parentToolCallId ? (toolIdRemap.get(e.parentToolCallId) ?? null) : null
+				);
 			}
 			for (const r of m.reasoningBlocks ?? []) {
 				insertReasoning.run(
@@ -206,7 +236,8 @@ function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {
 					r.text,
 					r.textOffset,
 					r.startedAt,
-					r.durationMs
+					r.durationMs,
+					r.parentToolCallId ? (toolIdRemap.get(r.parentToolCallId) ?? null) : null
 				);
 			}
 		});

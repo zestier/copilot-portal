@@ -266,8 +266,8 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           push: false
-          # Scope cache per-branch and per-arch so PR builds can't poison
-          # the release cache (which is keyed by release ref) and the two
-          # arch legs don't trample each other's cache.
-          cache-from: type=gha,scope=ci-${{ github.ref_name }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=ci-${{ github.ref_name }}-${{ matrix.arch }}
+          # No buildx cache: this job is a smoke test (its output is never
+          # consumed), runs in parallel with the JS jobs so it's not on
+          # the critical path, and writing mode=max from every branch
+          # push on two arches would burn cache quota and create cross-
+          # ref poisoning surface for the release build.

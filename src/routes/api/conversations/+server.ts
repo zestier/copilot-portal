@@ -39,6 +39,12 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		workdir = projectRoot();
 	}
 
-	const conv = convs.create(userId, { id, title: body.title, workdir, model });
+	const conv = convs.create(userId, {
+		id,
+		title: body.title,
+		workdir,
+		model,
+		mode: userSettings.defaultConversationMode
+	});
 	return json({ ok: true, conversation: conv }, { status: 201 });
 };

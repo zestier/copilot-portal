@@ -6,22 +6,28 @@
 		ConversationUsage,
 		Message,
 		PortalEvent,
-		PermissionDecision,
-		PermissionRequestView
+		InteractiveRequestView,
+		InteractiveResponse
 	} from '$lib/types';
 	import Message_ from './Message.svelte';
-	import PermissionPrompt from './PermissionPrompt.svelte';
+	import InteractiveRequestDialog from './InteractiveRequestDialog.svelte';
 	import ChatHeader from './ChatHeader.svelte';
 	import Composer from './Composer.svelte';
 	import ThinkingIndicator from './ThinkingIndicator.svelte';
-	import { addPermission, removePermission } from '$lib/client/permission-queue';
+	import { addInteractive, removeInteractive } from '$lib/client/interactive-queue';
+	import {
+		findToolCallRecord,
+		shouldRefreshTicketsAfterToolResult
+	} from '$lib/client/ticket-tool-refresh';
 
 	let {
 		conversation,
 		initialMessages,
 		initialUsage = null,
 		parent = null,
-		initialActiveTurnId = null
+		initialActiveTurnId = null,
+		initialPendingInteractive = [],
+		initialComposer = ''
 	}: {
 		conversation: Conversation;
 		initialMessages: Message[];
@@ -33,10 +39,14 @@
 			messageIndex: number | null;
 		} | null;
 		initialActiveTurnId?: string | null;
+		initialPendingInteractive?: InteractiveRequestView[];
+		initialComposer?: string;
 	} = $props();
 
 	let messages = $state<Message[]>([]);
 	let title = $state<string>(untrack(() => conversation.title));
+	let sessionMode = $state<Conversation['mode']>(untrack(() => conversation.mode));
+	let approveAllTools = $state<boolean>(untrack(() => conversation.approveAllTools));
 	let usage = $state<ConversationUsage | null>(untrack(() => initialUsage));
 	let recentCompaction = $state<{ tokensRemoved?: number; messagesRemoved?: number } | null>(null);
 	let compactionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -77,11 +87,15 @@
 			closeStream();
 			messages = [...initialMessages];
 			title = conversation.title;
+			sessionMode = conversation.mode;
+			approveAllTools = conversation.approveAllTools;
 			usage = initialUsage;
+			composer = initialComposer;
 			recentCompaction = null;
 			pinnedToBottom = true;
 			hasNewBelow = false;
 			forksByMessage = {};
+			pendingInteractive = [...initialPendingInteractive];
 			if (compactionTimer) {
 				clearTimeout(compactionTimer);
 				compactionTimer = null;
@@ -95,13 +109,15 @@
 		});
 	});
 
-	let composer = $state('');
+	let composer = $state(untrack(() => initialComposer));
 	let streaming = $state(false);
 	// Queue of outstanding permission requests. The SDK can fire multiple
 	// `onPermissionRequest` callbacks concurrently (parallel tool calls),
 	// so we must surface them all — a single slot would let later events
 	// clobber earlier ones, stranding the earlier requests on the server.
-	let pendingPermissions = $state<PermissionRequestView[]>([]);
+	let pendingInteractive = $state<InteractiveRequestView[]>(
+		untrack(() => [...initialPendingInteractive])
+	);
 	// Active EventSource for the in-flight turn (if any). null when idle.
 	// Holding a reference here lets `stop()` close it on user-cancel and
 	// lets the conversation-prop $effect tear it down on navigation.
@@ -215,11 +231,16 @@
 			const data = (await r.json()) as {
 				messages: Message[];
 				activeTurnId: string | null;
+				pendingInteractive?: InteractiveRequestView[];
 			};
 			messages = data.messages;
-			// A completed turn means any outstanding permission prompt was
-			// resolved server-side; clear them so we don't strand a dialog.
-			pendingPermissions = [];
+			// Rehydrate outstanding prompts from the authoritative server
+			// list. Previously we cleared this unconditionally, which meant
+			// any transient SSE drop stranded the dialog even though the
+			// server's `pending` map still held the request — and the agent
+			// would only see a response after the (formerly 10-minute)
+			// timeout fired. Now we just snap to whatever the server says.
+			pendingInteractive = data.pendingInteractive ?? [];
 			await scrollToBottom();
 			// If a new turn became active between events (unlikely but
 			// possible from another tab), attach to it.
@@ -229,6 +250,12 @@
 		} catch {
 			/* non-fatal */
 		}
+	}
+
+	async function handleToolRerunStarted(turnId: string) {
+		streaming = true;
+		await refreshMessages();
+		if (!eventSource) attachStream(turnId);
 	}
 
 	function applyEvent(ev: PortalEvent) {
@@ -276,14 +303,16 @@
 				const blocks = (m.reasoningBlocks ??= []);
 				let seg = blocks.find((b) => b.id === ev.segmentId);
 				if (!seg) {
+					const isChild = !!ev.parentToolCallId;
 					seg = {
 						id: ev.segmentId,
 						messageId: m.id,
 						segmentIndex: blocks.length,
 						text: '',
-						textOffset: m.content.length,
+						textOffset: isChild ? null : m.content.length,
 						startedAt: Date.now(),
-						durationMs: null
+						durationMs: null,
+						parentToolCallId: ev.parentToolCallId ?? null
 					};
 					blocks.push(seg);
 				}
@@ -304,6 +333,7 @@
 			case 'tool.call': {
 				const m = messages[messages.length - 1];
 				if (m && m.role === 'assistant') {
+					const isChild = !!ev.parentToolCallId;
 					(m.toolCalls ??= []).push({
 						id: ev.toolCallId,
 						messageId: m.id,
@@ -313,49 +343,79 @@
 						status: 'pending',
 						startedAt: Date.now(),
 						endedAt: null,
-						textOffset: m.content.length
+						textOffset: isChild ? null : m.content.length,
+						parentToolCallId: ev.parentToolCallId ?? null
 					});
 				}
 				break;
 			}
 			case 'tool.result': {
-				const m = messages[messages.length - 1];
-				const tc = m?.toolCalls?.find((t) => t.id === ev.toolCallId);
+				const tc = findToolCallRecord(messages, ev.toolCallId);
 				if (tc) {
 					tc.status = ev.ok ? 'ok' : 'error';
 					tc.resultJson = safeJson(ev.output ?? ev.summary);
 					tc.endedAt = Date.now();
+					// Drop ephemeral streaming state — final result supersedes it.
+					tc.partialOutput = undefined;
+					tc.progressMessage = undefined;
+				}
+				if (shouldRefreshTicketsAfterToolResult(tc, ev)) {
+					void invalidateAll();
 				}
 				break;
 			}
-			case 'tool.permission': {
-				pendingPermissions = addPermission(pendingPermissions, {
-					requestId: ev.requestId,
-					tool: ev.tool,
-					kind: ev.kind,
-					summary: ev.summary,
-					args: ev.args
-				});
+			case 'subagent.lifecycle': {
+				const tc = findToolCallRecord(messages, ev.toolCallId);
+				if (tc) {
+					tc.backgroundAgentStatus = ev.status;
+					tc.backgroundAgentId = ev.agentId;
+					if (ev.status === 'running') {
+						tc.backgroundAgentStartedAt ??= Date.now();
+						tc.backgroundAgentEndedAt = null;
+					} else {
+						tc.backgroundAgentEndedAt = Date.now();
+					}
+				}
 				break;
 			}
-			case 'tool.permission.resolved': {
+			case 'tool.partial_output': {
+				const tc = findToolCallRecord(messages, ev.toolCallId);
+				// The SDK emits cumulative snapshots of the tool's stdout/stderr
+				// buffer (not deltas) so progress bars and carriage-return redraws
+				// render correctly — each event already contains everything that
+				// came before, so we replace rather than append.
+				if (tc) tc.partialOutput = ev.output;
+				break;
+			}
+			case 'tool.progress': {
+				const tc = findToolCallRecord(messages, ev.toolCallId);
+				if (tc) tc.progressMessage = ev.message;
+				break;
+			}
+			case 'interactive.request': {
+				pendingInteractive = addInteractive(pendingInteractive, ev.request);
+				break;
+			}
+			case 'interactive.resolved': {
 				// Drop the matching prompt. Critical on replay: the original
-				// `tool.permission` event lives forever in the turn's event
+				// `interactive.request` event lives forever in the turn's event
 				// log, so without this signal a refresh or a visibility-driven
 				// reconnect would resurrect a dialog the user already answered.
-				pendingPermissions = removePermission(pendingPermissions, ev.requestId);
+				pendingInteractive = removeInteractive(pendingInteractive, ev.requestId);
 				break;
 			}
 			case 'file.edit': {
 				const m = messages[messages.length - 1];
 				if (m && m.role === 'assistant') {
+					const isChild = !!ev.parentToolCallId;
 					(m.fileEdits ??= []).push({
 						id: `${m.id}-${(m.fileEdits ?? []).length}`,
 						messageId: m.id,
 						path: ev.path,
 						diff: ev.diff,
 						createdAt: Date.now(),
-						textOffset: m.content.length
+						textOffset: isChild ? null : m.content.length,
+						parentToolCallId: ev.parentToolCallId ?? null
 					});
 				}
 				break;
@@ -385,6 +445,15 @@
 					// Refresh the layout data so the sidebar reflects the new title.
 					void invalidateAll();
 				}
+				break;
+			}
+			case 'session.settings': {
+				// Server-driven settings change (typically the agent flipping
+				// itself out of plan mode via exit-plan-mode). Mirror it into
+				// our local state so the header reflects reality without a
+				// page refresh.
+				if (ev.mode !== undefined) sessionMode = ev.mode;
+				if (ev.approveAllTools !== undefined) approveAllTools = ev.approveAllTools;
 				break;
 			}
 			case 'context.usage': {
@@ -426,15 +495,15 @@
 		}
 	}
 
-	async function decidePermission(requestId: string, d: PermissionDecision) {
-		if (!pendingPermissions.some((p) => p.requestId === requestId)) return;
-		// Optimistically drop the prompt; the server will also emit a
-		// `tool.permission.resolved` which is a no-op once removed.
-		pendingPermissions = removePermission(pendingPermissions, requestId);
-		await fetch(`/api/conversations/${conversation.id}/permissions/${requestId}`, {
+	async function respondInteractive(requestId: string, response: InteractiveResponse) {
+		if (!pendingInteractive.some((p) => p.requestId === requestId)) return;
+		// Optimistically drop the prompt; the server will also emit an
+		// `interactive.resolved` which is a no-op once removed.
+		pendingInteractive = removeInteractive(pendingInteractive, requestId);
+		await fetch(`/api/conversations/${conversation.id}/interactive/${requestId}`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ decision: d })
+			body: JSON.stringify(response)
 		});
 	}
 
@@ -510,7 +579,7 @@
 	// next assistant message (i.e., streaming but no in-progress assistant
 	// message exists yet, or it exists but has no content and no tool activity).
 	const thinking = $derived.by(() => {
-		if (!streaming || pendingPermissions.length > 0) return false;
+		if (!streaming || pendingInteractive.length > 0) return false;
 		const last = messages[messages.length - 1];
 		if (!last || last.role !== 'assistant') return true;
 		const hasContent = last.content.length > 0;
@@ -526,7 +595,19 @@
 </script>
 
 <div class="chat">
-	<ChatHeader {title} {conversation} {parent} {usage} {recentCompaction} />
+	<ChatHeader
+		{title}
+		{conversation}
+		{parent}
+		{usage}
+		{recentCompaction}
+		mode={sessionMode}
+		{approveAllTools}
+		onSettingsChange={(patch) => {
+			if (patch.mode !== undefined) sessionMode = patch.mode;
+			if (patch.approveAllTools !== undefined) approveAllTools = patch.approveAllTools;
+		}}
+	/>
 
 	<div class="messages-wrap">
 		<div class="messages" bind:this={scrollEl} onscroll={onMessagesScroll}>
@@ -536,10 +617,14 @@
 					conversationId={conversation.id}
 					forks={forksByMessage[m.id] ?? []}
 					onForked={refreshForks}
+					onToolRerunStarted={handleToolRerunStarted}
 				/>
 			{/each}
-			{#each pendingPermissions as p (p.requestId)}
-				<PermissionPrompt request={p} onDecide={(d) => decidePermission(p.requestId, d)} />
+			{#each pendingInteractive as p (p.requestId)}
+				<InteractiveRequestDialog
+					request={p}
+					onRespond={(r) => respondInteractive(p.requestId, r)}
+				/>
 			{/each}
 			{#if thinking}
 				<ThinkingIndicator />
@@ -573,7 +658,7 @@
 	<Composer
 		bind:value={composer}
 		{streaming}
-		inputDisabled={streaming && pendingPermissions.length === 0}
+		inputDisabled={streaming && pendingInteractive.length === 0}
 		onSend={send}
 		onStop={stop}
 	/>

@@ -11,57 +11,62 @@ agent sessions.
 
 A thin wrapper that:
 
-1. Instantiates one SDK client per conversation, scoped to that conversation's
-   working directory.
-2. Translates SDK events into the normalized `PortalEvent` discriminated union
-   defined in `$lib/types.ts`.
-3. Handles backpressure: SSE writes are awaited; if a client disconnects, the
-   stream is cancelled and the SDK call aborted via `AbortController`.
+1. Owns one `CopilotClient` (the SDK's child process) **per portal
+   user**, kept in a `Map<userId, CopilotClient>` and started lazily on
+   first use. With a multi-entry `ALLOWED_GITHUB_LOGINS` this keeps
+   Copilot API calls (billing, audit) attributed to the right GitHub
+   identity; in the common single-user deployment there is exactly one
+   entry.
+2. Opens a per-conversation **session** on top of that user's client,
+   scoped to the conversation's working directory.
+3. Translates SDK events into the normalized `PortalEvent` discriminated
+   union defined in `$lib/types.ts`.
+4. Handles backpressure: SSE writes are awaited; if a client disconnects,
+   the stream is cancelled and the SDK call aborted via `AbortController`.
 
 ### Sketch
 
 ```ts
 // $lib/server/copilot/bridge.ts
-import { Copilot } from "@github/copilot-sdk";
-import type { PortalEvent } from "$lib/types";
+import { CopilotClient } from '@github/copilot-sdk';
+import type { PortalEvent } from '$lib/types';
 
-export interface BridgeOptions {
-  conversationId: string;
-  workingDirectory: string;
-  model?: string;
-  authToken?: string;          // forwarded as COPILOT_GITHUB_TOKEN env
-  onPermission: (req: PermissionRequest) => Promise<PermissionDecision>;
-  signal: AbortSignal;
+const clients = new Map<string, CopilotClient>();
+
+async function getClient(userId: string, authToken?: string): Promise<CopilotClient> {
+  const existing = clients.get(userId);
+  if (existing) return existing;
+  const client = new CopilotClient({
+    useStdio: true,
+    autoStart: false,
+    useLoggedInUser: true,
+    gitHubToken: authToken
+  });
+  await client.start();
+  clients.set(userId, client);
+  return client;
 }
 
-export class CopilotBridge {
-  private client: Copilot;
-  constructor(private opts: BridgeOptions) {
-    this.client = new Copilot({
-      cwd: opts.workingDirectory,
-      model: opts.model,
-      env: opts.authToken ? { COPILOT_GITHUB_TOKEN: opts.authToken } : undefined,
-      // SDK exposes a permission handler hook:
-      onToolPermissionRequest: opts.onPermission,
-    });
-  }
+export interface BridgeOpenOptions {
+  conversationId: string;
+  userId: string;
+  workingDirectory: string;
+  model: string;
+  policy: PermissionPolicy;
+  authToken?: string;
+  onEvent?: (e: PortalEvent) => void;
+}
 
-  async *send(prompt: string): AsyncIterable<PortalEvent> {
-    const stream = this.client.sendMessage(prompt, { signal: this.opts.signal });
-    for await (const ev of stream) {
-      yield* normalize(ev);
-    }
-  }
-
-  async close() {
-    await this.client.dispose();
-  }
+export async function open(opts: BridgeOpenOptions): Promise<ConversationSession> {
+  const client = await getClient(opts.authToken);
+  // … returns a per-conversation Session that wraps client.openSession(…)
+  // and exposes send(prompt) -> AsyncIterable<PortalEvent>.
 }
 ```
 
-`normalize()` is a pure function in the same module that maps SDK event shapes
-to `PortalEvent`. It is the single point of coupling to the SDK's wire format;
-when the SDK changes, this is the only file that needs updating (plus tests).
+The SDK event → `PortalEvent` mapping is a pure function inside the same
+module. It is the single point of coupling to the SDK's wire format; when
+the SDK changes, this is the only file that needs updating (plus tests).
 
 ### Context-window usage events
 
@@ -86,18 +91,19 @@ view is needed.
 ## Module: `$lib/server/copilot/pool.ts`
 
 ```ts
-// Singleton, per-process.
-const clients = new Map<string, { bridge: CopilotBridge; lastUsed: number }>();
+// Singleton, per-process. Tracks per-conversation sessions on top of
+// the bridge's per-user CopilotClient pool.
+const sessions = new Map<string, { session: ConversationSession; lastUsed: number }>();
 
-export async function acquire(convId: string, opts: BridgeOptions) { ... }
-export function touch(convId: string) { ... }
-export async function release(convId: string) { ... }
+export async function acquire(opts: BridgeOpenOptions): Promise<ConversationSession> { ... }
+export function touch(convId: string): void { ... }
+export async function release(convId: string): Promise<void> { ... }
 
 // Idle reaper, started in hooks.server.ts:
 export function startIdleReaper(idleMs: number) {
   setInterval(async () => {
     const now = Date.now();
-    for (const [id, entry] of clients) {
+    for (const [id, entry] of sessions) {
       if (now - entry.lastUsed > idleMs) await release(id);
     }
   }, 60_000).unref();
@@ -107,23 +113,36 @@ export function startIdleReaper(idleMs: number) {
 Hard cap: when `clients.size >= MAX_CONCURRENT_SESSIONS`, refuse new sends
 with HTTP 429 unless the caller releases an existing one.
 
-## Module: `$lib/server/copilot/permissions.ts`
+## Module: `$lib/server/copilot/interactive-requests.ts`
 
-Tool-call permission flow:
+Generic interactive-request flow (covers permission, auto_mode_switch,
+user_input, elicitation, exit_plan_mode, plus informational
+sampling / mcp_oauth / external_tool):
 
-1. SDK calls `onToolPermissionRequest({ tool, args })`.
-2. Bridge emits `tool.permission` SSE event with a unique `requestId` and
-   stashes a `{ resolve }` deferred keyed by `requestId`.
-3. Client renders a `<PermissionPrompt>` and the user picks
-   *Allow once / Allow always / Deny*.
-4. Client posts `POST /api/conversations/:id/permissions/:requestId` with
-   the decision. Endpoint looks up the deferred, resolves it, returns 204.
-5. "Allow always" persists `{ tool, conversationId }` (or `{ tool, *  }` for
-   global) to SQLite; the permission handler short-circuits future requests
-   matching either scope without prompting.
+1. SDK fires one of `onPermissionRequest` / `onUserInputRequest` /
+   `onElicitationRequest` / `onExitPlanMode` / `onAutoModeSwitch`, or
+   emits a `sampling.requested` / `mcp.oauth_required` /
+   `external_tool.requested` event.
+2. Bridge mints a `requestId`, registers a `{ resolve, reject, kind, view }`
+   deferred, and emits an `interactive.request` SSE event.
+3. Client renders `<InteractiveRequestDialog>` (one component switching on
+   `kind`) and the user picks a kind-appropriate response.
+4. Client posts `POST /api/conversations/:id/interactive/:requestId` with
+   a discriminated `{ kind, ... }` body. Endpoint validates against the
+   pending request's kind, resolves the deferred, and returns 200.
+5. The registry emits `interactive.resolved` into the turn's event log
+   *before* unblocking the SDK so any replay (page refresh) sees the
+   resolution and clears the dialog.
+6. For `permission` only: "Allow always" persists `{ tool, conversationId }`
+   so the bridge can short-circuit future requests for the same tool.
 
 A user-configurable default policy (deny-all / prompt-all / allow-readonly /
-allow-all) gates the prompt entirely.
+allow-all) gates the prompt, but **only** for the `permission` kind —
+auto-mode-switch et al. are billing/quota decisions and always ask.
+
+Pending requests have a server-side timeout (default 10 min). When a turn
+is aborted, `cancelConversation()` rejects every pending request with a
+kind-appropriate default denial so the SDK doesn't hang.
 
 ## Conversation turn endpoints
 
@@ -218,7 +237,8 @@ does it snapshot the workdir. Both layers are owned by the portal:
 
 - **Workdir snapshots**: see `docs/persistence.md` — every user turn gets
   a `pre` snapshot, every assistant turn a `post` snapshot, stored as git
-  commits under `refs/portal/turns/*` in the conversation's own workdir.
+  commits under `refs/portal/turns/*` in the conversation's workdir. These are
+  restore/diff references, not automatic rollbacks or isolation boundaries.
 - **Conversation forking**: editing a user message — or retrying from
   an assistant message — creates a new conversation
   (`src/lib/server/fork.ts`). We spin up a brand-new SDK session keyed
@@ -235,10 +255,11 @@ covers both:
 | `{content}`   | `user`      | `pre`         | strictly before target | yes (edited content)  |
 | `{}`          | `assistant` | `post`        | up to and incl. target | no                    |
 
-"Edit-and-rerun" reproduces the file state from when the original user
-message was first sent and lets the user reword it. "Retry-from-here"
-reproduces the file state immediately after an assistant turn finished
-and lets the user pick the conversation up with a different follow-up.
+"Edit-and-rerun" creates a new transcript from the selected point and lets the
+user reword it. "Retry-from-here" creates a new transcript after the selected
+assistant turn and lets the user pick up with a different follow-up. Neither
+mode rewinds the live files automatically; the snapshot named in the table is a
+manual restore/diff reference.
 
 ### Discovering forks
 
@@ -250,9 +271,10 @@ on load.
 
 ### SDK history seeding
 
-In v1 the forked SDK session starts with **no seeded history**. Prior
-messages are cloned into SQLite for UI continuity, but the agent itself
-has no memory of them — it picks up cold from the edited message.
+In v1 the forked SDK session starts with **no seeded history**. Prior messages
+are cloned into SQLite for UI continuity, but the agent itself has no memory of
+them — it picks up cold from the next user prompt, against the current live
+workdir unless the user manually restores a snapshot first.
 
 This is a deliberate trade-off:
 
@@ -260,9 +282,9 @@ This is a deliberate trade-off:
   generated and not part of the SDK's public surface.
 - It avoids inflating the first prompt with a synthesized preamble that
   would burn context tokens on every fork.
-- It matches the user's intent for the common case ("rewind the code and
-  let me re-ask"): the file state is what mattered, and the user is
-  about to re-establish whatever context they need anyway.
+- It avoids implying a transactional rewind. The fork preserves a transcript
+  branch and exposes snapshot refs so the user can inspect or manually restore
+  file state when that matters.
 
 If/when the SDK exposes a supported way to seed conversation history,
 the fork service can opt into it without changing the table schema.

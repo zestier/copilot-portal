@@ -1,80 +1,96 @@
-// Thin wrapper around `@github/copilot-sdk`. Normalizes SDK events into the
-// portal's PortalEvent shape, and bridges permission requests via HTTP.
+// Thin wrapper around `@github/copilot-sdk`. Owns SDK client/session lifecycle;
+// event normalization and interactive callbacks live in sibling adapters.
 //
-// NOTE: Pinned to @github/copilot-sdk ^0.3.0. The SDK is in preview; if
-// upgrading, audit the event names and PermissionRequest shape used below.
-// All coupling lives in this file.
+// NOTE: Pinned to @github/copilot-sdk ^1.0.0-beta. The SDK is in preview; if
+// upgrading, audit bridge.ts plus sdk-events.ts / interactive-adapter.ts.
 
-import {
-	CopilotClient,
-	type PermissionRequestResult,
-	type GetAuthStatusResponse,
-	type ModelInfo
-} from '@github/copilot-sdk';
-import type { PortalEvent, PermissionPolicy, PermissionDecision } from '$lib/types';
+import { CopilotClient, type GetAuthStatusResponse, type ModelInfo } from '@github/copilot-sdk';
+import type { PortalEvent, PermissionPolicy, SessionMode } from '$lib/types';
 import { AsyncQueue } from './async-queue';
-import { register as registerPermission, newRequestId, decideByPolicy } from './permissions';
-import * as settingsRepo from '../db/repos/settings';
-import { ulid } from 'ulid';
+import { createInteractiveCallbacks } from './interactive-adapter';
+import { SdkEventAdapter, toRuntimeMode, type RuntimeSessionMode } from './sdk-events';
+import * as conversationsRepo from '../db/repos/conversations';
+import * as messagesRepo from '../db/repos/messages';
 import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
+import { buildGitTools } from '../tools/git';
+import { buildTicketTools } from '../tools/tickets';
+import { buildPermissionTools } from '../tools/permissions';
+import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 
-let sharedClient: CopilotClient | null = null;
-let starting: Promise<CopilotClient> | null = null;
+// One CopilotClient per portal user. Sharing a single process-wide
+// client would cause the SDK subprocess spawned for whichever user
+// logged in first to handle every other user's turns too — which
+// silently re-attributes Copilot API calls (billing, audit trail) to
+// the wrong GitHub identity. With the documented multi-user allowlist
+// (`ALLOWED_GITHUB_LOGINS`) that's a real cross-user bleed.
+const clients = new Map<string, CopilotClient>();
+const starting = new Map<string, Promise<CopilotClient>>();
 
-export async function getClient(authToken?: string): Promise<CopilotClient> {
-	if (sharedClient) return sharedClient;
-	if (starting) return starting;
-	starting = (async () => {
+export async function getClient(userId: string, authToken?: string): Promise<CopilotClient> {
+	const existing = clients.get(userId);
+	if (existing) return existing;
+	const inflight = starting.get(userId);
+	if (inflight) return inflight;
+	const p = (async () => {
+		const cliUrl = process.env.COPILOT_CLI_URL?.trim();
 		const client = isStubMode()
 			? (new StubCopilotClient() as unknown as CopilotClient)
-			: new CopilotClient({
-					useStdio: true,
-					autoStart: false,
-					useLoggedInUser: true,
-					gitHubToken: authToken
-				});
+			: cliUrl
+				? new CopilotClient({ cliUrl, autoStart: false })
+				: new CopilotClient({
+						useStdio: true,
+						autoStart: false,
+						useLoggedInUser: true,
+						gitHubToken: authToken
+					});
 		await client.start();
-		sharedClient = client;
-		log.info('copilot.client.started');
+		clients.set(userId, client);
+		log.info('copilot.client.started', { userId });
 		return client;
 	})();
+	starting.set(userId, p);
 	try {
-		return await starting;
+		return await p;
 	} finally {
-		starting = null;
+		starting.delete(userId);
 	}
 }
 
 export async function shutdownClient() {
-	if (!sharedClient) return;
-	try {
-		await sharedClient.stop();
-	} catch (e) {
-		log.warn('copilot.client.stop_failed', { err: String(e) });
+	const all = [...clients.values()];
+	clients.clear();
+	starting.clear();
+	for (const c of all) {
+		try {
+			await c.stop();
+		} catch (e) {
+			log.warn('copilot.client.stop_failed', { err: String(e) });
+		}
 	}
-	sharedClient = null;
 }
 
-// --- Status / introspection helpers ---
-//
-// listModels() is rate-limited upstream and the SDK already caches per-client;
-// we still cache here so that repeated UI loads don't hit the SDK at all.
-let modelsCache: { at: number; models: ModelInfo[] } | null = null;
+// Per-user listModels cache: entitlements (and therefore the list of
+// available models) can differ between users.
+const modelsCache = new Map<string, { at: number; models: ModelInfo[] }>();
 const MODELS_TTL_MS = 5 * 60_000;
 
-export async function fetchAuthStatus(authToken?: string): Promise<GetAuthStatusResponse> {
-	const client = await getClient(authToken);
+export async function fetchAuthStatus(
+	userId: string,
+	authToken?: string
+): Promise<GetAuthStatusResponse> {
+	const client = await getClient(userId, authToken);
 	return client.getAuthStatus();
 }
 
-export async function fetchModels(authToken?: string): Promise<ModelInfo[]> {
-	if (modelsCache && Date.now() - modelsCache.at < MODELS_TTL_MS) {
-		return modelsCache.models;
+export async function fetchModels(userId: string, authToken?: string): Promise<ModelInfo[]> {
+	const cached = modelsCache.get(userId);
+	if (cached && Date.now() - cached.at < MODELS_TTL_MS) {
+		return cached.models;
 	}
-	const client = await getClient(authToken);
+	const client = await getClient(userId, authToken);
 	const models = await client.listModels();
-	modelsCache = { at: Date.now(), models };
+	modelsCache.set(userId, { at: Date.now(), models });
 	return models;
 }
 
@@ -84,24 +100,30 @@ export interface BridgeOpenOptions {
 	workingDirectory: string;
 	model: string;
 	policy: PermissionPolicy;
+	/** Initial session mode. Forwarded to the runtime after open. */
+	mode?: SessionMode;
+	/** When true, every tool-permission request is auto-approved for this
+	 * session. Mirrored to the SDK via `permissions.setApproveAll`. */
+	approveAllTools?: boolean;
 	authToken?: string;
-	/**
-	 * Optional sink for every event the bridge emits during a turn. Receives
-	 * events on the server even if the iterable consumer has stopped pulling.
-	 *
-	 * NOTE: New code should subscribe to the per-turn event log in
-	 * `turn-runner.ts` instead — that decouples persistence from any one
-	 * consumer's lifecycle. This hook remains for backward-compatible callers.
-	 */
 	onEvent?: (e: PortalEvent) => void;
 }
 
-// Per-conversation session wrapper.
 export interface ConversationSession {
 	conversationId: string;
+	workingDirectory: string;
 	send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent>;
 	abort(): Promise<void>;
 	dispose(): Promise<void>;
+	/** Switch the live session's mode. Persists nothing — the caller owns
+	 * the DB row. No-op if the SDK rejects (preview / capability gap). */
+	setMode(mode: SessionMode): Promise<void>;
+	/** Toggle the in-bridge auto-approve short-circuit AND mirror the
+	 * setting to the SDK so the model can adapt. */
+	setApproveAll(enabled: boolean): Promise<void>;
+	/** Clear every session-scoped grant the SDK has accumulated. Useful
+	 * after the user turns approve-all off and wants a clean slate. */
+	resetSessionApprovals(): Promise<void>;
 	lastUsed: number;
 }
 
@@ -111,43 +133,72 @@ interface SdkSession {
 	send(args: { prompt: string }): Promise<string>;
 	abort?(): Promise<void>;
 	disconnect(): Promise<void>;
+	/** SDK-provided infinite-session workspace (e.g. ~/.copilot/session-state/<id>). */
+	workspacePath?: string;
+	/** Public typed RPC surface exposed by the SDK's CopilotSession. We
+	 * narrow it to just the methods we touch so a preview-version drift
+	 * surfaces as a compile error here rather than a runtime mystery. */
+	rpc?: {
+		mode?: {
+			set?: (params: { mode: RuntimeSessionMode }) => Promise<void>;
+		};
+		permissions?: {
+			setApproveAll?: (params: { enabled: boolean }) => Promise<{ success: boolean }>;
+			resetSessionApprovals?: () => Promise<unknown>;
+		};
+	};
 }
 
 export async function open(opts: BridgeOpenOptions): Promise<ConversationSession> {
-	const client = await getClient(opts.authToken);
+	const client = await getClient(opts.userId, opts.authToken);
 
-	let currentMessageId: string | null = null;
 	let activeQueue: AsyncQueue<PortalEvent> | null = null;
-	// Track an in-flight reasoning segment so we can mint a new id whenever
-	// reasoning resumes after a visible token or a tool boundary. Closed by
-	// closeReasoning() which emits message.reasoning.end with the elapsed
-	// duration.
-	let currentReasoningSegmentId: string | null = null;
-	let currentReasoningStartedAt = 0;
 
-	function closeReasoning() {
-		if (!activeQueue || !currentReasoningSegmentId || !currentMessageId) return;
-		activeQueue.push({
-			type: 'message.reasoning.end',
-			messageId: currentMessageId,
-			segmentId: currentReasoningSegmentId,
-			durationMs: Date.now() - currentReasoningStartedAt
-		});
-		currentReasoningSegmentId = null;
-		currentReasoningStartedAt = 0;
+	function emit(ev: PortalEvent) {
+		activeQueue?.push(ev);
 	}
 
-	const onPermissionRequest = async (req: unknown) => {
-		return await handlePermission(req as PermissionRequestLike, opts, (ev) => {
-			activeQueue?.push(ev);
-		});
-	};
+	// Mutable session-level state. Mirrors the conversation row in the
+	// DB; the /session PATCH endpoint flips these via setMode/setApproveAll
+	// on the live ConversationSession so a turn already in flight picks up
+	// the change without a recreate.
+	let approveAllTools = opts.approveAllTools === true;
+	let currentMode: SessionMode = opts.mode ?? 'interactive';
+	let sessionWorkspacePath: string | null = null;
+	const toolPermissionBehavior = new Map<string, 'normal' | 'always-prompt'>();
 
-	// Resume the SDK-side session if it already exists so the agent keeps its
-	// in-session state (conversation memory, per-session SQL store such as
-	// todos/inbox_entries, etc.) across portal server restarts. The portal's
-	// in-memory pool is cleared on restart, but the SDK persists per-session
-	// state by id and only rehydrates it via resumeSession.
+	const eventAdapter = new SdkEventAdapter({
+		conversationId: opts.conversationId,
+		getQueue: () => activeQueue,
+		setQueue: (q) => {
+			activeQueue = q;
+		},
+		getMode: () => currentMode,
+		setMode: (mode) => {
+			currentMode = mode;
+		},
+		onSubagentLifecycle: (ev) => {
+			messagesRepo.updateBackgroundAgentLifecycle(ev.toolCallId, ev.agentId, ev.status);
+		}
+	});
+	const {
+		onPermissionRequest,
+		onUserInputRequest,
+		onElicitationRequest,
+		onExitPlanMode,
+		onAutoModeSwitch
+	} = createInteractiveCallbacks({
+		conversationId: opts.conversationId,
+		userId: opts.userId,
+		workingDirectory: opts.workingDirectory,
+		policy: opts.policy,
+		emit,
+		getApproveAll: () => approveAllTools,
+		getMode: () => currentMode,
+		getSessionWorkspacePath: () => sessionWorkspacePath,
+		getPermissionBehavior: (tool) => toolPermissionBehavior.get(tool) ?? 'normal'
+	});
+
 	let existingMetadata: unknown;
 	try {
 		existingMetadata = await client.getSessionMetadata(opts.conversationId);
@@ -158,229 +209,158 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		});
 	}
 
+	const sessionConfig = {
+		model: opts.model,
+		workingDirectory: opts.workingDirectory,
+		streaming: true,
+		tools: [
+			...buildGitTools(opts.workingDirectory),
+			...buildTicketTools({
+				userId: opts.userId,
+				workspaceKey: ticketWorkspaceFromConversation(opts.workingDirectory),
+				conversationId: opts.conversationId
+			}),
+			...buildPermissionTools({
+				userId: opts.userId,
+				conversationId: opts.conversationId,
+				policy: opts.policy,
+				getMode: () => currentMode
+			}),
+			{
+				name: 'request_mode_switch',
+				permissionBehavior: 'always-prompt',
+				description:
+					'Request switching this conversation to interactive mode when you are blocked in best-effort mode because a needed permission keeps being denied. Use only after trying reasonable alternatives.',
+				parameters: {
+					type: 'object',
+					properties: {
+						mode: {
+							type: 'string',
+							enum: ['interactive'],
+							description: 'The target mode to switch to.'
+						},
+						reason: {
+							type: 'string',
+							description: 'Why the mode switch is needed.'
+						}
+					},
+					required: ['mode', 'reason'],
+					additionalProperties: false
+				},
+				async handler(args: unknown) {
+					const req = parseModeSwitchToolArgs(args);
+					if (currentMode === 'interactive') {
+						return 'Conversation is already in interactive mode.';
+					}
+					const persisted = conversationsRepo.updateSessionSettings(
+						opts.conversationId,
+						opts.userId,
+						{
+							mode: 'interactive'
+						}
+					);
+					if (!persisted) {
+						log.warn('copilot.request_mode_switch.persist_failed', {
+							conversationId: opts.conversationId
+						});
+					}
+					await applyMode('interactive');
+					emit({
+						type: 'session.settings',
+						conversationId: opts.conversationId,
+						mode: 'interactive',
+						source: 'agent'
+					});
+					return `Switched conversation to interactive mode. Reason: ${req.reason}`;
+				}
+			}
+		],
+		onPermissionRequest,
+		onUserInputRequest,
+		onElicitationRequest,
+		onExitPlanMode,
+		onAutoModeSwitch
+	};
+	for (const tool of sessionConfig.tools) {
+		if (tool.permissionBehavior === 'always-prompt' || tool.permissionBehavior === 'normal') {
+			toolPermissionBehavior.set(tool.name, tool.permissionBehavior);
+		}
+	}
+
 	let sdkSession: SdkSession;
 	if (existingMetadata) {
 		try {
-			sdkSession = (await client.resumeSession(opts.conversationId, {
-				model: opts.model,
-				workingDirectory: opts.workingDirectory,
-				streaming: true,
-				onPermissionRequest
-			})) as unknown as SdkSession;
+			sdkSession = (await client.resumeSession(
+				opts.conversationId,
+				sessionConfig
+			)) as unknown as SdkSession;
 		} catch (e) {
 			log.warn('copilot.session.resume_failed_falling_back_to_create', {
 				conversationId: opts.conversationId,
 				err: (e as Error).message
 			});
 			sdkSession = (await client.createSession({
-				model: opts.model,
-				sessionId: opts.conversationId,
-				workingDirectory: opts.workingDirectory,
-				streaming: true,
-				onPermissionRequest
+				...sessionConfig,
+				sessionId: opts.conversationId
 			})) as unknown as SdkSession;
 		}
 	} else {
 		sdkSession = (await client.createSession({
-			model: opts.model,
-			sessionId: opts.conversationId,
-			workingDirectory: opts.workingDirectory,
-			streaming: true,
-			onPermissionRequest
+			...sessionConfig,
+			sessionId: opts.conversationId
 		})) as unknown as SdkSession;
 	}
+	sessionWorkspacePath = normalizeSessionWorkspacePath(sdkSession.workspacePath);
 
-	// --- SDK event subscriptions: stable across many turns. ---
-	const onDelta = (e: unknown) => {
-		const ev = e as { data?: { deltaContent?: string } };
-		const text = ev?.data?.deltaContent ?? '';
-		if (!text || !activeQueue) return;
-		if (!currentMessageId) {
-			currentMessageId = ulid();
-			activeQueue.push({
-				type: 'message.start',
-				messageId: currentMessageId,
-				role: 'assistant'
+	eventAdapter.attach(sdkSession);
+
+	// Push initial mode + approve-all to the runtime. Best-effort: the
+	// `rpc` surface is preview API and may be missing on stub clients;
+	// skipping the call is fine because the bridge enforces approve-all
+	// itself in `onPermissionRequest`, and a missing mode RPC just means
+	// the agent runs in its default mode (still safe).
+	async function applyMode(mode: SessionMode): Promise<void> {
+		const runtimeMode = toRuntimeMode(mode);
+		try {
+			await sdkSession.rpc?.mode?.set?.({ mode: runtimeMode });
+			currentMode = mode;
+		} catch (e) {
+			log.warn('copilot.session.mode_set_failed', {
+				conversationId: opts.conversationId,
+				mode,
+				runtimeMode,
+				err: (e as Error).message
 			});
 		}
-		// First visible token after a reasoning burst closes that segment.
-		closeReasoning();
-		activeQueue.push({ type: 'message.delta', messageId: currentMessageId, text });
-	};
-
-	const onReasoningDelta = (e: unknown) => {
-		const ev = e as { data?: { deltaContent?: string } };
-		let text = ev?.data?.deltaContent ?? '';
-		if (!text || !activeQueue) return;
-		// Reasoning can arrive before the first visible token. Open the
-		// assistant message early so we don't silently drop the opening
-		// thought tokens.
-		if (!currentMessageId) {
-			currentMessageId = ulid();
-			activeQueue.push({
-				type: 'message.start',
-				messageId: currentMessageId,
-				role: 'assistant'
+	}
+	async function applyApproveAll(enabled: boolean): Promise<void> {
+		approveAllTools = enabled;
+		try {
+			await sdkSession.rpc?.permissions?.setApproveAll?.({ enabled });
+		} catch (e) {
+			log.warn('copilot.session.set_approve_all_failed', {
+				conversationId: opts.conversationId,
+				enabled,
+				err: (e as Error).message
 			});
 		}
-		if (!currentReasoningSegmentId) {
-			currentReasoningSegmentId = ulid();
-			currentReasoningStartedAt = Date.now();
-			// The SDK emits space-prefixed tokens (e.g. " plan", " think")
-			// so the first delta of every segment otherwise starts with a
-			// stray leading space. Strip it once per segment to keep the
-			// rendered block flush-left.
-			text = text.replace(/^\s+/, '');
-			if (!text) return;
-		}
-		activeQueue.push({
-			type: 'message.reasoning',
-			messageId: currentMessageId,
-			segmentId: currentReasoningSegmentId,
-			text
-		});
-	};
-
-	const onAssistantMessage = (e: unknown) => {
-		const ev = e as { data?: { content?: string } };
-		if (!activeQueue) return;
-		// If streaming wasn't producing deltas, emit the full content as one chunk.
-		if (!currentMessageId) {
-			currentMessageId = ulid();
-			activeQueue.push({
-				type: 'message.start',
-				messageId: currentMessageId,
-				role: 'assistant'
-			});
-			const text = ev?.data?.content ?? '';
-			if (text) {
-				closeReasoning();
-				activeQueue.push({ type: 'message.delta', messageId: currentMessageId, text });
-			}
-		}
-	};
-
-	const onToolStart = (e: unknown) => {
-		const ev = e as {
-			data?: {
-				toolCallId?: string;
-				toolName?: string;
-				arguments?: unknown;
-			};
-		};
-		if (!activeQueue) return;
-		// Reasoning that preceded a tool call belongs to *that* tool call's
-		// position in the transcript; close the segment now so the runner can
-		// anchor it to the current text offset.
-		closeReasoning();
-		activeQueue.push({
-			type: 'tool.call',
-			toolCallId: ev?.data?.toolCallId ?? ulid(),
-			tool: ev?.data?.toolName ?? 'unknown',
-			args: ev?.data?.arguments ?? null
-		});
-	};
-
-	const onToolComplete = (e: unknown) => {
-		const ev = e as {
-			data?: {
-				toolCallId?: string;
-				toolName?: string;
-				success?: boolean;
-				result?: unknown;
-				error?: unknown;
-			};
-		};
-		if (!activeQueue) return;
-		const ok = ev?.data?.success !== false && !ev?.data?.error;
-		activeQueue.push({
-			type: 'tool.result',
-			toolCallId: ev?.data?.toolCallId ?? ulid(),
-			ok,
-			summary: summarizeResult(ev?.data?.result, ev?.data?.error),
-			output: ev?.data?.result ?? ev?.data?.error ?? null
-		});
-		// File edits — best effort: if the tool wrote a file, the SDK reports
-		// the diff in the result. We don't try to parse arbitrary tool output;
-		// we just surface tool.result. A dedicated file-edit event can be added
-		// once the SDK exposes one in a stable shape.
-	};
-
-	const onSessionIdle = () => {
-		if (!activeQueue) return;
-		closeReasoning();
-		if (currentMessageId) {
-			activeQueue.push({ type: 'message.end', messageId: currentMessageId });
-			currentMessageId = null;
-		}
-		activeQueue.push({ type: 'done' });
-		activeQueue.end();
-		activeQueue = null;
-	};
-
-	const onUsageInfo = (e: unknown) => {
-		const ev = e as {
-			data?: {
-				currentTokens?: number;
-				tokenLimit?: number;
-				messagesLength?: number;
-				systemTokens?: number;
-				conversationTokens?: number;
-				toolDefinitionsTokens?: number;
-				isInitial?: boolean;
-			};
-		};
-		const d = ev?.data;
-		if (!activeQueue || !d) return;
-		if (typeof d.currentTokens !== 'number' || typeof d.tokenLimit !== 'number') return;
-		activeQueue.push({
-			type: 'context.usage',
-			currentTokens: d.currentTokens,
-			tokenLimit: d.tokenLimit,
-			messagesLength: d.messagesLength ?? 0,
-			systemTokens: d.systemTokens,
-			conversationTokens: d.conversationTokens,
-			toolDefinitionsTokens: d.toolDefinitionsTokens,
-			isInitial: d.isInitial
-		});
-	};
-
-	const onCompactionStart = () => {
-		if (!activeQueue) return;
-		activeQueue.push({ type: 'context.compaction', phase: 'start' });
-	};
-
-	const onCompactionComplete = (e: unknown) => {
-		const ev = e as {
-			data?: { tokensRemoved?: number; messagesRemoved?: number };
-		};
-		if (!activeQueue) return;
-		activeQueue.push({
-			type: 'context.compaction',
-			phase: 'complete',
-			tokensRemoved: ev?.data?.tokensRemoved,
-			messagesRemoved: ev?.data?.messagesRemoved
-		});
-	};
-
-	sdkSession.on('assistant.message_delta', onDelta);
-	sdkSession.on('assistant.reasoning_delta', onReasoningDelta);
-	sdkSession.on('assistant.message', onAssistantMessage);
-	sdkSession.on('tool.execution_start', onToolStart);
-	sdkSession.on('tool.execution_complete', onToolComplete);
-	sdkSession.on('session.idle', onSessionIdle);
-	sdkSession.on('session.usage_info', onUsageInfo);
-	sdkSession.on('session.compaction_start', onCompactionStart);
-	sdkSession.on('session.compaction_complete', onCompactionComplete);
+	}
+	// Fire-and-forget: callers don't need to await initialization. A turn
+	// posted before these resolve will still see the cached `approveAllTools`
+	// value (we set it synchronously above) and a worst-case slightly-late
+	// mode change which the agent will pick up on the next message.
+	if (currentMode !== 'interactive') void applyMode(currentMode);
+	if (approveAllTools) void applyApproveAll(true);
 
 	const session: ConversationSession = {
 		conversationId: opts.conversationId,
+		workingDirectory: opts.workingDirectory,
 		lastUsed: Date.now(),
 		async *send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent> {
 			if (activeQueue) throw new Error('session busy: a turn is already in progress');
 			const q = new AsyncQueue<PortalEvent>();
 			activeQueue = q;
-			currentMessageId = null;
+			eventAdapter.resetTurn();
 			const onAbort = () => {
 				q.push({ type: 'error', code: 'aborted', message: 'Aborted by client.' });
 				q.end();
@@ -412,6 +392,22 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		async abort() {
 			if (sdkSession.abort) await sdkSession.abort();
 		},
+		async setMode(mode: SessionMode) {
+			await applyMode(mode);
+		},
+		async setApproveAll(enabled: boolean) {
+			await applyApproveAll(enabled);
+		},
+		async resetSessionApprovals() {
+			try {
+				await sdkSession.rpc?.permissions?.resetSessionApprovals?.();
+			} catch (e) {
+				log.warn('copilot.session.reset_session_approvals_failed', {
+					conversationId: opts.conversationId,
+					err: (e as Error).message
+				});
+			}
+		},
 		async dispose() {
 			try {
 				await sdkSession.disconnect();
@@ -427,74 +423,23 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	return session;
 }
 
-// --- Permission handling ---
-
-interface PermissionRequestLike {
-	kind?: string;
-	toolName?: string;
-	fileName?: string;
-	fullCommandText?: string;
-	args?: unknown;
+function parseModeSwitchToolArgs(args: unknown): { mode: 'interactive'; reason: string } {
+	if (!args || typeof args !== 'object') {
+		throw new Error('request_mode_switch requires object arguments.');
+	}
+	const mode = (args as Record<string, unknown>).mode;
+	const reason = (args as Record<string, unknown>).reason;
+	if (mode !== 'interactive') {
+		throw new Error('request_mode_switch only supports switching to interactive mode.');
+	}
+	if (typeof reason !== 'string' || reason.trim().length === 0) {
+		throw new Error('request_mode_switch requires a non-empty reason.');
+	}
+	return { mode, reason: reason.trim() };
 }
 
-async function handlePermission(
-	req: PermissionRequestLike,
-	opts: BridgeOpenOptions,
-	emit: (ev: PortalEvent) => void
-): Promise<PermissionRequestResult> {
-	const tool = req.toolName ?? req.kind ?? 'unknown';
-	const kind = req.kind ?? 'unknown';
-
-	// 1) Existing grant?
-	if (settingsRepo.hasGrant(opts.userId, opts.conversationId, tool)) {
-		return { kind: 'approve-once' };
-	}
-
-	// 2) Default policy fast path.
-	const decision = decideByPolicy(opts.policy, kind);
-	if (decision === 'approved') return { kind: 'approve-once' };
-	if (decision === 'denied') return { kind: 'reject' };
-
-	// 3) Ask the user. Surface a tool.permission event and wait for the HTTP
-	//    callback to resolve our deferred.
-	const requestId = newRequestId();
-	const summary = req.fullCommandText ?? req.fileName ?? tool;
-	const userDecision = await new Promise<PermissionDecision>((resolve, reject) => {
-		registerPermission({
-			requestId,
-			conversationId: opts.conversationId,
-			tool,
-			kind,
-			summary,
-			args: req.args ?? null,
-			resolve,
-			reject,
-			createdAt: Date.now(),
-			emit
-		});
-		emit({
-			type: 'tool.permission',
-			requestId,
-			tool,
-			kind,
-			summary,
-			args: req.args ?? null
-		});
-	});
-
-	if (userDecision === 'deny') return { kind: 'reject' };
-	return { kind: 'approve-once' };
-}
-
-function summarizeResult(result: unknown, error: unknown): string {
-	if (error) return typeof error === 'string' ? error : 'error';
-	if (typeof result === 'string') return result.slice(0, 200);
-	if (result && typeof result === 'object') {
-		try {
-			return JSON.stringify(result).slice(0, 200);
-		} catch {
-			return 'object';
-		}
-	}
-	return 'ok';
+function normalizeSessionWorkspacePath(path: string | undefined): string | null {
+	const trimmed = path?.trim();
+	if (!trimmed) return null;
+	return trimmed;
 }

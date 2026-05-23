@@ -1,12 +1,10 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { authorizeConversation } from '$lib/server/conversation-auth';
-import { workspaceRoot } from '$lib/server/files';
+import { authorizeConversationWorkdir } from '$lib/server/conversation-auth';
 import { log, isGitRepo, GitError } from '$lib/server/git';
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
-	authorizeConversation(params.id, locals.userId);
-	const workdir = workspaceRoot();
+	const { workdir } = authorizeConversationWorkdir(params.id, locals.userId);
 	if (!(await isGitRepo(workdir))) return json({ initialized: false, commits: [] });
 	const limit = Math.min(Number(url.searchParams.get('limit') ?? '20') || 20, 200);
 	const skip = Math.max(Number(url.searchParams.get('skip') ?? '0') || 0, 0);

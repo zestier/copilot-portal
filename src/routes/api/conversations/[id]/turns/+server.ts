@@ -71,6 +71,8 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			workingDirectory: workdir,
 			model: conv.model ?? cfg.DEFAULT_MODEL,
 			policy: userSettings.defaultPolicy,
+			mode: conv.mode,
+			approveAllTools: conv.approveAllTools,
 			authToken
 		}
 	});

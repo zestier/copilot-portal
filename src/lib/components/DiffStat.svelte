@@ -19,6 +19,7 @@
 	.diffstat {
 		display: inline-flex;
 		gap: var(--space-1);
+		flex: 0 0 auto;
 		font-family: var(--mono);
 		font-size: var(--fs-sm);
 		font-variant-numeric: tabular-nums;

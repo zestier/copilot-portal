@@ -15,12 +15,6 @@ ARG NODE_VERSION=24
 FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS build
 WORKDIR /app
 
-# Build deps for better-sqlite3 in case a prebuild is missing for the host
-# arch (rare; falls back to compiling from source).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
-
 RUN corepack enable
 
 # `scripts/` is copied before `pnpm install` because pnpm runs the root
@@ -39,11 +33,6 @@ RUN pnpm run build
 # ---- deps (runs on target arch; fetches the correct prebuilt .node) ----
 FROM node:${NODE_VERSION}-bookworm-slim AS deps
 WORKDIR /app
-
-# Same build deps as above; only consumed if the target arch has no prebuild.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable
 

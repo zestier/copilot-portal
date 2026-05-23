@@ -25,6 +25,7 @@ describe('db migrations + repos', () => {
 				'permission_decisions',
 				'permission_grants',
 				'schema_migrations',
+				'background_agent_lifecycles',
 				'tool_calls',
 				'user_settings',
 				'user_tokens',
@@ -59,15 +60,138 @@ describe('db migrations + repos', () => {
 		expect(convs.get(c.id, u.id)?.title).toBe('t');
 	});
 
+	it('round-trips the best-effort session mode', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, {
+			title: 't',
+			workdir: '/tmp',
+			model: null,
+			mode: 'autopilot'
+		});
+		expect(convs.get(c.id, u.id)?.mode).toBe('autopilot');
+		expect(convs.updateSessionSettings(c.id, u.id, { mode: 'best-effort' })).toBe(true);
+		expect(convs.get(c.id, u.id)?.mode).toBe('best-effort');
+	});
+
 	it('permission grants scope by conversation and global', () => {
 		const u = users.ensureLocalUser();
 		const c = convs.create(u.id, { title: 't', workdir: '/tmp', model: null });
 		expect(settings.hasGrant(u.id, c.id, 'shell')).toBe(false);
-		settings.addGrant(u.id, c.id, 'shell');
+		settings.addGrant({ userId: u.id, conversationId: c.id, tool: 'shell' });
 		expect(settings.hasGrant(u.id, c.id, 'shell')).toBe(true);
-		// '*' wildcard
-		settings.addGrant(u.id, null, '*');
+		// '*' tool wildcard, user-global.
+		settings.addGrant({ userId: u.id, conversationId: null, tool: '*' });
 		expect(settings.hasGrant(u.id, c.id, 'read')).toBe(true);
+	});
+
+	it('lists and revokes grants per user; prune drops expired rows', () => {
+		const u = users.ensureLocalUser();
+		const other = users.upsertGithub({
+			githubLogin: 'rival',
+			githubId: 7,
+			displayName: null,
+			avatarUrl: null
+		});
+		const c = convs.create(u.id, { title: 'main', workdir: '/tmp', model: null });
+		settings.addGrant({ userId: u.id, conversationId: c.id, tool: 'shell' });
+		settings.addGrant({
+			userId: u.id,
+			conversationId: null,
+			tool: 'read',
+			expiresAt: Date.now() - 1000
+		});
+		settings.addGrant({ userId: other.id, conversationId: null, tool: 'shell' });
+
+		// Each user only sees their own grants. Filter out the structured
+		// seed grants that ensureLocalUser / upsertGithub install — this
+		// test exercises the legacy `addGrant` path, not the seeded set.
+		const mine = settings.listGrantsForUser(u.id).filter((g) => g.scope === null);
+		expect(mine.map((g) => g.tool).sort()).toEqual(['read', 'shell']);
+		expect(
+			settings
+				.listGrantsForUser(other.id)
+				.filter((g) => g.scope === null)
+				.map((g) => g.tool)
+		).toEqual(['shell']);
+
+		// Conversation title comes through the join for conversation-scoped rows.
+		const shellGrant = mine.find((g) => g.tool === 'shell')!;
+		expect(shellGrant.conversationTitle).toBe('main');
+		expect(shellGrant.conversationId).toBe(c.id);
+
+		// Pruning drops the expired global 'read' grant, nothing else.
+		const purged = settings.pruneExpiredGrants();
+		expect(purged).toBe(1);
+		expect(
+			settings
+				.listGrantsForUser(u.id)
+				.filter((g) => g.scope === null)
+				.map((g) => g.tool)
+		).toEqual(['shell']);
+
+		// Revoke is scoped to the owner — another user can't delete my row.
+		const target = settings.listGrantsForUser(u.id).filter((g) => g.scope === null)[0];
+		expect(settings.revokeGrant(other.id, target.id)).toBe(false);
+		expect(settings.revokeGrant(u.id, target.id)).toBe(true);
+		expect(settings.listGrantsForUser(u.id).filter((g) => g.scope === null)).toEqual([]);
+		// Idempotent.
+		expect(settings.revokeGrant(u.id, target.id)).toBe(false);
+	});
+
+	it('updateGrant edits matchable fields in place, scoped to owner', () => {
+		const u = users.ensureLocalUser();
+		const other = users.upsertGithub({
+			githubLogin: 'rival2',
+			githubId: 11,
+			displayName: null,
+			avatarUrl: null
+		});
+		settings.addGrant({
+			userId: u.id,
+			conversationId: null,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scope: { kind: 'shell', rule: { argv0: 'ls' } },
+			decision: 'allow'
+		});
+		const grant = settings.listGrantsForUser(u.id).find((g) => g.tool === 'shell')!;
+		const grantedAt = grant.grantedAt;
+
+		// Foreign users can't edit my row.
+		expect(
+			settings.updateGrant(other.id, grant.id, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scope: { kind: 'shell', rule: { argv0: 'cat' } },
+				decision: 'deny'
+			})
+		).toBe(false);
+
+		// Owner can. granted_at is preserved, matchable fields change.
+		expect(
+			settings.updateGrant(u.id, grant.id, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scope: { kind: 'shell', rule: { argv0: 'cat' } },
+				decision: 'deny',
+				expiresAt: Date.now() + 60_000
+			})
+		).toBe(true);
+		const after = settings.listGrantsForUser(u.id).find((g) => g.id === grant.id)!;
+		expect(after.decision).toBe('deny');
+		expect(after.scope).toEqual({ kind: 'shell', rule: { argv0: 'cat' } });
+		expect(after.expiresAt).not.toBeNull();
+		expect(after.grantedAt).toBe(grantedAt);
+
+		// Missing rowid returns false rather than throwing.
+		expect(
+			settings.updateGrant(u.id, 999_999, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scope: { kind: 'shell', rule: { argv0: 'x' } },
+				decision: 'allow'
+			})
+		).toBe(false);
 	});
 
 	it('archives and unarchives conversations and filters list accordingly', () => {
@@ -114,14 +238,186 @@ describe('db migrations + repos', () => {
 		settings.save(u.id, {
 			defaultModel: 'claude',
 			defaultWorkdir: null,
-			defaultPolicy: 'allow-readonly',
+			defaultConversationMode: 'best-effort',
+			defaultPolicy: 'allow-all',
 			theme: 'light'
 		});
 		expect(settings.get(u.id)).toEqual({
 			defaultModel: 'claude',
 			defaultWorkdir: null,
-			defaultPolicy: 'allow-readonly',
+			defaultConversationMode: 'best-effort',
+			defaultPolicy: 'allow-all',
 			theme: 'light'
+		});
+	});
+
+	it('coerces a stale legacy allow-readonly policy row to prompt', () => {
+		const u = users.ensureLocalUser();
+		settings.save(u.id, {
+			defaultModel: null,
+			defaultWorkdir: null,
+			defaultConversationMode: 'interactive',
+			defaultPolicy: 'prompt',
+			theme: 'dark'
+		});
+		// Simulate a row that escaped migration 008.
+		getDb()
+			.prepare('UPDATE user_settings SET default_policy = ? WHERE user_id = ?')
+			.run('allow-readonly', u.id);
+		expect(settings.get(u.id)?.defaultPolicy).toBe('prompt');
+	});
+
+	it('recovers interrupted in-flight assistant messages and pending tool calls', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, { title: 'recover', workdir: '/tmp', model: null });
+		const assistant = messages.append(c.id, {
+			role: 'assistant',
+			content: 'partial',
+			status: 'streaming'
+		});
+		messages.insertToolCall(assistant.id, {
+			id: 'tool-pending',
+			tool: 'bash',
+			argsJson: JSON.stringify({ command: 'sleep 10' }),
+			resultJson: null,
+			status: 'pending',
+			startedAt: 100,
+			endedAt: null,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+
+		const recovered = messages.recoverInterruptedInFlight(1234);
+
+		expect(recovered).toEqual({ messages: 1, toolCalls: 1 });
+		const reloaded = messages.listByConversation(c.id).find((m) => m.id === assistant.id);
+		expect(reloaded?.status).toBe('interrupted');
+		expect(reloaded?.errorCode).toBe('server_restarted');
+		expect(reloaded?.toolCalls?.[0]).toMatchObject({
+			id: 'tool-pending',
+			status: 'error',
+			endedAt: 1234
+		});
+	});
+
+	it('persists background agent lifecycle outside tool_calls', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, { title: 'subagent lifecycle', workdir: '/tmp', model: null });
+		const assistant = messages.append(c.id, {
+			role: 'assistant',
+			content: '',
+			status: 'complete'
+		});
+		messages.insertToolCall(assistant.id, {
+			id: 'task-background',
+			tool: 'task',
+			argsJson: JSON.stringify({ mode: 'background' }),
+			resultJson: JSON.stringify({ agent_id: 'agent-1' }),
+			status: 'ok',
+			startedAt: 100,
+			endedAt: 110,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+
+		messages.updateBackgroundAgentLifecycle('task-background', 'agent-1', 'running', 120);
+		messages.updateBackgroundAgentLifecycle('task-background', 'agent-1', 'completed', 130);
+
+		const toolColumns = (
+			getDb().prepare(`PRAGMA table_info(tool_calls)`).all() as { name: string }[]
+		).map((r) => r.name);
+		expect(toolColumns).not.toContain('subagent_status');
+
+		const reloaded = messages.listByConversation(c.id).find((m) => m.id === assistant.id);
+		expect(reloaded?.toolCalls?.[0]).toMatchObject({
+			id: 'task-background',
+			status: 'ok',
+			backgroundAgentStatus: 'completed',
+			backgroundAgentId: 'agent-1',
+			backgroundAgentStartedAt: 120,
+			backgroundAgentEndedAt: 130
+		});
+		expect(messages.getToolCallForConversation(c.id, 'task-background')).toMatchObject({
+			id: 'task-background',
+			backgroundAgentStatus: 'completed',
+			backgroundAgentId: 'agent-1',
+			backgroundAgentStartedAt: 120,
+			backgroundAgentEndedAt: 130
+		});
+	});
+
+	it('does not let late running lifecycle events clobber terminal states', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, {
+			title: 'subagent lifecycle race',
+			workdir: '/tmp',
+			model: null
+		});
+		const assistant = messages.append(c.id, {
+			role: 'assistant',
+			content: '',
+			status: 'complete'
+		});
+		messages.insertToolCall(assistant.id, {
+			id: 'task-race',
+			tool: 'task',
+			argsJson: JSON.stringify({ mode: 'background' }),
+			resultJson: null,
+			status: 'ok',
+			startedAt: 100,
+			endedAt: 110,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+
+		messages.updateBackgroundAgentLifecycle('task-race', 'agent-race', 'completed', 130);
+		messages.updateBackgroundAgentLifecycle('task-race', 'agent-race', 'running', 120);
+
+		const reloaded = messages.listByConversation(c.id).find((m) => m.id === assistant.id);
+		expect(reloaded?.toolCalls?.[0]).toMatchObject({
+			id: 'task-race',
+			backgroundAgentStatus: 'completed',
+			backgroundAgentId: 'agent-race',
+			backgroundAgentStartedAt: 120,
+			backgroundAgentEndedAt: 130
+		});
+	});
+
+	it('self-heals the background lifecycle table if a cached DB handle missed the migration', () => {
+		const db = getDb();
+		db.prepare('DROP TABLE background_agent_lifecycles').run();
+
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, {
+			title: 'subagent lifecycle heal',
+			workdir: '/tmp',
+			model: null
+		});
+		const assistant = messages.append(c.id, {
+			role: 'assistant',
+			content: '',
+			status: 'complete'
+		});
+		messages.insertToolCall(assistant.id, {
+			id: 'task-heal',
+			tool: 'task',
+			argsJson: JSON.stringify({ mode: 'background' }),
+			resultJson: null,
+			status: 'ok',
+			startedAt: 100,
+			endedAt: 110,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+
+		messages.updateBackgroundAgentLifecycle('task-heal', 'agent-heal', 'completed', 140);
+
+		const reloaded = messages.listByConversation(c.id).find((m) => m.id === assistant.id);
+		expect(reloaded?.toolCalls?.[0]).toMatchObject({
+			id: 'task-heal',
+			backgroundAgentStatus: 'completed',
+			backgroundAgentId: 'agent-heal',
+			backgroundAgentEndedAt: 140
 		});
 	});
 });

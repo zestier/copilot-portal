@@ -1,7 +1,43 @@
 <script lang="ts">
 	import type { ToolCallRecord } from '$lib/types';
-	let { toolCall }: { toolCall: ToolCallRecord } = $props();
-	let open = $state(false);
+	import DiffView from './DiffView.svelte';
+	import TerminalBlock from './tool/TerminalBlock.svelte';
+	import ResultBlock from './tool/ResultBlock.svelte';
+	import { synthesizeDiffs } from '$lib/client/diff-synth';
+	import { summarizeToolCall } from '$lib/client/tool-summary';
+	import { decodeToolResult, shouldRenderToolResultAsMarkdown } from '$lib/client/tool-result';
+
+	let {
+		toolCall,
+		conversationId,
+		onRerunStarted
+	}: {
+		toolCall: ToolCallRecord;
+		conversationId?: string;
+		onRerunStarted?: (turnId: string) => void;
+	} = $props();
+	let rerunning = $state(false);
+	let rerunError = $state<string | null>(null);
+
+	// Default-closed; users opt in to seeing args + result by clicking.
+	// We don't auto-expand while pending: the summary header already
+	// surfaces the tool name, target, and progress message, which is
+	// enough running feedback for the quick tool calls that make up the
+	// bulk of a turn. (Subagents have their own auto-expand because they
+	// run longer and have richer interior content.)
+	// `task_complete` is the exception because its result is often the
+	// assistant's final user-facing summary.
+	let userToggled = $state(false);
+	let manualOpen = $state(false);
+	const defaultOpen = $derived(toolCall.tool === 'task_complete');
+	const open = $derived(userToggled ? manualOpen : defaultOpen);
+
+	function onToggle(e: Event) {
+		const el = e.currentTarget as HTMLDetailsElement;
+		userToggled = true;
+		manualOpen = el.open;
+	}
+
 	function statusEmoji(s: ToolCallRecord['status']) {
 		switch (s) {
 			case 'ok':
@@ -9,97 +45,100 @@
 			case 'error':
 				return '✗';
 			case 'denied':
-				return '⛔';
+				return '✗';
 			default:
 				return '⏳';
 		}
 	}
 
-	function truncate(s: string, n = 80): string {
-		const oneLine = s.replace(/\s+/g, ' ').trim();
-		return oneLine.length > n ? oneLine.slice(0, n - 1) + '…' : oneLine;
-	}
-
-	function parseArgs(json: string): Record<string, unknown> | null {
+	const summary = $derived(summarizeToolCall(toolCall.tool, toolCall.argsJson));
+	const decoded = $derived(decodeToolResult(toolCall.resultJson));
+	const markdownResult = $derived(shouldRenderToolResultAsMarkdown(toolCall.tool));
+	const pending = $derived(toolCall.status === 'pending');
+	// Edits/creates render as a unified diff synthesized from args. We only
+	// show the diff once the call succeeded; while pending we'd be
+	// rendering args that haven't been applied, and on error the result
+	// text usually explains the failure.
+	const renderedDiffs = $derived(toolCall.status === 'ok' ? synthesizeDiffs(toolCall) : []);
+	const gitDiffText = $derived(
+		toolCall.status === 'ok' && toolCall.tool === 'git_diff' ? decoded.fallbackText : null
+	);
+	const rerunDisabledReason = $derived.by(() => {
+		if (toolCall.status !== 'denied' && toolCall.status !== 'error') return null;
+		if (!conversationId) return 'Conversation context is unavailable.';
+		if (toolCall.parentToolCallId) return 'Nested sub-agent tool calls cannot be rerun yet.';
+		return null;
+	});
+	const canRerun = $derived(
+		(toolCall.status === 'denied' || toolCall.status === 'error') && rerunDisabledReason === null
+	);
+	// For shell-style tools, surface the actual command so a viewer
+	// doesn't have to expand "Arguments" to see what ran. We thread it
+	// into the terminal pane (both live partial output and final result)
+	// as a leading `$ command` prompt line.
+	const shellCommand = $derived.by(() => {
+		const t = toolCall.tool.toLowerCase();
+		if (t !== 'bash' && t !== 'shell' && t !== 'run') return null;
 		try {
-			const v = JSON.parse(json);
-			return v && typeof v === 'object' && !Array.isArray(v)
-				? (v as Record<string, unknown>)
-				: null;
+			const a = JSON.parse(toolCall.argsJson);
+			if (a && typeof a === 'object' && !Array.isArray(a)) {
+				const cmd = (a as Record<string, unknown>).command ?? (a as Record<string, unknown>).cmd;
+				return typeof cmd === 'string' && cmd.length > 0 ? cmd : null;
+			}
 		} catch {
-			return null;
-		}
-	}
-
-	function str(v: unknown): string | null {
-		return typeof v === 'string' && v.length > 0 ? v : null;
-	}
-
-	function summarize(tool: string, argsJson: string): string | null {
-		const args = parseArgs(argsJson);
-		if (!args) return null;
-		const t = tool.toLowerCase();
-		switch (t) {
-			case 'bash':
-			case 'shell':
-			case 'run': {
-				const desc = str(args.description);
-				if (desc) return desc;
-				const cmd = str(args.command) ?? str(args.cmd);
-				return cmd ? truncate(cmd, 60) : null;
-			}
-			case 'view':
-			case 'read':
-			case 'read_file':
-			case 'cat': {
-				const p = str(args.path) ?? str(args.file) ?? str(args.filename);
-				const range = Array.isArray(args.view_range) ? args.view_range : null;
-				if (p && range && range.length === 2) return `${p} [${range[0]}-${range[1]}]`;
-				return p;
-			}
-			case 'edit':
-			case 'create':
-			case 'write':
-			case 'write_file':
-				return str(args.path) ?? str(args.file) ?? str(args.filename);
-			case 'grep': {
-				const pat = str(args.pattern);
-				const glob = str(args.glob) ?? str(args.type);
-				if (pat && glob) return `${pat}  (${glob})`;
-				return pat;
-			}
-			case 'glob':
-				return str(args.pattern);
-			case 'write_bash': {
-				const input = str(args.input);
-				return input ? truncate(input, 40) : null;
-			}
-			case 'read_bash':
-			case 'stop_bash':
-				return str(args.shellId);
-			case 'task':
-				return str(args.description) ?? str(args.name);
-			case 'report_intent':
-				return str(args.intent);
-			case 'web_fetch':
-			case 'fetch':
-				return str(args.url);
-			case 'skill':
-				return str(args.skill);
-			case 'sql':
-			case 'session_store_sql':
-				return str(args.description) ?? (str(args.query) ? truncate(str(args.query)!, 60) : null);
-		}
-		for (const v of Object.values(args)) {
-			if (typeof v === 'string' && v.length > 0) return truncate(v, 80);
+			/* ignore */
 		}
 		return null;
+	});
+
+	function requiresSideEffectConfirmation() {
+		return toolCall.tool !== 'view' && toolCall.tool !== 'git_show_file';
 	}
 
-	let summary = $derived(summarize(toolCall.tool, toolCall.argsJson));
+	async function rerunWithApproval() {
+		if (!conversationId || rerunning || !canRerun) return;
+		rerunError = null;
+		const sideEffect = requiresSideEffectConfirmation();
+		const ok = window.confirm(
+			[
+				'Rerun this exact failed tool call with a short-lived approval?',
+				'',
+				`Tool: ${toolCall.tool}`,
+				sideEffect
+					? 'Risk: this tool may have side effects if repeated.'
+					: 'Risk: read-only rerun.',
+				'',
+				'Arguments:',
+				toolCall.argsJson
+			].join('\n')
+		);
+		if (!ok) return;
+		rerunning = true;
+		try {
+			const r = await fetch(
+				`/api/conversations/${conversationId}/tool-calls/${toolCall.id}/rerun`,
+				{
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ confirmed: sideEffect })
+				}
+			);
+			if (!r.ok) {
+				const body = await r.text();
+				rerunError = body || `Rerun failed (${r.status})`;
+				return;
+			}
+			const data = (await r.json()) as { turnId: string };
+			onRerunStarted?.(data.turnId);
+		} catch (e) {
+			rerunError = e instanceof Error ? e.message : String(e);
+		} finally {
+			rerunning = false;
+		}
+	}
 </script>
 
-<details class="tool" class:open bind:open>
+<details class="tool" class:open class:is-pending={pending} {open} ontoggle={onToggle}>
 	<summary>
 		<span class="emoji">{statusEmoji(toolCall.status)}</span>
 		<code>{toolCall.tool}</code>
@@ -108,13 +147,76 @@
 		{:else}
 			<span class="muted">— {toolCall.status}</span>
 		{/if}
+		{#if pending && toolCall.progressMessage}
+			<span class="progress" title={toolCall.progressMessage}>· {toolCall.progressMessage}</span>
+		{/if}
 	</summary>
 	<div class="content">
-		<div class="label">Arguments</div>
-		<pre><code>{toolCall.argsJson}</code></pre>
-		{#if toolCall.resultJson}
-			<div class="label">Result</div>
-			<pre><code>{toolCall.resultJson}</code></pre>
+		<details class="args">
+			<summary class="disclosure">Arguments</summary>
+			<pre><code>{toolCall.argsJson}</code></pre>
+		</details>
+
+		{#if toolCall.status === 'denied' || toolCall.status === 'error'}
+			<div class="rerun">
+				<button
+					type="button"
+					class="rerun-btn"
+					onclick={rerunWithApproval}
+					disabled={!canRerun || rerunning}
+					title={rerunDisabledReason ?? 'Review exact args, grant short-lived approval, and rerun'}
+				>
+					{rerunning ? 'Rerunning…' : 'Rerun with approval'}
+				</button>
+				{#if rerunDisabledReason}
+					<span class="muted small">{rerunDisabledReason}</span>
+				{/if}
+				{#if rerunError}
+					<span class="error small">{rerunError}</span>
+				{/if}
+			</div>
+		{/if}
+
+		{#if pending}
+			{#if shellCommand || toolCall.partialOutput}
+				<TerminalBlock
+					text={toolCall.partialOutput ?? ''}
+					command={shellCommand ?? undefined}
+					streaming
+				/>
+				{#if toolCall.progressMessage && !toolCall.partialOutput}
+					<div class="muted progress-line">{toolCall.progressMessage}</div>
+				{/if}
+			{:else if toolCall.progressMessage}
+				<div class="muted progress-line">{toolCall.progressMessage}</div>
+			{:else}
+				<div class="muted">Running…</div>
+			{/if}
+		{:else if toolCall.resultJson}
+			{#if gitDiffText}
+				<DiffView diff={gitDiffText} collapsible />
+			{:else if renderedDiffs.length > 0}
+				{#each renderedDiffs as synthDiff, i (synthDiff.path + ':' + i)}
+					<DiffView
+						path={synthDiff.path}
+						diff={synthDiff.diff}
+						showLineNumbers={false}
+						collapsible
+					/>
+				{/each}
+			{:else}
+				{#each decoded.blocks as block, i (i)}
+					<ResultBlock
+						{block}
+						command={i === 0 && shellCommand ? shellCommand : undefined}
+						markdown={markdownResult}
+					/>
+				{/each}
+			{/if}
+			<details class="raw">
+				<summary class="disclosure">Raw output</summary>
+				<pre><code>{toolCall.resultJson}</code></pre>
+			</details>
 		{/if}
 	</div>
 </details>
@@ -126,6 +228,19 @@
 		border-radius: var(--radius-md);
 		padding: var(--space-2) var(--space-3);
 		font-size: var(--fs-md);
+	}
+	.tool.is-pending {
+		border-left: 3px solid var(--accent, #7c5cff);
+		animation: tool-pulse 1.6s ease-in-out infinite;
+	}
+	@keyframes tool-pulse {
+		0%,
+		100% {
+			border-left-color: var(--accent, #7c5cff);
+		}
+		50% {
+			border-left-color: color-mix(in srgb, var(--accent, #7c5cff) 35%, transparent);
+		}
 	}
 	summary {
 		cursor: pointer;
@@ -143,14 +258,71 @@
 		font-family: var(--mono);
 		font-size: var(--fs-sm);
 	}
+	.progress {
+		margin-left: 0.5rem;
+		color: var(--text-muted);
+		font-size: var(--fs-xs);
+		font-style: italic;
+		max-width: 24em;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		display: inline-block;
+		vertical-align: bottom;
+	}
+	.progress-line {
+		font-style: italic;
+		font-size: var(--fs-sm);
+		margin: 0.4rem 0;
+	}
 	.content {
 		margin-top: 0.4rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
 	}
-	.label {
+	.rerun {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.rerun-btn {
+		font: inherit;
+		font-size: var(--fs-sm);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--surface);
+		color: var(--text);
+		padding: 0.25rem 0.5rem;
+		cursor: pointer;
+	}
+	.rerun-btn:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+	.error {
+		color: var(--danger, #ff6b6b);
+	}
+	.disclosure {
+		cursor: pointer;
+		list-style: none;
 		font-size: 0.7em;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		color: var(--text-muted);
-		margin: 0.4rem 0 0.2rem;
+		user-select: none;
+	}
+	.disclosure::-webkit-details-marker {
+		display: none;
+	}
+	.args[open] > .disclosure,
+	.raw[open] > .disclosure {
+		margin-bottom: 0.3rem;
+	}
+	pre {
+		margin: 0;
+		max-width: 100%;
+		overflow-x: auto;
 	}
 </style>

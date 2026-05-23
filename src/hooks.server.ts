@@ -3,10 +3,12 @@ import { loadConfig } from '$lib/server/config';
 import { log } from '$lib/server/log';
 import { getDb } from '$lib/server/db';
 import * as users from '$lib/server/db/repos/users';
+import * as settings from '$lib/server/db/repos/settings';
 import { read as readSession, generateCsrfToken } from '$lib/server/auth/session';
 import { perWindow } from '$lib/server/rate-limit';
 import { apiErrorResponse } from '$lib/server/http';
 import { startIdleReaper } from '$lib/server/copilot/pool';
+import * as messages from '$lib/server/db/repos/messages';
 
 // One-time bootstrap.
 let booted = false;
@@ -15,6 +17,7 @@ function boot() {
 	booted = true;
 	loadConfig(); // throws if invalid
 	getDb(); // opens + migrates
+	messages.recoverInterruptedInFlight();
 	startIdleReaper();
 	log.info('boot.ok');
 }
@@ -104,8 +107,24 @@ export const handle: Handle = async ({ event, resolve }) => {
 		}
 	}
 
+	// Resolve theme for SSR so the first paint matches the user's preference.
+	// 'system' is resolved client-side via prefers-color-scheme (see app.html).
+	// NOTE: we read settings inside transformPageChunk (not before resolve())
+	// so that form actions which mutate the theme are reflected in the same
+	// response, without requiring a page refresh.
 	const response = await resolve(event, {
-		transformPageChunk: ({ html }) => html.replace('%csrf.token%', event.locals.csrfToken)
+		transformPageChunk: ({ html }) => {
+			let themeMode: 'dark' | 'light' | 'system' = 'system';
+			if (event.locals.userId) {
+				const s = settings.get(event.locals.userId);
+				if (s) themeMode = s.theme;
+			}
+			const initialTheme = themeMode === 'light' ? 'light' : 'dark';
+			return html
+				.replace('%csrf.token%', event.locals.csrfToken)
+				.replace('%theme.initial%', initialTheme)
+				.replace('%theme.mode%', themeMode);
+		}
 	});
 
 	// Security headers.
@@ -114,7 +133,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 			'content-security-policy',
 			[
 				"default-src 'self'",
-				"script-src 'self' 'unsafe-inline'",
+				// No 'unsafe-inline' for scripts: the pre-hydrate bootstrap
+				// lives in `/static/prehydrate.js`, and SvelteKit's own
+				// inline hydration scripts are emitted with integrity
+				// hashes that browsers accept under `'self'` via the
+				// `'strict-dynamic'`-less default. If you need to add an
+				// inline <script>, move it to /static or use SvelteKit's
+				// `kit.csp.directives` with mode: 'hash' instead.
+				"script-src 'self'",
+				// 'unsafe-inline' still required for Svelte component
+				// styles; tightening this needs a Svelte compiler change.
 				"style-src 'self' 'unsafe-inline'",
 				"connect-src 'self'",
 				"img-src 'self' data: https://avatars.githubusercontent.com",
@@ -126,7 +154,12 @@ export const handle: Handle = async ({ event, resolve }) => {
 		);
 	}
 	response.headers.set('x-content-type-options', 'nosniff');
-	response.headers.set('referrer-policy', 'no-referrer');
+	// 'same-origin' (not 'no-referrer') so browsers still send the Origin
+	// header on same-site form POSTs. With 'no-referrer' the browser sends
+	// `Origin: null`, which SvelteKit's built-in CSRF check rejects. The
+	// path is still stripped for cross-origin requests, which is what the
+	// privacy intent was.
+	response.headers.set('referrer-policy', 'same-origin');
 	response.headers.set('x-frame-options', 'DENY');
 	if (secure) {
 		response.headers.set('strict-transport-security', 'max-age=63072000; includeSubDomains');

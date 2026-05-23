@@ -30,6 +30,9 @@ services:
       ALLOWED_GITHUB_LOGINS: ${ALLOWED_GITHUB_LOGINS:-}
       SHARED_SECRET: ${SHARED_SECRET:-}
       COPILOT_GITHUB_TOKEN: ${COPILOT_GITHUB_TOKEN:-}
+      # Optional: connect to an externally-run `copilot --headless --port N`
+      # instead of spawning the bundled CLI. See docs/deployment.md.
+      COPILOT_CLI_URL: ${COPILOT_CLI_URL:-}
       DEFAULT_MODEL: ${DEFAULT_MODEL:-claude-sonnet-4.5}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       IDLE_TIMEOUT_MIN: ${IDLE_TIMEOUT_MIN:-15}

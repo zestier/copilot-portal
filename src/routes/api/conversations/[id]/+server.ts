@@ -5,6 +5,7 @@ import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
 import * as pool from '$lib/server/copilot/pool';
 import { getTurn } from '$lib/server/copilot/turn-runner';
+import { listForConversation as listPendingInteractive } from '$lib/server/copilot/interactive-requests';
 import { parseBody } from '$lib/server/validate';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 
@@ -19,7 +20,11 @@ export const GET: RequestHandler = ({ params, locals }) => {
 	return json({
 		conversation: conv,
 		messages: messages.listByConversation(conv.id),
-		activeTurnId
+		activeTurnId,
+		// Outstanding prompts so a refresh / SSE blip can rehydrate the
+		// dialog rather than stranding the agent on a request the user can
+		// no longer see.
+		pendingInteractive: listPendingInteractive(conv.id)
 	});
 };
 

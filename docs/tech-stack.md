@@ -15,8 +15,9 @@ specifics beyond file conventions.)
 
 ## Runtime
 
-- **Node.js ≥ 20 LTS** (the Copilot CLI bundled by `@github/copilot-sdk`
-  requires a recent Node).
+- **Node.js ≥ 24** (declared in `engines`; the Copilot CLI bundled by
+  `@github/copilot-sdk` requires a recent Node, and we use a few `node:`
+  builtins that are only stable on 22+).
 - **TypeScript** everywhere. `strict: true`.
 - **`@sveltejs/adapter-node`** for production build.
 
@@ -31,15 +32,16 @@ specifics beyond file conventions.)
 | Schema/validation        | `zod`                                              |
 | Markdown rendering       | `marked` + `dompurify` (sanitize on client)        |
 | Diff rendering           | `diff` + custom Svelte component                   |
-| Auth (OAuth)             | `@octokit/auth-oauth-app` or hand-rolled flow      |
+| Auth (OAuth)             | Hand-rolled GitHub OAuth web flow (no octokit dep) |
 | Cookie/session           | SvelteKit's `cookies` API + signed JWT             |
 | Crypto for at-rest       | Node `crypto` (AES-256-GCM)                        |
+| ID generation            | `ulid` (monotonic factory)                         |
 | Testing (unit)           | `vitest`                                           |
 | Testing (e2e)            | `@playwright/test`                                 |
 | Lint/format              | `eslint`, `prettier`, `svelte-check`               |
 
-No global state managers (Pinia/Redux-equivalent). Svelte 5 runes + a small
-number of `.svelte.ts` stores are enough.
+No global state managers (Pinia/Redux-equivalent). Svelte 5 runes plus
+a few small `.svelte.ts`/`.ts` modules under `src/lib/client/` are enough.
 
 ## Repository layout
 
@@ -52,58 +54,86 @@ copilot-portal/
 │  ├─ lib/
 │  │  ├─ client/                  # browser-only helpers
 │  │  │  ├─ sse.ts
-│  │  │  └─ markdown.ts
-│  │  ├─ components/
-│  │  │  ├─ Chat.svelte
-│  │  │  ├─ Message.svelte
-│  │  │  ├─ ToolCall.svelte
-│  │  │  ├─ DiffView.svelte
-│  │  │  ├─ PermissionPrompt.svelte
-│  │  │  └─ Sidebar.svelte
+│  │  │  ├─ markdown.ts
+│  │  │  ├─ diff-parser.ts
+│  │  │  ├─ file-browser.ts
+│  │  │  ├─ interactive-queue.ts
+│  │  │  └─ sidebar.ts
+│  │  ├─ components/             # Chat, Sidebar, FileBrowser,
+│  │  │                          # InteractiveRequestDialog, ToolCall,
+│  │  │                          # DiffView, ContextMeter,
+│  │  │                          # ReasoningBlock, … + ui/
 │  │  ├─ server/
 │  │  │  ├─ copilot/
 │  │  │  │  ├─ bridge.ts          # SDK wrapper, event normalization
-│  │  │  │  ├─ pool.ts            # session→client map, idle reaper
-│  │  │  │  └─ permissions.ts
+│  │  │  │  ├─ bridge-stub.ts     # in-process stub (e2e via COPILOT_STUB)
+│  │  │  │  ├─ pool.ts            # conversation→session map, idle reaper
+│  │  │  │  ├─ turn-runner.ts     # per-turn event log + persistence
+│  │  │  │  ├─ async-queue.ts
+│  │  │  │  └─ interactive-requests.ts
 │  │  │  ├─ db/
 │  │  │  │  ├─ index.ts           # better-sqlite3 singleton
+│  │  │  │  ├─ ids.ts             # monotonic ULID factory
 │  │  │  │  ├─ migrations/
-│  │  │  │  └─ repos/             # conversations.ts, messages.ts, ...
+│  │  │  │  └─ repos/             # conversations, messages, settings,
+│  │  │  │                       # tokens, usage, users
 │  │  │  ├─ auth/
-│  │  │  │  ├─ github.ts          # OAuth device flow
-│  │  │  │  └─ session.ts         # cookie/JWT helpers
-│  │  │  └─ config.ts             # env parsing via zod
-│  │  ├─ stores/
-│  │  │  ├─ conversation.svelte.ts
-│  │  │  └─ toast.svelte.ts
+│  │  │  │  ├─ github.ts          # OAuth web flow
+│  │  │  │  ├─ session.ts         # cookie/JWT helpers
+│  │  │  │  └─ require.ts         # route guards
+│  │  │  ├─ files.ts            # FS read / tree (workspace-rooted)
+│  │  │  ├─ git.ts              # git plumbing (status, log, diff)
+│  │  │  ├─ snapshots.ts        # per-turn pre/post git snapshots
+│  │  │  ├─ fork.ts             # edit-and-rerun / retry forks
+│  │  │  ├─ workdir.ts          # PROJECT_ROOT resolution
+│  │  │  ├─ conversation-auth.ts
+│  │  │  ├─ http.ts             # JSON response envelopes
+│  │  │  ├─ sse.ts              # SSE response helper
+│  │  │  ├─ rate-limit.ts
+│  │  │  ├─ crypto.ts           # AES-256-GCM
+│  │  │  ├─ title.ts            # auto-title via the SDK
+│  │  │  ├─ validate.ts
+│  │  │  ├─ log.ts
+│  │  │  └─ config.ts           # env parsing via zod
 │  │  └─ types.ts
 │  └─ routes/
 │     ├─ +layout.svelte
 │     ├─ +layout.server.ts        # auth gate, user info
 │     ├─ +page.svelte             # conversation list / new chat
 │     ├─ login/
-│     │  ├─ +page.svelte
-│     │  └─ +page.server.ts
-│     ├─ auth/
-│     │  └─ callback/+server.ts
-│     ├─ conversations/
-│     │  └─ [id]/
-│     │     ├─ +page.svelte
-│     │     └─ +page.server.ts
-│     ├─ settings/+page.svelte
+│     ├─ logout/
+│     ├─ auth/callback/           # OAuth callback
+│     ├─ conversations/[id]/      # chat view
+│     ├─ settings/
 │     └─ api/
+│        ├─ admin/                # redeploy
 │        ├─ conversations/
-│        │  ├─ +server.ts                  # POST create, GET list
+│        │  ├─ +server.ts                            # POST create, GET list
 │        │  └─ [id]/
-│        │     ├─ +server.ts                # GET, DELETE
-│        │     ├─ turns/
-│        │     │  ├─ +server.ts                            # POST start turn
-│        │     │  └─ [turnId]/stream/+server.ts            # GET SSE, DELETE cancel
-│        │     └─ permissions/[requestId]/+server.ts
+│        │     ├─ +server.ts                         # GET, DELETE
+│        │     ├─ export/                            # markdown export
+│        │     ├─ forks/                             # list child forks
+│        │     ├─ fs/                                # tree, file, diff
+│        │     ├─ git/                               # status, log, commit
+│        │     ├─ messages/[msgId]/fork/             # edit / retry
+│        │     ├─ permissions/[requestId]/+server.ts
+│        │     └─ turns/
+│        │        ├─ +server.ts                       # POST start turn
+│        │        └─ [turnId]/stream/+server.ts       # GET SSE, DELETE cancel
+│        ├─ copilot/                # status, models
 │        └─ health/+server.ts
 ├─ static/
+├─ scripts/
+│  ├─ serve.mjs                # supervisor with build.live/ swap
+│  ├─ dev-isolated.mjs         # dev with throwaway DATA_DIR
+│  ├─ install-git-hooks.mjs
+│  ├─ bump-actions.mjs
+│  └─ git-hooks/pre-commit
+├─ e2e/                        # Playwright specs
+├─ tests/                      # vitest unit specs
 ├─ Dockerfile
 ├─ compose.yaml
+├─ compose.tunnel.yaml
 ├─ package.json
 ├─ svelte.config.js
 ├─ vite.config.ts
@@ -118,16 +148,24 @@ invalid config.
 | Var                       | Default                  | Description                          |
 |---------------------------|--------------------------|--------------------------------------|
 | `PORT`                    | `3000`                   | Listen port.                         |
-| `HOST`                    | `0.0.0.0`                | Listen address.                      |
-| `DATA_DIR`                | `./data`                 | DB + workspace root.                 |
-| `SESSION_SECRET`          | *(required)*             | Signs session cookies.               |
-| `ENCRYPTION_KEY`          | *(required, 32B base64)* | At-rest encryption for tokens.       |
-| `AUTH_MODE`               | `github`                 | `github` \| `shared-secret` \| `none` |
-| `GITHUB_CLIENT_ID`        | —                        | OAuth app client id.                 |
-| `GITHUB_CLIENT_SECRET`    | —                        | OAuth app secret.                    |
-| `ALLOWED_GITHUB_LOGINS`   | —                        | Comma-separated allowlist.           |
+| `HOST`                    | `127.0.0.1`              | Listen address.                      |
+| `DATA_DIR`                | `./data`                 | DB root (`portal.db` + legacy workspaces dir). |
+| `PROJECT_ROOT`            | *(process cwd)*          | The directory the Copilot SDK and the FS/git tabs operate inside. Shared by all conversations. |
+| `SESSION_SECRET`          | *(required unless `AUTH_MODE=none`)* | Signs session cookies (≥ 32 chars). |
+| `ENCRYPTION_KEY`          | *(required, base64 of 32 raw bytes)* | At-rest encryption for tokens. |
+| `AUTH_MODE`               | `none`                   | `github` \| `shared-secret` \| `none`. |
+| `I_KNOW_THIS_IS_LOCAL`    | —                        | Must be `1` together with `HOST=127.0.0.1` (or `0.0.0.0`) for `AUTH_MODE=none`. |
+| `GITHUB_CLIENT_ID`        | —                        | OAuth app client id (`github` mode). |
+| `GITHUB_CLIENT_SECRET`    | —                        | OAuth app secret (`github` mode).    |
+| `ALLOWED_GITHUB_LOGINS`   | —                        | Comma-separated allowlist (`github` mode, non-empty). |
 | `SHARED_SECRET`           | —                        | If `AUTH_MODE=shared-secret`.        |
-| `COPILOT_GITHUB_TOKEN`    | —                        | Optional: forwarded to SDK.          |
-| `IDLE_TIMEOUT_MIN`        | `15`                     | SDK client idle reap.                |
-| `MAX_CONCURRENT_SESSIONS` | `4`                      | Hard cap.                            |
-| `LOG_LEVEL`               | `info`                   | `debug` \| `info` \| `warn` \| `error` |
+| `COPILOT_GITHUB_TOKEN`    | —                        | Optional: forwarded to the SDK.      |
+| `COPILOT_CLI_URL`         | —                        | If set, connect to an external `copilot --headless --port N` instead of spawning the bundled CLI. See `docs/deployment.md` Topology C. |
+| `DEFAULT_MODEL`           | `claude-sonnet-4.5`      | Default model id for new conversations. |
+| `IDLE_TIMEOUT_MIN`        | `15`                     | SDK session idle reap.               |
+| `MAX_CONCURRENT_SESSIONS` | `4`                      | Hard cap on live sessions.           |
+| `LOG_LEVEL`               | `info`                   | `debug` \| `info` \| `warn` \| `error`. |
+| `TUNNEL_HOST`             | —                        | When set, relaxes the Origin/Referer check for requests fronted by a tunnel/proxy whose hostname won't match `event.url.origin`. |
+| `ENABLE_REDEPLOY`         | —                        | Set to `1` to enable `POST /api/admin/redeploy` (only meaningful under `pnpm run serve`). |
+| `COPILOT_STUB`            | —                        | Set to `1` to swap the real SDK for the in-process stub. Used by e2e tests. |
+| `DB_MIGRATIONS_DIR`       | *(auto)*                 | Explicit override for the migrations directory. Useful when cwd isn't the repo root. |

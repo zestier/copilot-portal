@@ -1,0 +1,174 @@
+import type { ToolCallRecord } from '$lib/types';
+
+export type SubagentArgs = {
+	name?: string;
+	description?: string;
+	agent_type?: string;
+	model?: string;
+	mode?: string;
+	prompt?: string;
+};
+
+export type SubagentDisplayState = {
+	pending: boolean;
+	isBackgroundLaunch: boolean;
+	statusClass: 'pending' | 'ok' | 'error' | 'denied' | 'background';
+	statusLabel: string;
+	lifecycleText: string | null;
+	resultText: string | null;
+	backgroundAgentId: string | null;
+	elapsedMs: number | null;
+};
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return v != null && typeof v === 'object' && !Array.isArray(v);
+}
+
+export function parseSubagentArgs(json: string): SubagentArgs {
+	try {
+		const v = JSON.parse(json);
+		return isRecord(v) ? (v as SubagentArgs) : {};
+	} catch {
+		return {};
+	}
+}
+
+export function extractSubagentResultText(resultJson: string | null): string | null {
+	if (!resultJson) return null;
+	try {
+		const v = JSON.parse(resultJson);
+		if (typeof v === 'string') return v;
+		if (isRecord(v)) {
+			for (const key of ['content', 'result', 'text', 'output', 'response', 'summary']) {
+				const candidate = v[key];
+				if (typeof candidate === 'string' && candidate.length > 0) return candidate;
+			}
+			if (Array.isArray(v.content)) {
+				const parts = v.content
+					.map((p) =>
+						isRecord(p) && typeof p.text === 'string'
+							? p.text
+							: isRecord(p) && 'text' in p
+								? String(p.text)
+								: ''
+					)
+					.filter(Boolean);
+				if (parts.length > 0) return parts.join('\n\n');
+			}
+		}
+		return null;
+	} catch {
+		return resultJson;
+	}
+}
+
+function parseResult(resultJson: string | null): unknown {
+	if (!resultJson) return null;
+	try {
+		return JSON.parse(resultJson);
+	} catch {
+		return resultJson;
+	}
+}
+
+function cleanAgentId(id: string): string {
+	return id.replace(/[.,;:)]+$/, '');
+}
+
+function findAgentId(value: unknown): string | null {
+	if (typeof value === 'string') {
+		const match =
+			value.match(/\bagent[_ -]?id\b\s*[:=]\s*`?([A-Za-z0-9_.:-]+)`?/i) ??
+			value.match(
+				/\bread_agent\b(?:\s+(?:with|for|using|agent|id|agent_id))*\s+`?([A-Za-z0-9_.:-]+)`?/i
+			);
+		return match?.[1] ? cleanAgentId(match[1]) : null;
+	}
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const id = findAgentId(item);
+			if (id) return id;
+		}
+		return null;
+	}
+	if (!isRecord(value)) return null;
+
+	for (const key of ['agent_id', 'agentId', 'agentID']) {
+		const candidate = value[key];
+		if (typeof candidate === 'string' && candidate.length > 0) return cleanAgentId(candidate);
+	}
+
+	for (const key of ['id', 'content', 'result', 'text', 'output', 'response', 'summary']) {
+		const candidate = value[key];
+		if (typeof candidate === 'string' && candidate.length > 0) {
+			if (key === 'id') return cleanAgentId(candidate);
+			const id = findAgentId(candidate);
+			if (id) return id;
+		} else if (candidate != null && typeof candidate === 'object') {
+			const id = findAgentId(candidate);
+			if (id) return id;
+		}
+	}
+
+	return null;
+}
+
+export function getBackgroundAgentId(resultJson: string | null): string | null {
+	return findAgentId(parseResult(resultJson));
+}
+
+function backgroundElapsedMs(toolCall: ToolCallRecord): number | null {
+	const start = toolCall.backgroundAgentStartedAt;
+	if (start == null) return null;
+	const end = toolCall.backgroundAgentEndedAt;
+	if (end == null) return null;
+	return Math.max(0, end - start);
+}
+
+function toolElapsedMs(toolCall: ToolCallRecord): number | null {
+	return toolCall.endedAt != null ? Math.max(0, toolCall.endedAt - toolCall.startedAt) : null;
+}
+
+export function getSubagentDisplayState(toolCall: ToolCallRecord): SubagentDisplayState {
+	const args = parseSubagentArgs(toolCall.argsJson);
+	const isBackgroundLaunch = args.mode === 'background' && toolCall.status === 'ok';
+	const pending = toolCall.status === 'pending';
+	const backgroundAgentId = toolCall.backgroundAgentId ?? getBackgroundAgentId(toolCall.resultJson);
+
+	if (isBackgroundLaunch) {
+		const completed = toolCall.backgroundAgentStatus === 'completed';
+		const failed = toolCall.backgroundAgentStatus === 'failed';
+		return {
+			pending,
+			isBackgroundLaunch,
+			statusClass: completed ? 'ok' : failed ? 'error' : 'background',
+			statusLabel: completed ? 'completed' : failed ? 'failed' : 'launched',
+			lifecycleText: completed
+				? 'Background agent completed.'
+				: failed
+					? 'Background agent failed.'
+					: 'Background agent launched.',
+			resultText: extractSubagentResultText(toolCall.resultJson),
+			backgroundAgentId,
+			elapsedMs: backgroundElapsedMs(toolCall) ?? toolElapsedMs(toolCall)
+		};
+	}
+
+	return {
+		pending,
+		isBackgroundLaunch,
+		statusClass: toolCall.status,
+		statusLabel:
+			toolCall.status === 'ok'
+				? 'completed'
+				: toolCall.status === 'error'
+					? 'failed'
+					: toolCall.status === 'denied'
+						? 'denied'
+						: 'running…',
+		lifecycleText: null,
+		resultText: extractSubagentResultText(toolCall.resultJson),
+		backgroundAgentId: null,
+		elapsedMs: toolElapsedMs(toolCall)
+	};
+}

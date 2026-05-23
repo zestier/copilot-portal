@@ -1,9 +1,30 @@
 import type { LayoutServerLoad } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
+import * as tickets from '$lib/server/db/repos/tickets';
+import {
+	defaultTicketWorkspace,
+	ticketWorkspaceFromConversation
+} from '$lib/server/ticket-workspace';
 
-export const load: LayoutServerLoad = ({ locals }) => {
+export const load: LayoutServerLoad = ({ locals, params }) => {
+	const conversations = locals.userId ? convs.list(locals.userId, { includeArchived: true }) : [];
+	let ticketWorkspace: string | null = null;
+	if (locals.userId) {
+		const activeConversation =
+			typeof params.id === 'string' ? convs.get(params.id, locals.userId) : null;
+		ticketWorkspace = activeConversation
+			? ticketWorkspaceFromConversation(activeConversation.workdir)
+			: defaultTicketWorkspace(locals.userId);
+	}
 	return {
 		user: locals.user,
-		conversations: locals.userId ? convs.list(locals.userId, { includeArchived: true }) : []
+		conversations,
+		tickets:
+			locals.userId && ticketWorkspace
+				? tickets.list(locals.userId, ticketWorkspace, { status: 'open', limit: 10 })
+				: [],
+		ticketCount:
+			locals.userId && ticketWorkspace ? tickets.count(locals.userId, ticketWorkspace) : 0,
+		ticketWorkspace
 	};
 };

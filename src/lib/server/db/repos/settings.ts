@@ -1,22 +1,29 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
-import type { UserSettings, PermissionPolicy } from '$lib/types';
+import { normalizeSessionMode, type UserSettings, type PermissionPolicy } from '$lib/types';
 
 interface SettingsRow {
 	user_id: string;
 	default_model: string | null;
 	default_workdir: string | null;
+	default_mode: string | null;
 	default_policy: string;
 	theme: string;
 	updated_at: number;
 }
 
 function rowToSettings(r: SettingsRow): UserSettings {
+	const raw = r.default_policy;
+	// Migration 008 rewrites 'allow-readonly' → 'prompt', but be defensive
+	// against any straggler rows (e.g., a connection that opened before the
+	// migration ran in dev HMR).
+	const policy: PermissionPolicy = raw === 'allow-all' || raw === 'deny-all' ? raw : 'prompt';
 	return {
 		defaultModel: r.default_model,
 		defaultWorkdir: r.default_workdir,
-		defaultPolicy: r.default_policy as PermissionPolicy,
-		theme: r.theme === 'light' ? 'light' : 'dark'
+		defaultConversationMode: normalizeSessionMode(r.default_mode),
+		defaultPolicy: policy,
+		theme: r.theme === 'light' ? 'light' : r.theme === 'system' ? 'system' : 'dark'
 	};
 }
 
@@ -36,58 +43,366 @@ export function defaults(): UserSettings {
 	return {
 		defaultModel: null,
 		defaultWorkdir: null,
+		defaultConversationMode: 'interactive',
 		defaultPolicy: 'prompt',
-		theme: 'dark'
+		theme: 'system'
 	};
 }
 
 export function save(userId: string, s: UserSettings) {
 	getDb()
 		.prepare(
-			`INSERT INTO user_settings(user_id, default_model, default_workdir, default_policy, theme, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?)
+			`INSERT INTO user_settings(
+			   user_id, default_model, default_workdir, default_mode, default_policy, theme, updated_at
+			 )
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(user_id) DO UPDATE SET
 			   default_model = excluded.default_model,
 			   default_workdir = excluded.default_workdir,
+			   default_mode = excluded.default_mode,
 			   default_policy = excluded.default_policy,
 			   theme = excluded.theme,
 			   updated_at = excluded.updated_at`
 		)
-		.run(userId, s.defaultModel, s.defaultWorkdir, s.defaultPolicy, s.theme, Date.now());
+		.run(
+			userId,
+			s.defaultModel,
+			s.defaultWorkdir,
+			s.defaultConversationMode,
+			s.defaultPolicy,
+			s.theme,
+			Date.now()
+		);
 }
 
 // --- Permission grants ---
+//
+// Schema is `permission_grants(user_id, conversation_id, tool,
+// permission_kind, scope_pattern, decision, expires_at, granted_at)`
+// after migration 009. `conversation_id` NULL means a user-global grant.
+// All the matching precedence (deny beats allow, expiry, wildcards) lives
+// in the pure matcher module so it's testable without a DB.
 
-export function hasGrant(userId: string, conversationId: string, tool: string): boolean {
-	const db = getDb();
-	const r1 = db
-		.prepare(
-			'SELECT 1 FROM permission_grants WHERE user_id = ? AND conversation_id = ? AND (tool = ? OR tool = ?)'
-		)
-		.get(userId, conversationId, tool, '*');
-	if (r1) return true;
-	const r2 = db
-		.prepare(
-			'SELECT 1 FROM permission_grants WHERE user_id = ? AND conversation_id IS NULL AND (tool = ? OR tool = ?)'
-		)
-		.get(userId, tool, '*');
-	return !!r2;
+import {
+	matchGrantsDetailed,
+	type GrantDecision,
+	type GrantRow,
+	type MatchOutcome,
+	type DetailedMatchOutcome
+} from '../../permissions/matcher';
+import { decodeScope, encodeScope } from '$lib/permissions/scope-codec';
+import type { GrantScope } from '$lib/permissions/scope-types';
+import type { ParsedSegment } from '../../permissions/shell-parser';
+
+interface GrantDbRow {
+	user_id: string;
+	conversation_id: string | null;
+	tool: string;
+	permission_kind: string | null;
+	scope_pattern: string | null;
+	scope_json: string | null;
+	decision: string;
+	expires_at: number | null;
+	granted_at: number;
+	deny_reason: string | null;
+	args_hash: string | null;
 }
 
-export function addGrant(userId: string, conversationId: string | null, tool: string) {
+function dbRowToGrant(r: GrantDbRow): GrantRow {
+	return {
+		tool: r.tool,
+		permissionKind: r.permission_kind,
+		scopePattern: r.scope_pattern,
+		scope: decodeScope(r.scope_json),
+		decision: r.decision === 'deny' ? 'deny' : 'allow',
+		expiresAt: r.expires_at,
+		denyReason: r.deny_reason,
+		conversationId: r.conversation_id,
+		argsHash: r.args_hash
+	};
+}
+
+/**
+ * Pre-filter at the SQL level: return every grant for this user that
+ * could possibly apply to (conversationId, tool). Filtering by kind /
+ * pattern / expiry happens in app code so the matcher stays pure and
+ * testable.
+ */
+function loadCandidateGrants(userId: string, conversationId: string, tool: string): GrantRow[] {
+	const rows = getDb()
+		.prepare(
+			`SELECT user_id, conversation_id, tool, permission_kind, scope_pattern, scope_json,
+			        decision, expires_at, granted_at, deny_reason, args_hash
+			 FROM permission_grants
+			 WHERE user_id = ?
+			   AND (conversation_id = ? OR conversation_id IS NULL)
+			   AND (tool = ? OR tool = '*')`
+		)
+		.all(userId, conversationId, tool) as GrantDbRow[];
+	return rows.map(dbRowToGrant);
+}
+
+export interface MatchGrantContext {
+	/** Parsed shell command (when permissionKind === 'shell' and the
+	 * parser accepted it). */
+	shellSegments?: ParsedSegment[] | null;
+	/** Target path for fs requests. */
+	target?: string | null;
+	/** Target URL for url requests. */
+	url?: string | null;
+	/** Conversation's working directory. */
+	workspaceRoot?: string | null;
+	/** SDK session workspace directory. */
+	sessionWorkspaceRoot?: string | null;
+	/** Canonical SHA-256 of the requested tool args. */
+	argsHash?: string | null;
+}
+
+/**
+ * Resolve a permission request against the user's stored grants.
+ * Returns 'allow' / 'deny' / 'none'; callers fall back to the policy
+ * table when 'none'. Drops any deny-feedback the matched row carried;
+ * callers that need it should use `matchGrantDetailed`.
+ */
+export function matchGrant(
+	userId: string,
+	conversationId: string,
+	tool: string,
+	permissionKind: string,
+	scopeKey: string | null,
+	ctx: MatchGrantContext = {},
+	now: number = Date.now()
+): MatchOutcome {
+	return matchGrantDetailed(userId, conversationId, tool, permissionKind, scopeKey, ctx, now)
+		.outcome;
+}
+
+/**
+ * Same as `matchGrant`, but additionally returns the matched deny
+ * grant's `denyReason` (when one fired). Used by the bridge so it can
+ * forward the reason to the SDK as `{kind:'reject', feedback}` and the
+ * agent's tool-failure payload explains *why* the call was rejected.
+ */
+export function matchGrantDetailed(
+	userId: string,
+	conversationId: string,
+	tool: string,
+	permissionKind: string,
+	scopeKey: string | null,
+	ctx: MatchGrantContext = {},
+	now: number = Date.now()
+): DetailedMatchOutcome {
+	const rows = loadCandidateGrants(userId, conversationId, tool);
+	return matchGrantsDetailed(rows, {
+		tool,
+		permissionKind,
+		scopeKey,
+		shellSegments: ctx.shellSegments ?? null,
+		target: ctx.target ?? null,
+		url: ctx.url ?? null,
+		workspaceRoot: ctx.workspaceRoot ?? null,
+		sessionWorkspaceRoot: ctx.sessionWorkspaceRoot ?? null,
+		argsHash: ctx.argsHash ?? null,
+		now
+	});
+}
+
+/**
+ * @deprecated Backwards-compat wrapper. Returns true iff a wildcard
+ * "allow this tool for anything" grant exists. New code should call
+ * `matchGrant` with the runtime kind + scopeKey.
+ */
+export function hasGrant(userId: string, conversationId: string, tool: string): boolean {
+	// Legacy callers don't know about kinds/patterns; pretend the request
+	// is for whatever the grant covers by passing a wildcard scope.
+	return matchGrant(userId, conversationId, tool, '*', null) === 'allow';
+}
+
+export interface AddGrantOptions {
+	userId: string;
+	/** NULL = user-global. */
+	conversationId: string | null;
+	tool: string;
+	/** NULL = any kind. */
+	permissionKind?: string | null;
+	/** Legacy substring-glob over the derived scope key. NULL = any.
+	 * Prefer `scope` for new grants. */
+	scopePattern?: string | null;
+	/** Structured scope. When set, scopePattern is ignored at match time. */
+	scope?: GrantScope | null;
+	decision?: GrantDecision;
+	/** Unix ms; NULL/undefined = never expires. */
+	expiresAt?: number | null;
+	/** Optional deny-feedback surfaced to the agent (only meaningful when
+	 * `decision === 'deny'`). */
+	denyReason?: string | null;
+	/** Optional exact-invocation constraint. When set, request args must hash to this value. */
+	argsHash?: string | null;
+}
+
+export function addGrant(opts: AddGrantOptions) {
 	getDb()
 		.prepare(
-			`INSERT OR IGNORE INTO permission_grants(user_id, conversation_id, tool, granted_at)
-			 VALUES (?, ?, ?, ?)`
+			`INSERT INTO permission_grants(
+			   user_id, conversation_id, tool, permission_kind,
+			   scope_pattern, scope_json, decision, expires_at, granted_at, deny_reason, args_hash
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
-		.run(userId, conversationId, tool, Date.now());
+		.run(
+			opts.userId,
+			opts.conversationId,
+			opts.tool,
+			opts.permissionKind ?? null,
+			opts.scopePattern ?? null,
+			opts.scope ? encodeScope(opts.scope) : null,
+			opts.decision ?? 'allow',
+			opts.expiresAt ?? null,
+			Date.now(),
+			opts.denyReason ?? null,
+			opts.argsHash ?? null
+		);
+}
+
+export interface UpdateGrantOptions {
+	tool: string;
+	permissionKind?: string | null;
+	scopePattern?: string | null;
+	scope?: GrantScope | null;
+	decision: GrantDecision;
+	expiresAt?: number | null;
+	denyReason?: string | null;
+}
+
+/**
+ * Update a grant in-place by rowid. Scoped to `userId` so users can only
+ * edit their own rows; `conversation_id` and `granted_at` are preserved
+ * (this is an edit, not a re-grant). Returns true iff a row matched.
+ */
+export function updateGrant(userId: string, id: number, opts: UpdateGrantOptions): boolean {
+	const r = getDb()
+		.prepare(
+			`UPDATE permission_grants
+			    SET tool = ?, permission_kind = ?, scope_pattern = ?, scope_json = ?,
+			        decision = ?, expires_at = ?, deny_reason = ?
+			  WHERE rowid = ? AND user_id = ?`
+		)
+		.run(
+			opts.tool,
+			opts.permissionKind ?? null,
+			opts.scopePattern ?? null,
+			opts.scope ? encodeScope(opts.scope) : null,
+			opts.decision,
+			opts.expiresAt ?? null,
+			opts.denyReason ?? null,
+			id,
+			userId
+		);
+	return r.changes > 0;
+}
+
+export interface GrantSummary {
+	id: number;
+	conversationId: string | null;
+	conversationTitle: string | null;
+	tool: string;
+	permissionKind: string | null;
+	scopePattern: string | null;
+	scope: GrantScope | null;
+	decision: GrantDecision;
+	expiresAt: number | null;
+	grantedAt: number;
+	denyReason: string | null;
+	argsHash: string | null;
+}
+
+/**
+ * Every grant the user owns, oldest expiry / newest grant first. Joins
+ * `conversations` so the UI can show "in <title>" for conversation-scoped
+ * rows; user-global rows return `conversationTitle = null`.
+ *
+ * Uses SQLite's implicit `rowid` as a stable per-row id for revocation
+ * (the table has no other unique key — two identical-shape grants are
+ * legal, just redundant).
+ */
+export function listGrantsForUser(userId: string): GrantSummary[] {
+	const rows = getDb()
+		.prepare(
+			`SELECT pg.rowid AS id, pg.conversation_id, c.title AS conversation_title,
+			        pg.tool, pg.permission_kind, pg.scope_pattern, pg.scope_json, pg.decision,
+			        pg.expires_at, pg.granted_at, pg.deny_reason, pg.args_hash
+			 FROM permission_grants pg
+			 LEFT JOIN conversations c ON c.id = pg.conversation_id
+			 WHERE pg.user_id = ?
+			 ORDER BY pg.granted_at DESC, pg.rowid DESC`
+		)
+		.all(userId) as Array<{
+		id: number;
+		conversation_id: string | null;
+		conversation_title: string | null;
+		tool: string;
+		permission_kind: string | null;
+		scope_pattern: string | null;
+		scope_json: string | null;
+		decision: string;
+		expires_at: number | null;
+		granted_at: number;
+		deny_reason: string | null;
+		args_hash: string | null;
+	}>;
+	return rows.map((r) => ({
+		id: r.id,
+		conversationId: r.conversation_id,
+		conversationTitle: r.conversation_title,
+		tool: r.tool,
+		permissionKind: r.permission_kind,
+		scopePattern: r.scope_pattern,
+		scope: decodeScope(r.scope_json),
+		decision: r.decision === 'deny' ? 'deny' : 'allow',
+		expiresAt: r.expires_at,
+		grantedAt: r.granted_at,
+		denyReason: r.deny_reason,
+		argsHash: r.args_hash
+	}));
+}
+
+/**
+ * Delete a single grant by rowid. Scoped to `userId` so users can only
+ * revoke their own. Returns true iff a row was removed.
+ */
+export function revokeGrant(userId: string, id: number): boolean {
+	const r = getDb()
+		.prepare(`DELETE FROM permission_grants WHERE rowid = ? AND user_id = ?`)
+		.run(id, userId);
+	return r.changes > 0;
+}
+
+/**
+ * Delete every grant owned by `userId`. Returns the number of rows removed.
+ * Used by the settings page "Revoke all" action. Seed grants may be
+ * re-installed on next login via `ensureSeedGrantsForUser`.
+ */
+export function revokeAllGrantsForUser(userId: string): number {
+	const r = getDb().prepare(`DELETE FROM permission_grants WHERE user_id = ?`).run(userId);
+	return r.changes;
+}
+
+/**
+ * Drop grants past their TTL. The matcher already ignores expired rows at
+ * read time, so this is purely housekeeping — keeping the settings page
+ * from accumulating dead rows.
+ */
+export function pruneExpiredGrants(now: number = Date.now()): number {
+	const r = getDb()
+		.prepare(`DELETE FROM permission_grants WHERE expires_at IS NOT NULL AND expires_at < ?`)
+		.run(now);
+	return r.changes;
 }
 
 export function recordDecision(
 	conversationId: string,
 	tool: string,
 	argsSummary: string,
-	decision: 'allow-once' | 'allow-always' | 'deny'
+	decision: PermissionDecisionRecord['decision']
 ) {
 	const id = ulid();
 	getDb()
@@ -96,4 +411,50 @@ export function recordDecision(
 			 VALUES (?, ?, ?, ?, ?, ?)`
 		)
 		.run(id, conversationId, tool, argsSummary, decision, Date.now());
+}
+
+export interface PermissionDecisionRecord {
+	id: string;
+	conversationId: string;
+	conversationTitle: string | null;
+	tool: string;
+	argsSummary: string | null;
+	decision: 'allow-once' | 'allow-always' | 'deny' | 'deny-always' | 'auto-allow' | 'auto-deny';
+	decidedAt: number;
+}
+
+/**
+ * Most recent permission decisions across all conversations owned by
+ * `userId`. Used by the settings page audit panel so users can see what
+ * tools they've been approving (or denying) without spelunking SQLite.
+ */
+export function listRecentDecisionsForUser(userId: string, limit = 50): PermissionDecisionRecord[] {
+	const rows = getDb()
+		.prepare(
+			`SELECT pd.id, pd.conversation_id, c.title AS conversation_title,
+			        pd.tool, pd.args_summary, pd.decision, pd.decided_at
+			 FROM permission_decisions pd
+			 JOIN conversations c ON c.id = pd.conversation_id
+			 WHERE c.user_id = ?
+			 ORDER BY pd.decided_at DESC, pd.id DESC
+			 LIMIT ?`
+		)
+		.all(userId, limit) as Array<{
+		id: string;
+		conversation_id: string;
+		conversation_title: string | null;
+		tool: string;
+		args_summary: string | null;
+		decision: string;
+		decided_at: number;
+	}>;
+	return rows.map((r) => ({
+		id: r.id,
+		conversationId: r.conversation_id,
+		conversationTitle: r.conversation_title,
+		tool: r.tool,
+		argsSummary: r.args_summary,
+		decision: r.decision as PermissionDecisionRecord['decision'],
+		decidedAt: r.decided_at
+	}));
 }
