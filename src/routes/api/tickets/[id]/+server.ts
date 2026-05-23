@@ -47,6 +47,7 @@ export const DELETE: RequestHandler = ({ params, locals, url }) => {
 		const workspace = ticketWorkspaceFromInput(requestedWorkspace, userId);
 		if (current.workspaceKey !== workspace) throw error(404);
 	}
-	if (!tickets.remove(params.id, userId)) throw error(404);
-	return json({ ok: true });
+	const ticket = tickets.update(params.id, userId, { status: 'archived' });
+	if (!ticket) throw error(404);
+	return json({ ok: true, ticket });
 };

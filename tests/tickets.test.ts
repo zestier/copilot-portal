@@ -73,8 +73,9 @@ describe('workspace tickets', () => {
 		).toThrow();
 	});
 
-	it('API creates, lists, updates, and deletes tickets for the current user', async () => {
+	it('API creates, lists, updates, and archives tickets for the current user', async () => {
 		const users = await import('../src/lib/server/db/repos/users');
+		const tickets = await import('../src/lib/server/db/repos/tickets');
 		const otherWorkspace = mkdtempSync(join(tmpdir(), 'portal-ticket-other-workspace-'));
 		const { POST, GET } = await import('../src/routes/api/tickets/+server');
 		const { PATCH, DELETE } = await import('../src/routes/api/tickets/[id]/+server');
@@ -132,6 +133,12 @@ describe('workspace tickets', () => {
 			}) as never
 		);
 		expect(deleteResponse.status).toBe(200);
+		const archived = await deleteResponse.json();
+		expect(archived.ticket.status).toBe('archived');
+		expect(tickets.get(created.ticket.id, user.id)?.status).toBe('archived');
+		expect(tickets.list(user.id, workspace, { status: 'archived' }).map((t) => t.id)).toEqual([
+			created.ticket.id
+		]);
 		rmSync(otherWorkspace, { recursive: true, force: true });
 	});
 

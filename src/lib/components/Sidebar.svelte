@@ -3,6 +3,7 @@
 	import { tick } from 'svelte';
 	import type { Conversation, User, WorkspaceTicket } from '$lib/types';
 	import Alert from '$lib/components/ui/Alert.svelte';
+	import { ticketChatPrompt, ticketChatTitle } from '$lib/client/tickets';
 
 	let {
 		conversations,
@@ -31,6 +32,7 @@
 	let ticketDraftOpen = $state(false);
 	let ticketTitle = $state('');
 	let ticketBusy = $state(false);
+	let ticketLaunchId = $state<string | null>(null);
 	let errorMsg = $state<string | null>(null);
 	let errorTimer: ReturnType<typeof setTimeout> | null = null;
 	let firstMenuItem: HTMLButtonElement | null = $state(null);
@@ -114,17 +116,54 @@
 		ticketDraftOpen = !ticketDraftOpen;
 	}
 
-	async function setTicketDone(id: string) {
-		const ok = await api(
-			`/api/tickets/${id}`,
-			{
-				method: 'PATCH',
+	async function launchTicketChat(ticket: WorkspaceTicket) {
+		if (ticketLaunchId) return;
+		ticketLaunchId = ticket.id;
+		let conversationId: string | null = null;
+		try {
+			const convRes = await fetch('/api/conversations', {
+				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ status: 'done', workspace: ticketWorkspace })
-			},
-			'Update ticket'
-		);
-		if (ok) await invalidateAll();
+				body: JSON.stringify({
+					title: ticketChatTitle(ticket),
+					workdir: ticketWorkspace ?? undefined
+				})
+			});
+			if (!convRes.ok) {
+				flashError(`Could not create chat (${convRes.status})`);
+				return;
+			}
+			const body = await convRes.json();
+			conversationId = body.conversation.id;
+			const turnRes = await fetch(`/api/conversations/${conversationId}/turns`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ content: ticketChatPrompt(ticket) })
+			});
+			if (!turnRes.ok) {
+				await api(
+					`/api/conversations/${conversationId}`,
+					{ method: 'DELETE' },
+					'Clean up failed ticket chat'
+				);
+				flashError(`Could not launch ticket chat (${turnRes.status})`);
+				return;
+			}
+			await invalidateAll();
+			onnavigate?.();
+			location.href = `/conversations/${conversationId}`;
+		} catch {
+			if (conversationId) {
+				await api(
+					`/api/conversations/${conversationId}`,
+					{ method: 'DELETE' },
+					'Clean up failed ticket chat'
+				);
+			}
+			flashError('Could not launch ticket chat');
+		} finally {
+			ticketLaunchId = null;
+		}
 	}
 
 	async function openMenu(id: string) {
@@ -345,15 +384,16 @@
 					<div class="ticket-list">
 						{#each tickets as ticket (ticket.id)}
 							<div class="ticket">
-								<button
-									class="ticket-done"
-									title="Mark done"
-									aria-label={`Mark ${ticket.title} done`}
-									onclick={() => setTicketDone(ticket.id)}
-								>
-									✓
-								</button>
 								<div class="ticket-title" title={ticket.title}>{ticket.title}</div>
+								<button
+									class="ticket-action"
+									title="Launch chat"
+									aria-label={`Launch chat for ${ticket.title}`}
+									disabled={ticketLaunchId !== null}
+									onclick={() => launchTicketChat(ticket)}
+								>
+									Chat
+								</button>
 							</div>
 						{/each}
 					</div>
@@ -654,26 +694,29 @@
 	.ticket:focus-within {
 		background: var(--surface-2);
 	}
-	.ticket-done {
-		width: 20px;
-		height: 20px;
-		border-radius: 50%;
+	.ticket-action {
 		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
 		background: transparent;
 		color: var(--text-muted);
 		cursor: pointer;
-		padding: 0;
-		line-height: 1;
+		font-size: var(--fs-xs);
+		padding: 0.1rem 0.35rem;
 		flex-shrink: 0;
 	}
-	.ticket-done:hover,
-	.ticket-done:focus-visible {
+	.ticket-action:hover,
+	.ticket-action:focus-visible {
 		color: var(--text);
 		border-color: var(--accent);
 		outline: none;
 	}
+	.ticket-action:disabled {
+		cursor: wait;
+		opacity: 0.65;
+	}
 	.ticket-title {
 		min-width: 0;
+		flex: 1;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
