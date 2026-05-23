@@ -310,7 +310,7 @@ describe('bridge.open() session mode and permissions', () => {
 		expect(result).toEqual({ kind: 'reject' });
 	});
 
-	it('auto-rejects prompt-worthy permission requests in best-effort mode with the would-be prompt text', async () => {
+	it('auto-rejects prompt-worthy permission requests in best-effort mode with concise feedback', async () => {
 		const { open } = await importBridge();
 		await open({ ...baseOpts, mode: 'best-effort' });
 
@@ -331,26 +331,83 @@ describe('bridge.open() session mode and permissions', () => {
 		);
 		expect(result).toEqual(
 			expect.objectContaining({
-				feedback: expect.stringContaining('The user would have been asked to approve:')
+				feedback: expect.stringContaining('A shell permission request was auto-rejected')
 			})
 		);
 		expect(result).toEqual(
 			expect.objectContaining({
-				feedback: expect.stringContaining('shell (shell)')
+				feedback: expect.stringContaining('Try a structured tool')
 			})
 		);
 		expect(result).toEqual(
 			expect.objectContaining({
-				feedback: expect.stringContaining(
-					"printf 'best-effort demo\\n' > /tmp/copilot-best-effort-demo.txt"
-				)
+				feedback: expect.stringContaining('request_mode_switch')
 			})
 		);
 		expect(result).toEqual(
 			expect.objectContaining({
-				feedback: expect.stringContaining('Reason: redirection')
+				feedback: expect.stringContaining('forcePermissionPrompt')
 			})
 		);
+		const feedback = (result as { feedback: string }).feedback;
+		expect(feedback).not.toContain('The user would have been asked to approve:');
+		expect(feedback).not.toContain('shell (shell)');
+		expect(feedback).not.toContain(
+			"printf 'best-effort demo\\n' > /tmp/copilot-best-effort-demo.txt"
+		);
+		expect(feedback).not.toContain('Reason: redirection');
+
+		const cases = [
+			{
+				request: { kind: 'read', toolName: 'view', path: '/var/private/read-secret.txt' },
+				expectedKind: 'read',
+				expectedHint: 'structured read/search tools',
+				forbiddenDetail: '/var/private/read-secret.txt'
+			},
+			{
+				request: {
+					kind: 'write',
+					toolName: 'create',
+					path: '/var/private/write-secret.txt'
+				},
+				expectedKind: 'write',
+				expectedHint: 'structured workspace edit/create workflow',
+				forbiddenDetail: '/var/private/write-secret.txt'
+			},
+			{
+				request: { kind: 'edit', toolName: 'edit', path: '/var/private/edit-secret.txt' },
+				expectedKind: 'edit',
+				expectedHint: 'structured workspace edit/create workflow',
+				forbiddenDetail: '/var/private/edit-secret.txt'
+			},
+			{
+				request: {
+					kind: 'url',
+					toolName: 'web_fetch',
+					url: 'https://example.com/private-token'
+				},
+				expectedKind: 'url',
+				expectedHint: 'local source or another non-network approach',
+				forbiddenDetail: 'https://example.com/private-token'
+			}
+		];
+
+		for (const c of cases) {
+			const kindResult = await onPermissionRequest(c.request);
+			expect(kindResult).toEqual(
+				expect.objectContaining({
+					kind: 'reject',
+					feedback: expect.stringContaining(
+						`A ${c.expectedKind} permission request was auto-rejected`
+					)
+				})
+			);
+			const kindFeedback = (kindResult as { feedback: string }).feedback;
+			expect(kindFeedback).toContain(c.expectedHint);
+			expect(kindFeedback).toContain('forcePermissionPrompt');
+			expect(kindFeedback).toContain('request_mode_switch');
+			expect(kindFeedback).not.toContain(c.forbiddenDetail);
+		}
 	});
 
 	it('auto-rejects shell git commands with structured-tool feedback', async () => {

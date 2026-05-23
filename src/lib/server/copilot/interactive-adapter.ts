@@ -208,13 +208,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 		}
 		if (opts.getMode() === 'best-effort') {
 			audit('auto-deny');
-			const feedback = bestEffortPermissionFeedback({
-				tool,
-				permissionKind,
-				summary,
-				args: req.args ?? null,
-				shellAnalysis
-			});
+			const feedback = bestEffortPermissionFeedback({ permissionKind });
 			return {
 				kind: 'reject',
 				feedback
@@ -362,50 +356,41 @@ function readArgString(args: unknown, key: string): string | null {
 	return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
-function bestEffortPermissionFeedback(view: {
-	tool: string;
-	permissionKind: string;
-	summary: string;
-	args: unknown;
-	shellAnalysis?: import('$lib/types').ShellAnalysisView;
-}): string {
-	const promptText = permissionPromptText(view);
+function bestEffortPermissionFeedback(view: { permissionKind: string }): string {
 	const alternative = bestEffortAlternativeHint(view.permissionKind);
+	const permissionKind = bestEffortPermissionKindLabel(view.permissionKind);
 	return (
-		'This conversation is in `best-effort` mode, so permission prompts are auto-rejected instead of shown to the user. ' +
-		`The user would have been asked to approve:\n\n${promptText}\n\n${alternative} If no workable alternative exists, stop and explain which permission is missing.`
+		`A ${permissionKind} permission request was auto-rejected because this conversation is in \`best-effort\` mode. ` +
+		`${alternative} If that cannot satisfy the request, retry with \`forcePermissionPrompt\` explaining why user approval is required, or call \`request_mode_switch\` if repeated permission prompts are blocking progress.`
 	);
 }
 
-function permissionPromptText(view: {
-	tool: string;
-	permissionKind: string;
-	summary: string;
-	args: unknown;
-	shellAnalysis?: import('$lib/types').ShellAnalysisView;
-}): string {
-	const lines = [`${view.tool} (${view.permissionKind})`, view.summary];
-	if (view.permissionKind === 'shell' && view.shellAnalysis?.kind === 'unsafe') {
-		lines.push(
-			`Reason: ${view.shellAnalysis.reason}. Constructs like subshells, redirection, command substitution, or variable expansion can hide arbitrary commands, so structured "always" grants won't apply here.`
-		);
+function bestEffortPermissionKindLabel(permissionKind: string): string {
+	switch (permissionKind) {
+		case 'shell':
+		case 'read':
+		case 'write':
+		case 'edit':
+		case 'url':
+			return permissionKind;
+		default:
+			return 'unknown';
 	}
-	return lines.join('\n');
 }
 
 function bestEffortAlternativeHint(permissionKind: string): string {
 	switch (permissionKind) {
 		case 'shell':
-			return 'Try a structured tool or another already-allowed approach first. If you end up blocked on permissions, call `request_mode_switch` to ask the user to switch this conversation to interactive mode.';
+			return 'Try a structured tool or another already-allowed approach first.';
 		case 'read':
-			return 'Try the structured read/search tools or existing workspace context first. If you end up blocked on permissions, call `request_mode_switch` to ask the user to switch this conversation to interactive mode.';
+			return 'Try the structured read/search tools or existing workspace context first.';
 		case 'write':
 		case 'edit':
-			return 'Try a structured workspace edit/create workflow or another already-allowed path first. If you end up blocked on permissions, call `request_mode_switch` to ask the user to switch this conversation to interactive mode.';
+			return 'Try a structured workspace edit/create workflow or another already-allowed path first.';
 		case 'url':
-			return 'Try a local source or another non-network approach first. If you end up blocked on permissions, call `request_mode_switch` to ask the user to switch this conversation to interactive mode.';
+			return 'Try a local source or another non-network approach first.';
 		default:
-			return 'Try another approach that stays within the current permission set first. If you end up blocked on permissions, call `request_mode_switch` to ask the user to switch this conversation to interactive mode.';
+			return 'Try another approach that stays within the current permission set first.';
 	}
 }
 
