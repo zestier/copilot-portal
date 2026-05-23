@@ -75,6 +75,7 @@
 			parent={data.parent}
 			initialActiveTurnId={data.activeTurnId}
 			initialPendingInteractive={data.pendingInteractive}
+			initialComposer={data.initialComposer}
 		/>
 	</div>
 	{#if tab !== 'chat'}

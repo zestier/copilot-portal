@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { resolveInitialSidebarOpen } from '../src/lib/client/sidebar';
-import { ticketChatPrompt, ticketChatTitle } from '../src/lib/client/tickets';
+import { ticketChatPrompt, ticketChatTitle, ticketDraftChatUrl } from '../src/lib/client/tickets';
 
 describe('resolveInitialSidebarOpen', () => {
 	it('honors a persisted "true" value regardless of viewport', () => {
@@ -74,6 +74,12 @@ describe('ticket chat helpers', () => {
 	it('omits empty ticket details from the initial prompt', () => {
 		expect(ticketChatPrompt({ id: 'ticket-1', title: 'Fix sidebar actions', body: '  ' })).toBe(
 			'Do this workspace ticket: Fix sidebar actions\n\nTicket ID: ticket-1'
+		);
+	});
+
+	it('builds draft chat URLs without embedding ticket details', () => {
+		expect(ticketDraftChatUrl('conv-1', 'ticket-1', 'do')).toBe(
+			'/conversations/conv-1?draftTicketId=ticket-1&ticketMode=do'
 		);
 	});
 });

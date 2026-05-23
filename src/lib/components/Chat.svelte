@@ -26,7 +26,8 @@
 		initialUsage = null,
 		parent = null,
 		initialActiveTurnId = null,
-		initialPendingInteractive = []
+		initialPendingInteractive = [],
+		initialComposer = ''
 	}: {
 		conversation: Conversation;
 		initialMessages: Message[];
@@ -39,6 +40,7 @@
 		} | null;
 		initialActiveTurnId?: string | null;
 		initialPendingInteractive?: InteractiveRequestView[];
+		initialComposer?: string;
 	} = $props();
 
 	let messages = $state<Message[]>([]);
@@ -88,6 +90,7 @@
 			sessionMode = conversation.mode;
 			approveAllTools = conversation.approveAllTools;
 			usage = initialUsage;
+			composer = initialComposer;
 			recentCompaction = null;
 			pinnedToBottom = true;
 			hasNewBelow = false;
@@ -106,7 +109,7 @@
 		});
 	});
 
-	let composer = $state('');
+	let composer = $state(untrack(() => initialComposer));
 	let streaming = $state(false);
 	// Queue of outstanding permission requests. The SDK can fire multiple
 	// `onPermissionRequest` callbacks concurrently (parallel tool calls),

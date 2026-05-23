@@ -5,6 +5,7 @@
 	import Alert from '$lib/components/ui/Alert.svelte';
 	import type { TicketChatMode } from '$lib/client/tickets';
 	import { ticketChatPrompt, ticketChatTitle } from '$lib/client/tickets';
+	import { createTicketDraftChat } from '$lib/client/ticket-chat-launch';
 
 	let {
 		conversations,
@@ -177,6 +178,30 @@
 				);
 			}
 			flashError('Could not launch ticket chat');
+		} finally {
+			ticketLaunchId = null;
+		}
+	}
+
+	async function openTicketDraft(ticket: WorkspaceTicket, mode: TicketChatMode = 'do') {
+		if (ticketLaunchId) return;
+		ticketLaunchId = ticket.id;
+		try {
+			const result = await createTicketDraftChat({
+				ticket,
+				mode,
+				workdir: ticketWorkspace,
+				fetcher: fetch
+			});
+			if (!result.ok) {
+				flashError(`Could not create chat (${result.status ?? 'network'})`);
+				return;
+			}
+			await invalidateAll();
+			onnavigate?.();
+			location.href = result.href;
+		} catch {
+			flashError('Could not open ticket draft');
 		} finally {
 			ticketLaunchId = null;
 		}
@@ -429,6 +454,15 @@
 												onclick={() => launchTicketChat(ticket, 'do')}
 											>
 												Do
+											</button>
+											<button
+												class="ticket-action"
+												title="Open editable draft chat"
+												aria-label={`Open draft for ticket: ${ticket.title}`}
+												disabled={ticketLaunchId !== null}
+												onclick={() => openTicketDraft(ticket)}
+											>
+												Draft
 											</button>
 											<button
 												class="ticket-action"

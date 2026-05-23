@@ -2,16 +2,30 @@ import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
+import * as tickets from '$lib/server/db/repos/tickets';
 import * as usage from '$lib/server/db/repos/usage';
 import { getTurn } from '$lib/server/copilot/turn-runner';
 import { listForConversation as listPendingInteractive } from '$lib/server/copilot/interactive-requests';
+import { ticketWorkspaceFromConversation } from '$lib/server/ticket-workspace';
+import { isTicketChatMode, ticketChatPrompt } from '$lib/tickets/chat';
 
-export const load: PageServerLoad = ({ params, locals }) => {
+export const load: PageServerLoad = ({ params, locals, url }) => {
 	if (!locals.userId) throw error(401);
 	const conv = convs.get(params.id, locals.userId);
 	if (!conv) throw error(404);
 	const msgs = messages.listByConversation(conv.id);
 	const contextUsage = usage.get(conv.id);
+	let initialComposer = '';
+	const draftTicketId = url.searchParams.get('draftTicketId');
+	if (draftTicketId && msgs.length === 0) {
+		const ticket = tickets.get(draftTicketId, locals.userId);
+		if (!ticket || ticket.workspaceKey !== ticketWorkspaceFromConversation(conv.workdir)) {
+			throw error(404);
+		}
+		const requestedMode = url.searchParams.get('ticketMode');
+		const mode = isTicketChatMode(requestedMode) ? requestedMode : 'do';
+		initialComposer = ticketChatPrompt(ticket, mode);
+	}
 
 	// Surface any in-flight turn so the client can reattach its
 	// EventSource on page load. Only running turns count — finished but
@@ -57,6 +71,7 @@ export const load: PageServerLoad = ({ params, locals }) => {
 		contextUsage,
 		parent,
 		activeTurnId,
-		pendingInteractive
+		pendingInteractive,
+		initialComposer
 	};
 };
