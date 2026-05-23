@@ -3,6 +3,7 @@
 	import { tick } from 'svelte';
 	import type { Conversation, User, WorkspaceTicket } from '$lib/types';
 	import Alert from '$lib/components/ui/Alert.svelte';
+	import type { TicketChatMode } from '$lib/client/tickets';
 	import { ticketChatPrompt, ticketChatTitle } from '$lib/client/tickets';
 
 	let {
@@ -33,6 +34,7 @@
 	let ticketTitle = $state('');
 	let ticketBusy = $state(false);
 	let ticketLaunchId = $state<string | null>(null);
+	let expandedTicketIds = $state(new Set<string>());
 	let errorMsg = $state<string | null>(null);
 	let errorTimer: ReturnType<typeof setTimeout> | null = null;
 	let firstMenuItem: HTMLButtonElement | null = $state(null);
@@ -116,7 +118,21 @@
 		ticketDraftOpen = !ticketDraftOpen;
 	}
 
-	async function launchTicketChat(ticket: WorkspaceTicket) {
+	function isTicketExpanded(ticketId: string): boolean {
+		return expandedTicketIds.has(ticketId);
+	}
+
+	function toggleTicketExpanded(ticketId: string) {
+		const next = new Set(expandedTicketIds);
+		if (next.has(ticketId)) {
+			next.delete(ticketId);
+		} else {
+			next.add(ticketId);
+		}
+		expandedTicketIds = next;
+	}
+
+	async function launchTicketChat(ticket: WorkspaceTicket, mode: TicketChatMode) {
 		if (ticketLaunchId) return;
 		ticketLaunchId = ticket.id;
 		let conversationId: string | null = null;
@@ -125,7 +141,7 @@
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
-					title: ticketChatTitle(ticket),
+					title: ticketChatTitle(ticket, mode),
 					workdir: ticketWorkspace ?? undefined
 				})
 			});
@@ -138,7 +154,7 @@
 			const turnRes = await fetch(`/api/conversations/${conversationId}/turns`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ content: ticketChatPrompt(ticket) })
+				body: JSON.stringify({ content: ticketChatPrompt(ticket, mode) })
 			});
 			if (!turnRes.ok) {
 				await api(
@@ -384,16 +400,54 @@
 					<div class="ticket-list">
 						{#each tickets as ticket (ticket.id)}
 							<div class="ticket">
-								<div class="ticket-title" title={ticket.title}>{ticket.title}</div>
-								<button
-									class="ticket-action"
-									title="Launch chat"
-									aria-label={`Launch chat for ${ticket.title}`}
-									disabled={ticketLaunchId !== null}
-									onclick={() => launchTicketChat(ticket)}
-								>
-									Chat
-								</button>
+								<div class="ticket-row">
+									<button
+										class="ticket-disclosure"
+										title={ticket.title}
+										aria-expanded={isTicketExpanded(ticket.id)}
+										aria-controls={`ticket-details-${ticket.id}`}
+										onclick={() => toggleTicketExpanded(ticket.id)}
+									>
+										<span class="caret ticket-caret" class:open={isTicketExpanded(ticket.id)}
+											>▸</span
+										>
+										<span class="ticket-title">{ticket.title}</span>
+									</button>
+								</div>
+								{#if isTicketExpanded(ticket.id)}
+									<div class="ticket-details" id={`ticket-details-${ticket.id}`}>
+										{#if ticket.body.trim()}
+											<div class="ticket-body">{ticket.body}</div>
+										{:else}
+											<div class="ticket-body muted">No details.</div>
+										{/if}
+										<div class="ticket-meta muted">ID: {ticket.id}</div>
+										<div
+											class="ticket-actions"
+											role="group"
+											aria-label={`Actions for ${ticket.title}`}
+										>
+											<button
+												class="ticket-action"
+												title="Start implementation chat"
+												aria-label={`Do ticket: ${ticket.title}`}
+												disabled={ticketLaunchId !== null}
+												onclick={() => launchTicketChat(ticket, 'do')}
+											>
+												Do
+											</button>
+											<button
+												class="ticket-action"
+												title="Start ticket refinement chat"
+												aria-label={`Refine ticket: ${ticket.title}`}
+												disabled={ticketLaunchId !== null}
+												onclick={() => launchTicketChat(ticket, 'refine')}
+											>
+												Refine
+											</button>
+										</div>
+									</div>
+								{/if}
 							</div>
 						{/each}
 					</div>
@@ -684,15 +738,40 @@
 		margin-bottom: var(--space-2);
 	}
 	.ticket {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
 		border-radius: var(--radius-sm);
 		padding: 0.25rem 0.35rem;
 	}
 	.ticket:hover,
 	.ticket:focus-within {
 		background: var(--surface-2);
+	}
+	.ticket-row {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.ticket-disclosure {
+		display: flex;
+		min-width: 0;
+		flex: 1;
+		align-items: center;
+		gap: 0.25rem;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+		padding: 0;
+		text-align: left;
+	}
+	.ticket-disclosure:hover,
+	.ticket-disclosure:focus-visible {
+		color: var(--text);
+		outline: none;
+	}
+	.ticket-caret {
+		color: var(--text-muted);
+		font-size: var(--fs-xs);
+		flex-shrink: 0;
 	}
 	.ticket-action {
 		border: 1px solid var(--border);
@@ -721,6 +800,27 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-size: var(--fs-sm);
+	}
+	.ticket-details {
+		margin: 0.3rem 0 0.15rem 1rem;
+		font-size: var(--fs-xs);
+		line-height: 1.35;
+		color: var(--text);
+	}
+	.ticket-body {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.ticket-meta {
+		margin-top: 0.25rem;
+		font-family: var(--font-mono);
+		overflow-wrap: anywhere;
+	}
+	.ticket-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.3rem;
+		margin-top: 0.35rem;
 	}
 	.count {
 		font-size: var(--fs-xs);

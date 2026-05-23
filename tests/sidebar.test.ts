@@ -38,6 +38,12 @@ describe('ticket chat helpers', () => {
 		expect(ticketChatTitle({ title: 'Fix sidebar actions' })).toBe('Fix sidebar actions');
 	});
 
+	it('labels refinement chats by mode', () => {
+		expect(ticketChatTitle({ title: 'Fix sidebar actions' }, 'refine')).toBe(
+			'Refine ticket: Fix sidebar actions'
+		);
+	});
+
 	it('builds an actionable initial prompt for a ticket with details', () => {
 		expect(
 			ticketChatPrompt({
@@ -47,6 +53,21 @@ describe('ticket chat helpers', () => {
 			})
 		).toBe(
 			'Do this workspace ticket: Fix sidebar actions\n\nTicket ID: ticket-1\n\nAdd a launch button.'
+		);
+	});
+
+	it('builds a ticket refinement prompt that avoids implementation', () => {
+		expect(
+			ticketChatPrompt(
+				{
+					id: 'ticket-1',
+					title: 'Fix sidebar actions',
+					body: 'Add a launch button.'
+				},
+				'refine'
+			)
+		).toBe(
+			'Refine this workspace ticket: Fix sidebar actions\n\nClarify the request, acceptance criteria, scope, risks, and useful implementation notes. Research the code if needed. Update the ticket instead of implementing it unless explicitly asked.\n\nTicket ID: ticket-1\n\nAdd a launch button.'
 		);
 	});
 
