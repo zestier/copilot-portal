@@ -415,13 +415,7 @@
 									</button>
 								</div>
 								{#if isTicketExpanded(ticket.id)}
-									<div class="ticket-details" id={`ticket-details-${ticket.id}`}>
-										{#if ticket.body.trim()}
-											<div class="ticket-body">{ticket.body}</div>
-										{:else}
-											<div class="ticket-body muted">No details.</div>
-										{/if}
-										<div class="ticket-meta muted">ID: {ticket.id}</div>
+									<div class="ticket-expanded" id={`ticket-details-${ticket.id}`}>
 										<div
 											class="ticket-actions"
 											role="group"
@@ -445,6 +439,14 @@
 											>
 												Refine
 											</button>
+										</div>
+										<div class="ticket-details">
+											{#if ticket.body.trim()}
+												<div class="ticket-body">{ticket.body}</div>
+											{:else}
+												<div class="ticket-body muted">No details.</div>
+											{/if}
+											<div class="ticket-meta muted">ID: {ticket.id}</div>
 										</div>
 									</div>
 								{/if}
@@ -739,6 +741,7 @@
 	}
 	.ticket {
 		border-radius: var(--radius-sm);
+		min-width: 0;
 		padding: 0.25rem 0.35rem;
 	}
 	.ticket:hover,
@@ -749,6 +752,7 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
+		min-width: 0;
 	}
 	.ticket-disclosure {
 		display: flex;
@@ -801,6 +805,9 @@
 		white-space: nowrap;
 		font-size: var(--fs-sm);
 	}
+	.ticket-expanded {
+		min-width: 0;
+	}
 	.ticket-details {
 		margin: 0.3rem 0 0.15rem 1rem;
 		font-size: var(--fs-xs);
@@ -820,7 +827,8 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.3rem;
-		margin-top: 0.35rem;
+		margin: 0.3rem 0 0 1rem;
+		min-width: 0;
 	}
 	.count {
 		font-size: var(--fs-xs);
