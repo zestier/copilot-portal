@@ -145,6 +145,7 @@ export function resolve(requestId: string, userId: string, response: Interactive
 		});
 		return false;
 	}
+	response = normalizeResponse(response);
 	pending.delete(requestId);
 	if (p.timeoutHandle) clearTimeout(p.timeoutHandle);
 
@@ -202,6 +203,7 @@ export function resolve(requestId: string, userId: string, response: Interactive
 						}
 					}
 				} else {
+					const denyReason = normalizeDenyFeedback(response.feedback);
 					for (const scope of scopes) {
 						settingsRepo.addGrant({
 							userId,
@@ -211,6 +213,7 @@ export function resolve(requestId: string, userId: string, response: Interactive
 							scopePattern: scope?.pattern ?? null,
 							scope: scope?.scope ?? null,
 							decision: 'deny',
+							denyReason,
 							expiresAt
 						});
 					}
@@ -315,6 +318,22 @@ function defaultDenial(kind: InteractiveKind): InteractiveResponse {
 		case 'external_tool':
 			return { kind: 'external_tool', action: 'ack' };
 	}
+}
+
+function normalizeDenyFeedback(feedback: string | undefined): string | null {
+	const trimmed = feedback?.trim();
+	return trimmed ? trimmed.slice(0, 500) : null;
+}
+
+function normalizeResponse(response: InteractiveResponse): InteractiveResponse {
+	if (response.kind !== 'permission') return response;
+	const feedback = normalizeDenyFeedback(response.feedback) ?? undefined;
+	if (!feedback || (response.decision !== 'deny' && response.decision !== 'deny-always')) {
+		const normalized = { ...response };
+		delete normalized.feedback;
+		return normalized;
+	}
+	return { ...response, feedback };
 }
 
 // --- Policy helpers ---

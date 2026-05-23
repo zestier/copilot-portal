@@ -117,6 +117,7 @@
 	let scopeChoice = $state<ScopeChoice>('this-exact');
 	let expiryChoice = $state<'forever' | '1h' | '1d'>('forever');
 	let appliesTo = $state<'this-conversation' | 'all-conversations'>('this-conversation');
+	let denialFeedback = $state('');
 
 	const HOUR_MS = 60 * 60 * 1000;
 	const DAY_MS = 24 * HOUR_MS;
@@ -161,6 +162,21 @@
 	): string | null {
 		const s = typeof req.summary === 'string' ? req.summary.trim() : '';
 		return s.length > 0 && s !== req.tool ? s : null;
+	}
+
+	$effect(() => {
+		void request.requestId;
+		denialFeedback = '';
+	});
+
+	function denyFeedback(): string | undefined {
+		const trimmed = denialFeedback.trim();
+		return trimmed.length > 0 ? trimmed : undefined;
+	}
+
+	function pickDeny(decision: 'deny' | 'deny-always') {
+		const feedback = denyFeedback();
+		pick(feedback ? { kind: 'permission', decision, feedback } : { kind: 'permission', decision });
 	}
 
 	$effect(() => {
@@ -399,7 +415,8 @@
 					scope: o.scope
 				})),
 				expiresInMs: buildExpiry(),
-				applyToAllConversations: appliesTo === 'all-conversations'
+				applyToAllConversations: appliesTo === 'all-conversations',
+				...(decision === 'deny-always' && denyFeedback() ? { feedback: denyFeedback() } : {})
 			});
 			return;
 		}
@@ -408,7 +425,8 @@
 			decision,
 			scope: buildScope(),
 			expiresInMs: buildExpiry(),
-			applyToAllConversations: appliesTo === 'all-conversations'
+			applyToAllConversations: appliesTo === 'all-conversations',
+			...(decision === 'deny-always' && denyFeedback() ? { feedback: denyFeedback() } : {})
 		});
 	}
 
@@ -490,7 +508,7 @@
 		if (e.currentTarget !== e.target) return;
 		if (e.key === 'Escape') {
 			e.preventDefault();
-			pick({ kind: 'permission', decision: 'deny' });
+			pickDeny('deny');
 		} else if (e.key === 'Enter' && e.shiftKey) {
 			if (!canPersistDecision) return;
 			if (denyAllPolicy) return;
@@ -667,6 +685,17 @@
 					</div>
 				</details>
 			{/if}
+			<label class="deny-feedback">
+				<span>Optional feedback if you deny</span>
+				<textarea
+					bind:value={denialFeedback}
+					maxlength="500"
+					rows="3"
+					disabled={busy}
+					placeholder="Tell the agent why this is denied or what to try instead..."
+				></textarea>
+				<span class="muted small">{denialFeedback.length}/500 characters</span>
+			</label>
 		</div>
 		<div class="actions">
 			{#if canPersistDecision}
@@ -679,12 +708,7 @@
 						: previewAlways('deny-always')}>Deny always</button
 				>
 			{/if}
-			<button
-				class="btn"
-				disabled={busy}
-				onclick={() => pick({ kind: 'permission', decision: 'deny' })}
-				title="Esc">Deny</button
-			>
+			<button class="btn" disabled={busy} onclick={() => pickDeny('deny')} title="Esc">Deny</button>
 			<button
 				class="btn"
 				disabled={busy}
@@ -1075,6 +1099,27 @@
 		border-radius: var(--radius-sm);
 		background: var(--surface);
 		color: inherit;
+	}
+	.deny-feedback {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		margin-top: 0.6rem;
+		font-size: 0.85em;
+	}
+	.deny-feedback span:first-child {
+		font-weight: 600;
+	}
+	.deny-feedback textarea {
+		width: 100%;
+		box-sizing: border-box;
+		resize: vertical;
+		padding: 0.35rem 0.5rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--surface);
+		color: inherit;
+		font: inherit;
 	}
 	.actions {
 		display: flex;

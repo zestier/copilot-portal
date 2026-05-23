@@ -132,7 +132,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				}
 			);
 			if (response.decision === 'deny' || response.decision === 'deny-always') {
-				return { kind: 'reject' } as const;
+				return rejectWithFeedback(response);
 			}
 			audit('auto-allow');
 			return { kind: 'approve-once' } as const;
@@ -181,11 +181,10 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				);
 				if (response.decision === 'deny' || response.decision === 'deny-always') {
 					audit('auto-deny');
-					return {
-						kind: 'reject',
-						feedback:
-							'Escalation denied. Use structured tools or stop and explain what capability is missing.'
-					} as const;
+					return rejectWithFeedback(
+						response,
+						'Escalation denied. Use structured tools or stop and explain what capability is missing.'
+					);
 				}
 				audit('auto-allow');
 				return { kind: 'approve-once' } as const;
@@ -236,7 +235,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			}
 		);
 		if (response.decision === 'deny' || response.decision === 'deny-always') {
-			return { kind: 'reject' } as const;
+			return rejectWithFeedback(response);
 		}
 		return { kind: 'approve-once' } as const;
 	};
@@ -324,6 +323,14 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 		onExitPlanMode,
 		onAutoModeSwitch
 	};
+}
+
+function rejectWithFeedback(
+	response: Extract<InteractiveResponse, { kind: 'permission' }>,
+	fallbackFeedback?: string
+) {
+	const feedback = response.feedback?.trim() || fallbackFeedback;
+	return feedback ? ({ kind: 'reject', feedback } as const) : ({ kind: 'reject' } as const);
 }
 
 function hashPermissionArgs(req: PermissionRequestLike): string | null {

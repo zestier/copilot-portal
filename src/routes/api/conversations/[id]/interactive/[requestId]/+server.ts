@@ -66,6 +66,12 @@ const PermissionScope = z.object({
 const PermissionBody = z.object({
 	kind: z.literal('permission'),
 	decision: z.enum(['allow-once', 'allow-always', 'deny', 'deny-always']),
+	feedback: z
+		.string()
+		.trim()
+		.max(500, 'feedback must be at most 500 characters')
+		.optional()
+		.transform((v) => (v === undefined || v === '' ? undefined : v)),
 	scope: PermissionScope.optional(),
 	// Multi-grant payload. The shell picker may persist several
 	// per-argv0 grants from one click; we cap the array to keep abuse
@@ -126,7 +132,7 @@ const Body = z.discriminatedUnion('kind', [
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const conv = authorizeConversation(params.id, locals.userId);
 
-	const body = (await parseBody(request, Body)) as InteractiveResponse;
+	const body = normalizeResponse((await parseBody(request, Body)) as InteractiveResponse);
 	const pending = interactive.get(params.requestId!);
 	if (!pending || pending.conversationId !== conv.id) throw error(404);
 	if (
@@ -142,3 +148,17 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!ok) throw error(409, 'kind mismatch or already resolved');
 	return json({ ok: true });
 };
+
+function normalizeResponse(body: InteractiveResponse): InteractiveResponse {
+	if (
+		body.kind === 'permission' &&
+		body.feedback &&
+		body.decision !== 'deny' &&
+		body.decision !== 'deny-always'
+	) {
+		const normalized = { ...body };
+		delete normalized.feedback;
+		return normalized;
+	}
+	return body;
+}

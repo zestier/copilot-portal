@@ -310,6 +310,8 @@ export type InteractiveResponse =
 			 * tool in every conversation). Default false → conversation-scoped.
 			 */
 			applyToAllConversations?: boolean;
+			/** Optional agent-facing feedback for manual deny decisions. */
+			feedback?: string;
 	  }
 	| { kind: 'auto_mode_switch'; decision: 'yes' | 'no' }
 	| { kind: 'user_input'; answer: string; wasFreeform?: boolean }

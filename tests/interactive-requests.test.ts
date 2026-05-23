@@ -11,6 +11,7 @@ import {
 	newRequestId,
 	get
 } from '../src/lib/server/copilot/interactive-requests';
+import { createInteractiveCallbacks } from '../src/lib/server/copilot/interactive-adapter';
 import * as users from '../src/lib/server/db/repos/users';
 import * as convs from '../src/lib/server/db/repos/conversations';
 import type {
@@ -322,6 +323,34 @@ describe('interactive request registry', () => {
 		expect(settings.matchGrant(userId, conversationId, 'shell', 'shell', 'ls')).toBe('none');
 	});
 
+	it('deny-always stores custom feedback as the deny grant reason and replays it in the resolution', async () => {
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const events: PortalEvent[] = [];
+		const requestId = newRequestId();
+		makePending('permission', permView(requestId), (ev) => events.push(ev));
+		resolve(requestId, userId, {
+			kind: 'permission',
+			decision: 'deny-always',
+			scope: { permissionKind: 'shell', pattern: 'rm *' },
+			feedback: 'Use structured file tools instead.'
+		});
+
+		expect(events[0]).toMatchObject({
+			type: 'interactive.resolved',
+			outcome: {
+				kind: 'permission',
+				decision: 'deny-always',
+				feedback: 'Use structured file tools instead.'
+			}
+		});
+		expect(
+			settings.matchGrantDetailed(userId, conversationId, 'shell', 'shell', 'rm -rf /')
+		).toEqual({
+			outcome: 'deny',
+			denyReason: 'Use structured file tools instead.'
+		});
+	});
+
 	it('allow-always with expiresInMs writes a TTL grant', async () => {
 		const settings = await import('../src/lib/server/db/repos/settings');
 		const requestId = newRequestId();
@@ -473,5 +502,75 @@ describe('interactive request registry', () => {
 				shellSegments: unrelated.segments
 			})
 		).toBe('none');
+	});
+});
+
+describe('interactive permission adapter feedback', () => {
+	let userId: string;
+	let conversationId: string;
+
+	beforeEach(async () => {
+		await setupLocalEnv('portal-interactive-adapter-test-');
+		userId = users.ensureLocalUser().id;
+		conversationId = convs.create(userId, { title: 'adapter', workdir: '/tmp', model: null }).id;
+	});
+
+	function callbacks(events: PortalEvent[] = []) {
+		return createInteractiveCallbacks({
+			conversationId,
+			userId,
+			workingDirectory: '/tmp',
+			policy: 'prompt',
+			emit: (ev) => events.push(ev),
+			getApproveAll: () => false,
+			getMode: () => 'interactive',
+			getSessionWorkspacePath: () => null,
+			getPermissionBehavior: () => 'normal'
+		});
+	}
+
+	it('returns manual deny feedback to the SDK reject response', async () => {
+		const events: PortalEvent[] = [];
+		const permission = callbacks(events).onPermissionRequest({
+			kind: 'url',
+			toolName: 'web_fetch',
+			url: 'https://example.com/',
+			args: { url: 'https://example.com/' }
+		});
+		await Promise.resolve();
+		const request = events.find((ev) => ev.type === 'interactive.request');
+		if (request?.type !== 'interactive.request') throw new Error('expected interactive request');
+
+		resolve(request.request.requestId, userId, {
+			kind: 'permission',
+			decision: 'deny',
+			feedback: '  Use the structured tool instead.  '
+		});
+
+		await expect(permission).resolves.toEqual({
+			kind: 'reject',
+			feedback: 'Use the structured tool instead.'
+		});
+	});
+
+	it('keeps a plain SDK reject when manual deny feedback is empty', async () => {
+		const events: PortalEvent[] = [];
+		const permission = callbacks(events).onPermissionRequest({
+			kind: 'url',
+			toolName: 'web_fetch',
+			url: 'https://example.com/',
+			args: { url: 'https://example.com/' }
+		});
+		await Promise.resolve();
+		const request = events.find((ev) => ev.type === 'interactive.request');
+		if (request?.type !== 'interactive.request') throw new Error('expected interactive request');
+
+		resolve(request.request.requestId, userId, {
+			kind: 'permission',
+			decision: 'deny',
+			feedback: '   '
+		});
+
+		await expect(permission).resolves.toEqual({ kind: 'reject' });
 	});
 });
