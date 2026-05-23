@@ -71,7 +71,7 @@
 	/>
 
 	{#if activeTab === 'general'}
-		<GeneralSettings settings={data.settings} copilot={data.copilot} {form} />
+		<GeneralSettings settings={data.settings} providers={data.providers} {form} />
 	{:else if activeTab === 'permissions'}
 		<PermissionGrants grants={data.grants} {form} />
 	{:else if activeTab === 'activity'}

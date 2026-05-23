@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+const optionalUrl = z
+	.string()
+	.trim()
+	.optional()
+	.transform((v) => (v ? v : undefined))
+	.pipe(z.string().url().optional());
+
 const Schema = z
 	.object({
 		HOST: z.string().default('127.0.0.1'),
@@ -38,7 +45,10 @@ const Schema = z
 		SHARED_SECRET: z.string().optional(),
 
 		COPILOT_GITHUB_TOKEN: z.string().optional(),
+		DEFAULT_BACKEND_PROVIDER: z.enum(['copilot', 'openai-compatible']).default('copilot'),
 		DEFAULT_MODEL: z.string().default('claude-sonnet-4.5'),
+		OPENAI_COMPATIBLE_BASE_URL: optionalUrl,
+		OPENAI_COMPATIBLE_API_KEY: z.string().optional(),
 
 		IDLE_TIMEOUT_MIN: z.coerce.number().int().positive().default(15),
 		MAX_CONCURRENT_SESSIONS: z.coerce.number().int().positive().default(4),

@@ -17,6 +17,7 @@ export interface Conversation {
 	userId: string;
 	title: string;
 	workdir: string;
+	provider: BackendProviderId;
 	model: string | null;
 	/**
 	 * Agent mode for this conversation. Mostly mirrors the SDK's
@@ -73,6 +74,12 @@ export type SessionMode = 'interactive' | 'plan' | 'autopilot' | 'best-effort';
 
 export function normalizeSessionMode(raw: string | null | undefined): SessionMode {
 	return raw === 'plan' || raw === 'autopilot' || raw === 'best-effort' ? raw : 'interactive';
+}
+
+export type BackendProviderId = 'copilot' | 'openai-compatible';
+
+export function normalizeBackendProvider(raw: string | null | undefined): BackendProviderId {
+	return raw === 'openai-compatible' ? raw : 'copilot';
 }
 
 export interface Message {
@@ -148,6 +155,7 @@ export interface FileEditRecord {
 }
 
 export interface UserSettings {
+	defaultProvider: BackendProviderId;
 	defaultModel: string | null;
 	defaultWorkdir: string | null;
 	defaultConversationMode: SessionMode;

@@ -1,12 +1,19 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
-import { normalizeSessionMode, type Conversation, type SessionMode } from '$lib/types';
+import {
+	normalizeBackendProvider,
+	normalizeSessionMode,
+	type BackendProviderId,
+	type Conversation,
+	type SessionMode
+} from '$lib/types';
 
 interface ConvRow {
 	id: string;
 	user_id: string;
 	title: string;
 	workdir: string;
+	provider: string | null;
 	model: string | null;
 	created_at: number;
 	updated_at: number;
@@ -24,6 +31,7 @@ function rowToConv(r: ConvRow): Conversation {
 		userId: r.user_id,
 		title: r.title,
 		workdir: r.workdir,
+		provider: normalizeBackendProvider(r.provider),
 		model: r.model,
 		mode,
 		approveAllTools: r.approve_all_tools === 1,
@@ -75,6 +83,7 @@ export function list(userId: string, opts: ListOpts = {}): Conversation[] {
 export interface CreateInput {
 	title: string;
 	workdir: string;
+	provider?: BackendProviderId;
 	model: string | null;
 	mode?: SessionMode;
 	id?: string;
@@ -97,19 +106,33 @@ export function create(userId: string, input: CreateInput): Conversation {
 	const forkConv = input.forkedFromConversationId ?? null;
 	const forkMsg = input.forkedFromMessageId ?? null;
 	const mode = input.mode ?? 'interactive';
+	const provider = input.provider ?? 'copilot';
 	getDb()
 		.prepare(
 			`INSERT INTO conversations(
-			   id, user_id, title, workdir, model, mode, created_at, updated_at,
+			   id, user_id, title, workdir, provider, model, mode, created_at, updated_at,
 			   forked_from_conversation_id, forked_from_message_id
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
-		.run(id, userId, input.title, input.workdir, input.model, mode, now, now, forkConv, forkMsg);
+		.run(
+			id,
+			userId,
+			input.title,
+			input.workdir,
+			provider,
+			input.model,
+			mode,
+			now,
+			now,
+			forkConv,
+			forkMsg
+		);
 	return {
 		id,
 		userId,
 		title: input.title,
 		workdir: input.workdir,
+		provider,
 		model: input.model,
 		mode,
 		approveAllTools: false,

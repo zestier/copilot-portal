@@ -3,67 +3,93 @@ import { z } from 'zod';
 import type { PageServerLoad, Actions } from './$types';
 import * as settings from '$lib/server/db/repos/settings';
 import * as tokens from '$lib/server/db/repos/tokens';
-import { fetchAuthStatus, fetchModels } from '$lib/server/copilot/providers';
+import {
+	fetchAuthStatus,
+	fetchModels,
+	getDefaultProviderId,
+	listProviders
+} from '$lib/server/copilot/providers';
 import { loadConfig } from '$lib/server/config';
 import { getDeployMetadata } from '$lib/server/deploy';
 import { log } from '$lib/server/log';
-import type { PermissionPolicy, SessionMode, UserSettings } from '$lib/types';
+import {
+	normalizeBackendProvider,
+	type BackendProviderId,
+	type PermissionPolicy,
+	type SessionMode,
+	type UserSettings
+} from '$lib/types';
 import { GrantInputSchema, permissionKindForTool } from '$lib/permissions/scope-schema';
 import { stableScopeKey } from '$lib/permissions/scope-codec';
 import { defaultSeedGrants, ensureSeedGrantsForUser } from '$lib/server/permissions/seed-grants';
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.userId) throw redirect(302, '/login');
+	const userId = locals.userId;
 	const cfg = loadConfig();
-	const authToken = tokens.getGithubToken(locals.userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
+	const authToken = tokens.getGithubToken(userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
 
 	// Garbage-collect expired grants on load so the management table
 	// doesn't show TTL'd rows the matcher is already ignoring.
 	const purged = settings.pruneExpiredGrants();
 	if (purged > 0) log.info('settings.grants_pruned', { count: purged });
 
-	let copilot: {
+	type ProviderStatus = {
+		id: BackendProviderId;
+		displayName: string;
 		auth: { isAuthenticated: boolean; authType?: string; login?: string; statusMessage?: string };
 		models: { id: string; name: string; maxContextWindowTokens?: number }[];
 		error?: string;
 	};
-	try {
-		const [auth, models] = await Promise.all([
-			fetchAuthStatus(locals.userId, authToken),
-			fetchModels(locals.userId, authToken)
-		]);
-		copilot = {
-			auth: {
-				isAuthenticated: auth.isAuthenticated,
-				authType: auth.authType,
-				login: auth.login,
-				statusMessage: auth.statusMessage
-			},
-			models: models.map((m) => ({
-				id: m.id,
-				name: m.name,
-				maxContextWindowTokens: m.capabilities?.limits?.max_context_window_tokens
-			}))
-		};
-	} catch (e) {
-		log.warn('settings.copilot_status_failed', { err: String(e) });
-		copilot = {
-			auth: { isAuthenticated: false, statusMessage: String(e) },
-			models: [],
-			error: e instanceof Error ? e.message : String(e)
-		};
-	}
+	const providers = await Promise.all(
+		listProviders().map(async (provider): Promise<ProviderStatus> => {
+			try {
+				const [auth, models] = await Promise.all([
+					fetchAuthStatus(userId, authToken, provider.id),
+					fetchModels(userId, authToken, provider.id)
+				]);
+				return {
+					id: provider.id,
+					displayName: provider.displayName,
+					auth: {
+						isAuthenticated: auth.isAuthenticated,
+						authType: auth.authType,
+						login: auth.login,
+						statusMessage: auth.statusMessage
+					},
+					models: models.map((m) => ({
+						id: m.id,
+						name: m.name,
+						maxContextWindowTokens: m.capabilities?.limits?.max_context_window_tokens
+					}))
+				};
+			} catch (e) {
+				log.warn('settings.provider_status_failed', { provider: provider.id, err: String(e) });
+				return {
+					id: provider.id,
+					displayName: provider.displayName,
+					auth: { isAuthenticated: false, statusMessage: String(e) },
+					models: [],
+					error: e instanceof Error ? e.message : String(e)
+				};
+			}
+		})
+	);
+	const copilot = providers.find((provider) => provider.id === 'copilot') ?? providers[0];
 
 	return {
-		settings: settings.get(locals.userId) ?? settings.defaults(),
+		settings: settings.get(userId) ?? settings.defaults(),
+		defaultProvider: getDefaultProviderId(),
+		providers,
 		copilot,
-		recentDecisions: settings.listRecentDecisionsForUser(locals.userId, 25),
-		grants: markSeedGrants(settings.listGrantsForUser(locals.userId)),
+		recentDecisions: settings.listRecentDecisionsForUser(userId, 25),
+		grants: markSeedGrants(settings.listGrantsForUser(userId)),
 		enableRedeploy: cfg.ENABLE_REDEPLOY,
 		deploy: getDeployMetadata()
 	};
 };
 
 const SaveSchema = z.object({
+	defaultProvider: z.enum(['copilot', 'openai-compatible']),
 	defaultModel: z.string().optional(),
 	defaultWorkdir: z.string().optional(),
 	defaultConversationMode: z.enum(['interactive', 'plan', 'autopilot', 'best-effort']),
@@ -77,6 +103,7 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const parsed = SaveSchema.safeParse({
 			defaultModel: (data.get('defaultModel') as string) || undefined,
+			defaultProvider: data.get('defaultProvider'),
 			defaultWorkdir: (data.get('defaultWorkdir') as string) || undefined,
 			defaultConversationMode: data.get('defaultConversationMode'),
 			defaultPolicy: data.get('defaultPolicy'),
@@ -90,6 +117,7 @@ export const actions: Actions = {
 			};
 		}
 		const next: UserSettings = {
+			defaultProvider: normalizeBackendProvider(parsed.data.defaultProvider),
 			defaultModel: parsed.data.defaultModel ?? null,
 			defaultWorkdir: parsed.data.defaultWorkdir ?? null,
 			defaultConversationMode: parsed.data.defaultConversationMode as SessionMode,

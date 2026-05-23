@@ -59,6 +59,11 @@
 		}
 	];
 
+	const PROVIDER_LABELS: Record<Conversation['provider'], string> = {
+		copilot: 'GitHub Copilot',
+		'openai-compatible': 'OpenAI compatible'
+	};
+
 	async function patchSession(body: { mode?: SessionMode; approveAllTools?: boolean }) {
 		const res = await fetch(`/api/conversations/${conversation.id}/session`, {
 			method: 'PATCH',
@@ -163,6 +168,8 @@
 		<div class="details-inner">
 			<div class="details-body">
 				<dl class="header-meta">
+					<dt>Provider</dt>
+					<dd>{PROVIDER_LABELS[conversation.provider]}</dd>
 					{#if conversation.model}
 						<dt>Model</dt>
 						<dd>{conversation.model}</dd>

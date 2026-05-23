@@ -1,4 +1,4 @@
-import type { PortalEvent, PermissionPolicy, SessionMode } from '$lib/types';
+import type { BackendProviderId, PortalEvent, PermissionPolicy, SessionMode } from '$lib/types';
 
 export interface ProviderAuthStatus {
 	isAuthenticated: boolean;
@@ -65,6 +65,7 @@ export interface ProviderCapabilities {
 }
 
 export interface ProviderOpenOptions {
+	provider?: BackendProviderId;
 	conversationId: string;
 	userId: string;
 	workingDirectory: string;
@@ -79,6 +80,7 @@ export interface ProviderOpenOptions {
 }
 
 export interface ProviderSession {
+	provider?: BackendProviderId;
 	conversationId: string;
 	workingDirectory: string;
 	lastUsed: number;
@@ -94,7 +96,7 @@ export interface ProviderSession {
 }
 
 export interface ModelBackendProvider {
-	id: string;
+	id: BackendProviderId;
 	displayName: string;
 	capabilities: ProviderCapabilities;
 	fetchAuthStatus(userId: string, authToken?: string): Promise<ProviderAuthStatus>;

@@ -69,6 +69,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			conversationId: conv.id,
 			userId: conv.userId,
 			workingDirectory: workdir,
+			provider: conv.provider,
 			model: conv.model ?? cfg.DEFAULT_MODEL,
 			policy: userSettings.defaultPolicy,
 			mode: conv.mode,

@@ -1,9 +1,15 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
-import { normalizeSessionMode, type UserSettings, type PermissionPolicy } from '$lib/types';
+import {
+	normalizeBackendProvider,
+	normalizeSessionMode,
+	type UserSettings,
+	type PermissionPolicy
+} from '$lib/types';
 
 interface SettingsRow {
 	user_id: string;
+	default_provider: string | null;
 	default_model: string | null;
 	default_workdir: string | null;
 	default_mode: string | null;
@@ -19,6 +25,7 @@ function rowToSettings(r: SettingsRow): UserSettings {
 	// migration ran in dev HMR).
 	const policy: PermissionPolicy = raw === 'allow-all' || raw === 'deny-all' ? raw : 'prompt';
 	return {
+		defaultProvider: normalizeBackendProvider(r.default_provider),
 		defaultModel: r.default_model,
 		defaultWorkdir: r.default_workdir,
 		defaultConversationMode: normalizeSessionMode(r.default_mode),
@@ -41,6 +48,7 @@ export function get(userId: string): UserSettings | null {
  */
 export function defaults(): UserSettings {
 	return {
+		defaultProvider: 'copilot',
 		defaultModel: null,
 		defaultWorkdir: null,
 		defaultConversationMode: 'interactive',
@@ -53,10 +61,11 @@ export function save(userId: string, s: UserSettings) {
 	getDb()
 		.prepare(
 			`INSERT INTO user_settings(
-			   user_id, default_model, default_workdir, default_mode, default_policy, theme, updated_at
+			   user_id, default_provider, default_model, default_workdir, default_mode, default_policy, theme, updated_at
 			 )
-			 VALUES (?, ?, ?, ?, ?, ?, ?)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(user_id) DO UPDATE SET
+			   default_provider = excluded.default_provider,
 			   default_model = excluded.default_model,
 			   default_workdir = excluded.default_workdir,
 			   default_mode = excluded.default_mode,
@@ -66,6 +75,7 @@ export function save(userId: string, s: UserSettings) {
 		)
 		.run(
 			userId,
+			s.defaultProvider,
 			s.defaultModel,
 			s.defaultWorkdir,
 			s.defaultConversationMode,

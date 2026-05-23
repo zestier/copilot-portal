@@ -226,6 +226,7 @@ describe('interactive request registry', () => {
 	it('refuses to persist an allow-always grant when policy is deny-all', async () => {
 		const settings = await import('../src/lib/server/db/repos/settings');
 		settings.save(userId, {
+			defaultProvider: 'copilot',
 			defaultModel: null,
 			defaultWorkdir: null,
 			defaultConversationMode: 'interactive',
@@ -369,6 +370,7 @@ describe('interactive request registry', () => {
 	it('deny-always is allowed even when policy is deny-all', async () => {
 		const settings = await import('../src/lib/server/db/repos/settings');
 		settings.save(userId, {
+			defaultProvider: 'copilot',
 			defaultModel: null,
 			defaultWorkdir: null,
 			defaultConversationMode: 'interactive',

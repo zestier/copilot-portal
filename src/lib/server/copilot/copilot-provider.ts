@@ -335,6 +335,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	if (approveAllTools) void applyApproveAll(true);
 
 	const session: ConversationSession = {
+		provider: 'copilot',
 		conversationId: opts.conversationId,
 		workingDirectory: opts.workingDirectory,
 		lastUsed: Date.now(),

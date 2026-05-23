@@ -130,6 +130,7 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 		id: newId,
 		title: source.title,
 		workdir: source.workdir,
+		provider: source.provider,
 		model: source.model,
 		forkedFromConversationId: source.id,
 		forkedFromMessageId: target.id

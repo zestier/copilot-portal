@@ -2,11 +2,11 @@
 	import {
 		authLabel,
 		formatContextWindow,
-		type CopilotStatus,
 		type FormResult,
+		type ProviderStatus,
 		type SettingsData
 	} from './settings-types';
-	import type { SessionMode } from '$lib/types';
+	import type { BackendProviderId, SessionMode } from '$lib/types';
 
 	const MODE_OPTIONS: { value: SessionMode; label: string; hint: string }[] = [
 		{
@@ -33,13 +33,21 @@
 
 	let {
 		settings,
-		copilot,
+		providers,
 		form
 	}: {
 		settings: SettingsData;
-		copilot: CopilotStatus;
+		providers: ProviderStatus[];
 		form: FormResult | null;
 	} = $props();
+
+	let selectedProvider = $state<BackendProviderId>('copilot');
+	$effect(() => {
+		selectedProvider = settings.defaultProvider;
+	});
+	const selectedProviderStatus = $derived(
+		providers.find((provider) => provider.id === selectedProvider) ?? providers[0]
+	);
 </script>
 
 <div
@@ -55,17 +63,17 @@
 
 	<section
 		class="copilot-status"
-		class:ok={copilot.auth.isAuthenticated}
-		class:bad={!copilot.auth.isAuthenticated}
+		class:ok={selectedProviderStatus.auth.isAuthenticated}
+		class:bad={!selectedProviderStatus.auth.isAuthenticated}
 	>
 		<div class="row">
-			<strong>Copilot:</strong>
-			<span>{authLabel(copilot.auth)}</span>
+			<strong>{selectedProviderStatus.displayName}:</strong>
+			<span>{authLabel(selectedProviderStatus.auth)}</span>
 		</div>
-		{#if copilot.auth.statusMessage && !copilot.auth.isAuthenticated}
-			<div class="muted small">{copilot.auth.statusMessage}</div>
+		{#if selectedProviderStatus.auth.statusMessage && !selectedProviderStatus.auth.isAuthenticated}
+			<div class="muted small">{selectedProviderStatus.auth.statusMessage}</div>
 		{/if}
-		{#if !copilot.auth.isAuthenticated}
+		{#if selectedProvider === 'copilot' && !selectedProviderStatus.auth.isAuthenticated}
 			<div class="muted small">
 				Run <code>copilot auth login</code> on the host, or set a per-user token in the database, then
 				reload.
@@ -75,24 +83,37 @@
 
 	<form method="POST" action="?/save" class="settings-form">
 		<label>
+			Default provider
+			<select name="defaultProvider" bind:value={selectedProvider}>
+				{#each providers as provider (provider.id)}
+					<option value={provider.id}>{provider.displayName}</option>
+				{/each}
+			</select>
+			<span class="muted small">
+				Applies to newly created conversations. Existing conversations keep their provider.
+			</span>
+		</label>
+		<label>
 			Default model
-			{#if copilot.models.length > 0}
+			{#if selectedProviderStatus.models.length > 0}
 				<select name="defaultModel" value={settings.defaultModel ?? ''}>
 					<option value="">(use server default)</option>
-					{#each copilot.models as m (m.id)}
-						<option value={m.id}
-							>{m.name} — {m.id} ({formatContextWindow(m.maxContextWindowTokens)})</option
-						>
+					{#each selectedProviderStatus.models as m (m.id)}
+						<option value={m.id}>
+							{m.name} — {m.id} ({formatContextWindow(m.maxContextWindowTokens)})
+						</option>
 					{/each}
 				</select>
 			{:else}
 				<input
 					name="defaultModel"
 					value={settings.defaultModel ?? ''}
-					placeholder="claude-sonnet-4.5"
+					placeholder={selectedProvider === 'copilot' ? 'claude-sonnet-4.5' : 'model-id'}
 				/>
 				<span class="muted small">
-					Model list unavailable{copilot.error ? `: ${copilot.error}` : ''}.
+					Model list unavailable{selectedProviderStatus.error
+						? `: ${selectedProviderStatus.error}`
+						: ''}.
 				</span>
 			{/if}
 		</label>

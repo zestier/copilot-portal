@@ -40,13 +40,20 @@ function setReaperTimer(t: NodeJS.Timeout | null) {
 
 export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSession> {
 	const existing = sessions.get(opts.conversationId);
+	const requestedProvider = opts.provider ?? 'copilot';
 	if (existing) {
-		if (existing.session.workingDirectory === opts.workingDirectory) {
+		const cachedProvider = existing.session.provider ?? 'copilot';
+		if (
+			existing.session.workingDirectory === opts.workingDirectory &&
+			cachedProvider === requestedProvider
+		) {
 			existing.lastUsed = Date.now();
 			return existing.session;
 		}
-		log.warn('copilot.pool.workdir_mismatch_recreate', {
+		log.warn('copilot.pool.session_mismatch_recreate', {
 			conversationId: opts.conversationId,
+			cachedProvider,
+			requestedProvider,
 			cachedWorkdir: existing.session.workingDirectory,
 			requestedWorkdir: opts.workingDirectory
 		});

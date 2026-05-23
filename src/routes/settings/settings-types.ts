@@ -12,6 +12,7 @@ export type SettingsTab = 'general' | 'permissions' | 'activity' | 'update';
 
 export type SettingsData = PageData['settings'];
 export type CopilotStatus = PageData['copilot'];
+export type ProviderStatus = PageData['providers'][number];
 export type PermissionGrant = PageData['grants'][number];
 export type PermissionDecision = PageData['recentDecisions'][number];
 

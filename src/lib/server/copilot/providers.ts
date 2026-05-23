@@ -1,4 +1,7 @@
 import { copilotProvider } from './copilot-provider';
+import { openAICompatibleProvider } from './openai-compatible-provider';
+import { loadConfig } from '../config';
+import { normalizeBackendProvider, type BackendProviderId } from '$lib/types';
 import type {
 	ModelBackendProvider,
 	ProviderAuthStatus,
@@ -16,31 +19,47 @@ export type {
 	ProviderSession
 } from './provider';
 
-// Provider selection is intentionally centralized here. Copilot stays the
-// default while future OpenAI-compatible providers can register behind the same
-// pool/turn-runner boundary without changing the PortalEvent stream contract.
+const providers: Record<BackendProviderId, ModelBackendProvider> = {
+	copilot: copilotProvider,
+	'openai-compatible': openAICompatibleProvider
+};
+
+export function listProviders(): ModelBackendProvider[] {
+	return Object.values(providers);
+}
+
+export function getProvider(id: string | null | undefined): ModelBackendProvider {
+	return providers[normalizeBackendProvider(id)];
+}
+
+export function getDefaultProviderId(): BackendProviderId {
+	return normalizeBackendProvider(loadConfig().DEFAULT_BACKEND_PROVIDER);
+}
+
 export function getDefaultProvider(): ModelBackendProvider {
-	return copilotProvider;
+	return getProvider(getDefaultProviderId());
 }
 
 export async function fetchAuthStatus(
 	userId: string,
-	authToken?: string
+	authToken?: string,
+	provider: BackendProviderId = getDefaultProviderId()
 ): Promise<ProviderAuthStatus> {
-	return getDefaultProvider().fetchAuthStatus(userId, authToken);
+	return getProvider(provider).fetchAuthStatus(userId, authToken);
 }
 
 export async function fetchModels(
 	userId: string,
-	authToken?: string
+	authToken?: string,
+	provider: BackendProviderId = getDefaultProviderId()
 ): Promise<ProviderModelInfo[]> {
-	return getDefaultProvider().listModels(userId, authToken);
+	return getProvider(provider).listModels(userId, authToken);
 }
 
 export async function open(opts: ProviderOpenOptions): Promise<ProviderSession> {
-	return getDefaultProvider().openSession(opts);
+	return getProvider(opts.provider).openSession(opts);
 }
 
 export async function shutdownProviders(): Promise<void> {
-	await getDefaultProvider().shutdown?.();
+	await Promise.all(listProviders().map((provider) => provider.shutdown?.()));
 }

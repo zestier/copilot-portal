@@ -162,7 +162,10 @@ invalid config.
 | `SHARED_SECRET`           | —                        | If `AUTH_MODE=shared-secret`.        |
 | `COPILOT_GITHUB_TOKEN`    | —                        | Optional: forwarded to the SDK.      |
 | `COPILOT_CLI_URL`         | —                        | If set, connect to an external `copilot --headless --port N` instead of spawning the bundled CLI. See `docs/deployment.md` Topology C. |
-| `DEFAULT_MODEL`           | `claude-sonnet-4.5`      | Default model id for new conversations. |
+| `DEFAULT_BACKEND_PROVIDER`| `copilot`                | Default backend for new conversations: `copilot` \| `openai-compatible`. |
+| `DEFAULT_MODEL`           | `claude-sonnet-4.5`      | Default model id for new conversations, stored separately from the provider id. |
+| `OPENAI_COMPATIBLE_BASE_URL` | —                     | Base `/v1` URL for an OpenAI-compatible backend. |
+| `OPENAI_COMPATIBLE_API_KEY` | —                      | Optional bearer token for the generic OpenAI-compatible backend. |
 | `IDLE_TIMEOUT_MIN`        | `15`                     | SDK session idle reap.               |
 | `MAX_CONCURRENT_SESSIONS` | `4`                      | Hard cap on live sessions.           |
 | `LOG_LEVEL`               | `info`                   | `debug` \| `info` \| `warn` \| `error`. |
