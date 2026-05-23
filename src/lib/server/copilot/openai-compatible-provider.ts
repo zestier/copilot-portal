@@ -1,7 +1,14 @@
 import { ulid } from 'ulid';
 import { loadConfig } from '../config';
 import { log } from '../log';
-import type { BackendProviderId, PortalEvent } from '$lib/types';
+import * as conversationsRepo from '../db/repos/conversations';
+import { ticketWorkspaceFromConversation } from '../ticket-workspace';
+import { buildGitTools, type PortalTool } from '../tools/git';
+import { buildPermissionTools } from '../tools/permissions';
+import { buildTicketTools } from '../tools/tickets';
+import type { BackendProviderId, PortalEvent, SessionMode } from '$lib/types';
+import { AsyncQueue } from './async-queue';
+import { createInteractiveCallbacks } from './interactive-adapter';
 import type {
 	ModelBackendProvider,
 	ProviderAuthStatus,
@@ -15,10 +22,12 @@ interface OpenAICompatibleConfig {
 	displayName: string;
 	baseUrl: string | null;
 	apiKey: string | null;
+	maxToolIterations: number;
 }
 
 interface ChatChoiceDelta {
 	content?: unknown;
+	tool_calls?: OpenAIToolCallDelta[];
 }
 
 interface ChatStreamChunk {
@@ -26,12 +35,49 @@ interface ChatStreamChunk {
 		delta?: ChatChoiceDelta;
 		message?: {
 			content?: unknown;
+			tool_calls?: OpenAIToolCall[];
 		};
 		text?: unknown;
+		finish_reason?: string | null;
 	}>;
 	error?: {
 		message?: string;
 	};
+}
+
+interface OpenAIToolCall {
+	id: string;
+	type: 'function';
+	function: {
+		name: string;
+		arguments: string;
+	};
+}
+
+interface OpenAIToolCallDelta {
+	index?: number;
+	id?: string;
+	type?: string;
+	function?: {
+		name?: string;
+		arguments?: string;
+	};
+}
+
+type ChatMessage =
+	| { role: 'user'; content: string }
+	| { role: 'assistant'; content: string | null; tool_calls?: OpenAIToolCall[] }
+	| { role: 'tool'; tool_call_id: string; content: string };
+
+interface AssistantTurn {
+	content: string;
+	toolCalls: OpenAIToolCall[];
+}
+
+interface ToolExecutionResult {
+	ok: boolean;
+	summary: string;
+	output: string;
 }
 
 interface ModelsResponse {
@@ -64,13 +110,13 @@ export const openAICompatibleProvider: ModelBackendProvider = {
 			contract: 'PortalEvent'
 		},
 		controls: {
-			mode: false,
-			approveAll: false,
+			mode: true,
+			approveAll: true,
 			resetSessionApprovals: false
 		},
 		optionalCopilotFeatures: {
 			infiniteSessionMetadata: false,
-			permissionCallbacks: false,
+			permissionCallbacks: true,
 			userInputCallbacks: false,
 			elicitationCallbacks: false,
 			exitPlanModeCallbacks: false,
@@ -136,7 +182,8 @@ function providerConfig(): OpenAICompatibleConfig {
 		id: providerId,
 		displayName,
 		baseUrl: cfg.OPENAI_COMPATIBLE_BASE_URL ?? null,
-		apiKey: cfg.OPENAI_COMPATIBLE_API_KEY ?? null
+		apiKey: cfg.OPENAI_COMPATIBLE_API_KEY ?? null,
+		maxToolIterations: cfg.OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS
 	};
 }
 
@@ -237,23 +284,38 @@ function backendErrorMessage(cfg: OpenAICompatibleConfig, e: unknown): string {
 	return e instanceof Error ? e.message : String(e);
 }
 
-async function* streamChatCompletionText(
+async function* streamChatCompletionTurn(
 	cfg: OpenAICompatibleConfig,
-	res: Response
-): AsyncIterable<string> {
+	res: Response,
+	messageId: string
+): AsyncGenerator<PortalEvent, AssistantTurn, void> {
 	if (!res.ok) {
 		const body = (await parseJson(res)) as ChatStreamChunk;
 		throw new Error(body.error?.message ?? `${cfg.displayName} chat failed: ${res.status}`);
 	}
 	if (!res.body) throw new Error(`${cfg.displayName} chat response did not include a body.`);
 
+	let content = '';
+	const toolCallParts: OpenAIToolCall[] = [];
+	let lastToolCallIndex = -1;
 	for await (const data of streamSseData(res.body)) {
 		if (data === '[DONE]') break;
 		const chunk = JSON.parse(data) as ChatStreamChunk;
 		if (chunk.error?.message) throw new Error(chunk.error.message);
 		const text = chunkText(chunk);
-		if (text) yield text;
+		if (text) {
+			content += text;
+			yield { type: 'message.delta', messageId, text };
+		}
+		const choice = chunk.choices?.[0];
+		for (const toolCall of choice?.message?.tool_calls ?? []) {
+			toolCallParts.push(toolCall);
+		}
+		for (const delta of choice?.delta?.tool_calls ?? []) {
+			lastToolCallIndex = applyToolCallDelta(toolCallParts, delta, lastToolCallIndex);
+		}
 	}
+	return { content, toolCalls: finalizeToolCalls(toolCallParts) };
 }
 
 function openOpenAICompatibleSession(
@@ -263,22 +325,195 @@ function openOpenAICompatibleSession(
 	let aborted = false;
 	let disposed = false;
 	let activeAbortController: AbortController | null = null;
+	let activeQueue: AsyncQueue<PortalEvent> | null = null;
+	let approveAllTools = opts.approveAllTools === true;
+	let currentMode: SessionMode = opts.mode ?? 'interactive';
+	const messages: ChatMessage[] = [];
+
+	function emit(ev: PortalEvent) {
+		activeQueue?.push(ev);
+	}
+
+	async function applyMode(mode: SessionMode): Promise<void> {
+		currentMode = mode;
+	}
+
+	async function applyApproveAll(enabled: boolean): Promise<void> {
+		approveAllTools = enabled;
+	}
+
+	const tools = buildOpenAITools({
+		opts,
+		getMode: () => currentMode,
+		applyMode,
+		emit
+	});
+	const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
+	const toolPermissionBehavior = new Map(
+		tools.map((tool) => [tool.name, tool.permissionBehavior ?? 'normal'] as const)
+	);
+	const { onPermissionRequest } = createInteractiveCallbacks({
+		conversationId: opts.conversationId,
+		userId: opts.userId,
+		workingDirectory: opts.workingDirectory,
+		policy: opts.policy,
+		emit,
+		getApproveAll: () => approveAllTools,
+		getMode: () => currentMode,
+		getSessionWorkspacePath: () => null,
+		getPermissionBehavior: (tool) => toolPermissionBehavior.get(tool) ?? 'normal'
+	});
+
+	const openAITools = tools.map((tool) => ({
+		type: 'function' as const,
+		function: {
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters
+		}
+	}));
+
+	async function runTurn(prompt: string, q: AsyncQueue<PortalEvent>, messageId: string) {
+		q.push({ type: 'message.start', messageId, role: 'assistant' });
+		if (disposed) {
+			q.push({ type: 'error', code: 'session_disposed', message: 'Session disposed.' });
+			return;
+		}
+		messages.push({ role: 'user', content: prompt });
+		for (let iteration = 0; iteration < cfg.maxToolIterations; iteration += 1) {
+			const res = await fetch(endpoint(cfg.baseUrl!, '/chat/completions'), {
+				method: 'POST',
+				headers: requestHeaders(cfg),
+				body: JSON.stringify({
+					model: opts.model,
+					messages,
+					tools: openAITools,
+					tool_choice: 'auto',
+					stream: true
+				}),
+				signal: activeAbortController?.signal
+			});
+			const turn = yieldFromQueue(streamChatCompletionTurn(cfg, res, messageId), q);
+			const assistantTurn = await turn;
+			if (aborted) return;
+			messages.push({
+				role: 'assistant',
+				content: assistantTurn.content || null,
+				...(assistantTurn.toolCalls.length > 0 ? { tool_calls: assistantTurn.toolCalls } : {})
+			});
+			if (assistantTurn.toolCalls.length === 0) return;
+			for (const toolCall of assistantTurn.toolCalls) {
+				if (aborted) return;
+				const result = await executeToolCall(toolCall, q);
+				messages.push({
+					role: 'tool',
+					tool_call_id: toolCall.id,
+					content: toolMessageContent(result)
+				});
+			}
+		}
+		q.push({
+			type: 'error',
+			code: 'max_tool_iterations',
+			message: `${cfg.displayName} stopped after ${cfg.maxToolIterations} tool-calling iterations without a final assistant response.`
+		});
+	}
+
+	async function executeToolCall(
+		toolCall: OpenAIToolCall,
+		q: AsyncQueue<PortalEvent>
+	): Promise<ToolExecutionResult> {
+		const parsedArgs = parseToolArguments(toolCall.function.arguments);
+		const args = parsedArgs.ok ? parsedArgs.args : toolCall.function.arguments;
+		q.push({
+			type: 'tool.call',
+			toolCallId: toolCall.id,
+			tool: toolCall.function.name || '(missing tool name)',
+			args
+		});
+		if (!parsedArgs.ok) {
+			const summary = parsedArgs.error;
+			const result = { ok: false, summary, output: summary };
+			q.push({
+				type: 'tool.result',
+				toolCallId: toolCall.id,
+				ok: false,
+				summary,
+				output: summary
+			});
+			return result;
+		}
+		const tool = toolsByName.get(toolCall.function.name);
+		if (!tool) {
+			const summary = toolCall.function.name
+				? `Unknown portal tool requested: ${toolCall.function.name}`
+				: 'Tool call did not include a function name.';
+			const result = { ok: false, summary, output: summary };
+			q.push({
+				type: 'tool.result',
+				toolCallId: toolCall.id,
+				ok: false,
+				summary,
+				output: summary
+			});
+			return result;
+		}
+		const permission = await onPermissionRequest({
+			kind: 'custom-tool',
+			toolName: tool.name,
+			toolCallId: toolCall.id,
+			toolDescription: tool.description,
+			intention: `Run portal tool ${tool.name}`,
+			args: parsedArgs.args
+		});
+		// createInteractiveCallbacks returns SDK permission decisions, not the portal dialog shape.
+		if (!permission || permission.kind !== 'approve-once') {
+			const feedback =
+				permission && 'feedback' in permission && typeof permission.feedback === 'string'
+					? permission.feedback
+					: 'Permission denied.';
+			const summary = `Permission denied for ${tool.name}: ${feedback}`;
+			const result = { ok: false, summary, output: summary };
+			q.push({
+				type: 'tool.result',
+				toolCallId: toolCall.id,
+				ok: false,
+				summary,
+				output: summary
+			});
+			return result;
+		}
+		try {
+			const output = await tool.handler(parsedArgs.args);
+			const summary = outputSummary(output);
+			const result = { ok: true, summary, output };
+			q.push({ type: 'tool.result', toolCallId: toolCall.id, ok: true, summary, output });
+			return result;
+		} catch (e) {
+			const summary = e instanceof Error ? e.message : String(e);
+			const result = { ok: false, summary, output: summary };
+			q.push({
+				type: 'tool.result',
+				toolCallId: toolCall.id,
+				ok: false,
+				summary,
+				output: summary
+			});
+			return result;
+		}
+	}
+
 	return {
 		provider: cfg.id,
 		conversationId: opts.conversationId,
 		workingDirectory: opts.workingDirectory,
 		lastUsed: Date.now(),
 		async *send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent> {
+			if (activeQueue) throw new Error('session busy: a turn is already in progress');
 			aborted = false;
 			const messageId = ulid();
-			yield { type: 'message.start', messageId, role: 'assistant' };
-			if (disposed) {
-				this.lastUsed = Date.now();
-				yield { type: 'error', code: 'session_disposed', message: 'Session disposed.' };
-				yield { type: 'message.end', messageId };
-				yield { type: 'done' };
-				return;
-			}
+			const q = new AsyncQueue<PortalEvent>();
+			activeQueue = q;
 			const abort = new AbortController();
 			activeAbortController = abort;
 			const onAbort = () => {
@@ -287,47 +522,51 @@ function openOpenAICompatibleSession(
 			};
 			signal.addEventListener('abort', onAbort, { once: true });
 			if (signal.aborted) onAbort();
-			try {
-				const res = await fetch(endpoint(cfg.baseUrl!, '/chat/completions'), {
-					method: 'POST',
-					headers: requestHeaders(cfg),
-					body: JSON.stringify({
-						model: opts.model,
-						messages: [{ role: 'user', content: prompt }],
-						stream: true
-					}),
-					signal: abort.signal
-				});
-				for await (const text of streamChatCompletionText(cfg, res)) {
-					if (aborted) break;
-					yield { type: 'message.delta', messageId, text };
+			void (async () => {
+				try {
+					await runTurn(prompt, q, messageId);
+				} catch (e) {
+					if (aborted) {
+						q.push({ type: 'error', code: 'aborted', message: 'Aborted by client.' });
+					} else {
+						log.warn('openai_compatible.session.send_failed', {
+							provider: cfg.id,
+							conversationId: opts.conversationId,
+							err: String(e)
+						});
+						q.push({
+							type: 'error',
+							code: 'send_failed',
+							message: backendErrorMessage(cfg, e)
+						});
+					}
+				} finally {
+					q.push({ type: 'message.end', messageId });
+					q.push({ type: 'done' });
+					q.end();
 				}
-			} catch (e) {
-				if (aborted) {
-					yield { type: 'error', code: 'aborted', message: 'Aborted by client.' };
-				} else {
-					log.warn('openai_compatible.session.send_failed', {
-						provider: cfg.id,
-						conversationId: opts.conversationId,
-						err: String(e)
-					});
-					yield {
-						type: 'error',
-						code: 'send_failed',
-						message: backendErrorMessage(cfg, e)
-					};
+			})();
+			try {
+				for await (const ev of q) {
+					opts.onEvent?.(ev);
+					yield ev;
 				}
 			} finally {
 				signal.removeEventListener('abort', onAbort);
 				if (activeAbortController === abort) activeAbortController = null;
+				if (activeQueue === q) activeQueue = null;
 				this.lastUsed = Date.now();
-				yield { type: 'message.end', messageId };
-				yield { type: 'done' };
 			}
 		},
 		async abort() {
 			aborted = true;
 			activeAbortController?.abort();
+		},
+		async setMode(mode: SessionMode) {
+			await applyMode(mode);
+		},
+		async setApproveAll(enabled: boolean) {
+			await applyApproveAll(enabled);
 		},
 		async dispose() {
 			disposed = true;
@@ -335,4 +574,151 @@ function openOpenAICompatibleSession(
 			activeAbortController?.abort();
 		}
 	};
+}
+
+async function yieldFromQueue<T>(
+	iterable: AsyncGenerator<PortalEvent, T, void>,
+	q: AsyncQueue<PortalEvent>
+): Promise<T> {
+	let next = await iterable.next();
+	while (!next.done) {
+		q.push(next.value);
+		next = await iterable.next();
+	}
+	return next.value;
+}
+
+function applyToolCallDelta(
+	toolCalls: OpenAIToolCall[],
+	delta: OpenAIToolCallDelta,
+	lastIndex: number
+): number {
+	const index = typeof delta.index === 'number' ? delta.index : lastIndex >= 0 ? lastIndex : 0;
+	const existing = toolCalls[index] ?? {
+		id: '',
+		type: 'function' as const,
+		function: { name: '', arguments: '' }
+	};
+	if (typeof delta.id === 'string') existing.id = delta.id;
+	if (delta.type === 'function') existing.type = 'function';
+	if (typeof delta.function?.name === 'string') existing.function.name += delta.function.name;
+	if (typeof delta.function?.arguments === 'string') {
+		existing.function.arguments += delta.function.arguments;
+	}
+	toolCalls[index] = existing;
+	return index;
+}
+
+function finalizeToolCalls(toolCalls: OpenAIToolCall[]): OpenAIToolCall[] {
+	return toolCalls.map((toolCall) => ({
+		id: toolCall.id || `tool_${ulid()}`,
+		type: 'function',
+		function: {
+			name: toolCall.function.name,
+			arguments: toolCall.function.arguments
+		}
+	}));
+}
+
+function parseToolArguments(
+	raw: string
+): { ok: true; args: unknown } | { ok: false; error: string } {
+	const trimmed = raw.trim();
+	if (!trimmed) return { ok: true, args: {} };
+	try {
+		return { ok: true, args: JSON.parse(trimmed) };
+	} catch (e) {
+		const detail = e instanceof Error ? e.message : String(e);
+		return { ok: false, error: `Invalid JSON arguments for tool call: ${detail}` };
+	}
+}
+
+function outputSummary(output: string): string {
+	const singleLine = output.replace(/\s+/g, ' ').trim();
+	if (!singleLine) return '(empty result)';
+	return singleLine.length > 200 ? `${singleLine.slice(0, 197)}...` : singleLine;
+}
+
+function toolMessageContent(result: ToolExecutionResult): string {
+	return result.ok ? result.output : JSON.stringify({ error: result.output });
+}
+
+function buildOpenAITools(opts: {
+	opts: ProviderOpenOptions;
+	getMode: () => SessionMode;
+	applyMode: (mode: SessionMode) => Promise<void>;
+	emit: (ev: PortalEvent) => void;
+}): PortalTool[] {
+	return [
+		...buildGitTools(opts.opts.workingDirectory),
+		...buildTicketTools({
+			userId: opts.opts.userId,
+			workspaceKey: ticketWorkspaceFromConversation(opts.opts.workingDirectory),
+			conversationId: opts.opts.conversationId
+		}),
+		...buildPermissionTools({
+			userId: opts.opts.userId,
+			conversationId: opts.opts.conversationId,
+			policy: opts.opts.policy,
+			getMode: opts.getMode
+		}),
+		{
+			name: 'request_mode_switch',
+			permissionBehavior: 'always-prompt',
+			description:
+				'Request switching this conversation to interactive mode when you are blocked in best-effort mode because a needed permission keeps being denied. Use only after trying reasonable alternatives.',
+			parameters: {
+				type: 'object',
+				properties: {
+					mode: {
+						type: 'string',
+						enum: ['interactive'],
+						description: 'The target mode to switch to.'
+					},
+					reason: {
+						type: 'string',
+						description: 'Why the mode switch is needed.'
+					}
+				},
+				required: ['mode', 'reason'],
+				additionalProperties: false
+			},
+			async handler(args: unknown) {
+				const req = parseModeSwitchToolArgs(args);
+				if (opts.getMode() === 'interactive') return 'Conversation is already in interactive mode.';
+				const persisted = conversationsRepo.updateSessionSettings(
+					opts.opts.conversationId,
+					opts.opts.userId,
+					{ mode: 'interactive' }
+				);
+				if (!persisted) {
+					log.warn('openai_compatible.request_mode_switch.persist_failed', {
+						conversationId: opts.opts.conversationId
+					});
+				}
+				await opts.applyMode('interactive');
+				opts.emit({
+					type: 'session.settings',
+					conversationId: opts.opts.conversationId,
+					mode: 'interactive',
+					source: 'agent'
+				});
+				return `Switched conversation to interactive mode. Reason: ${req.reason}`;
+			}
+		}
+	];
+}
+
+function parseModeSwitchToolArgs(args: unknown): { mode: 'interactive'; reason: string } {
+	if (!args || typeof args !== 'object') {
+		throw new Error('request_mode_switch requires an object argument.');
+	}
+	const record = args as Record<string, unknown>;
+	if (record.mode !== 'interactive') {
+		throw new Error('request_mode_switch only supports mode="interactive".');
+	}
+	if (typeof record.reason !== 'string' || record.reason.trim().length === 0) {
+		throw new Error('request_mode_switch requires a non-empty reason.');
+	}
+	return { mode: 'interactive', reason: record.reason.trim() };
 }

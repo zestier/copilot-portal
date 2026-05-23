@@ -35,6 +35,22 @@ async function collect(iterable: AsyncIterable<PortalEvent>): Promise<PortalEven
 	return events;
 }
 
+async function persistedOpts(
+	overrides: Partial<ProviderOpenOptions> = {}
+): Promise<ProviderOpenOptions> {
+	const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+	const conversations = await import('../src/lib/server/db/repos/conversations');
+	const user = ensureLocalUser();
+	conversations.create(user.id, {
+		id: baseOpts.conversationId,
+		title: 'OpenAI-compatible test',
+		workdir: baseOpts.workingDirectory,
+		model: baseOpts.model,
+		provider: baseOpts.provider
+	});
+	return { ...baseOpts, userId: user.id, ...overrides };
+}
+
 beforeEach(async () => {
 	await setupLocalEnv('portal-openai-compatible-');
 	process.env.OPENAI_COMPATIBLE_BASE_URL = 'http://127.0.0.1:1234/v1';
@@ -45,6 +61,7 @@ beforeEach(async () => {
 afterEach(() => {
 	delete process.env.OPENAI_COMPATIBLE_BASE_URL;
 	delete process.env.OPENAI_COMPATIBLE_API_KEY;
+	delete process.env.OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS;
 	resetConfigForTests();
 	vi.restoreAllMocks();
 });
@@ -83,6 +100,13 @@ describe('openAICompatibleProvider', () => {
 			expect(JSON.parse(String(init?.body))).toMatchObject({
 				model: 'local-model',
 				messages: [{ role: 'user', content: 'hello' }],
+				tools: expect.arrayContaining([
+					expect.objectContaining({
+						type: 'function',
+						function: expect.objectContaining({ name: 'git_status' })
+					})
+				]),
+				tool_choice: 'auto',
 				stream: true
 			});
 			return sseResponse([
@@ -208,6 +232,157 @@ describe('openAICompatibleProvider', () => {
 			'done'
 		]);
 		expect(events[1]).toMatchObject({ type: 'error', code: 'aborted' });
+	});
+
+	it('executes requested portal tools and loops until a final assistant response', async () => {
+		const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+			void _url;
+			void _init;
+			if (fetchMock.mock.calls.length === 1) {
+				return sseResponse([
+					'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_git_status","type":"function","function":{"name":"git_status","arguments":"{}"}}]}}]}\n\n',
+					'data: [DONE]\n\n'
+				]);
+			}
+			return sseResponse([
+				'data: {"choices":[{"delta":{"content":"done"}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const session = await openAICompatibleProvider.openSession(
+			await persistedOpts({ policy: 'allow-all' })
+		);
+
+		const events = await collect(session.send('status please', new AbortController().signal));
+
+		expect(events.map((event) => event.type)).toEqual([
+			'message.start',
+			'tool.call',
+			'tool.result',
+			'message.delta',
+			'message.end',
+			'done'
+		]);
+		expect(events[1]).toMatchObject({
+			type: 'tool.call',
+			toolCallId: 'call_git_status',
+			tool: 'git_status',
+			args: {}
+		});
+		expect(events[2]).toMatchObject({
+			type: 'tool.result',
+			toolCallId: 'call_git_status',
+			ok: true
+		});
+		expect(events[3]).toMatchObject({ type: 'message.delta', text: 'done' });
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+			messages: expect.arrayContaining([
+				expect.objectContaining({
+					role: 'assistant',
+					tool_calls: [
+						expect.objectContaining({
+							id: 'call_git_status',
+							function: expect.objectContaining({ name: 'git_status' })
+						})
+					]
+				}),
+				expect.objectContaining({ role: 'tool', tool_call_id: 'call_git_status' })
+			])
+		});
+	});
+
+	it('emits and enforces permission callbacks before running portal tools', async () => {
+		const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+			void _url;
+			void _init;
+			if (fetchMock.mock.calls.length === 1) {
+				return sseResponse([
+					'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_prompted","type":"function","function":{"name":"request_mode_switch","arguments":"{\\"mode\\":\\"interactive\\",\\"reason\\":\\"Need permission prompt coverage\\"}"}}]}}]}\n\n',
+					'data: [DONE]\n\n'
+				]);
+			}
+			return sseResponse([
+				'data: {"choices":[{"delta":{"content":"after permission"}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const { resolve } = await import('../src/lib/server/copilot/interactive-requests');
+		const opts = await persistedOpts();
+		const session = await openAICompatibleProvider.openSession(opts);
+		const iter = session
+			.send('status please', new AbortController().signal)
+			[Symbol.asyncIterator]();
+
+		expect((await iter.next()).value).toMatchObject({ type: 'message.start' });
+		expect((await iter.next()).value).toMatchObject({
+			type: 'tool.call',
+			toolCallId: 'call_prompted',
+			tool: 'request_mode_switch'
+		});
+		const requestEvent = (await iter.next()).value as Extract<
+			PortalEvent,
+			{ type: 'interactive.request' }
+		>;
+		expect(requestEvent).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'request_mode_switch',
+				permissionKind: 'custom-tool'
+			}
+		});
+
+		expect(
+			resolve(requestEvent.request.requestId, opts.userId, {
+				kind: 'permission',
+				decision: 'allow-once'
+			})
+		).toBe(true);
+
+		expect((await iter.next()).value).toMatchObject({
+			type: 'interactive.resolved',
+			requestId: requestEvent.request.requestId
+		});
+		expect((await iter.next()).value).toMatchObject({
+			type: 'tool.result',
+			toolCallId: 'call_prompted',
+			ok: true
+		});
+		expect((await iter.next()).value).toMatchObject({
+			type: 'message.delta',
+			text: 'after permission'
+		});
+	});
+
+	it('stops tool-calling with an explicit error at the configured max iterations', async () => {
+		process.env.OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS = '1';
+		resetConfigForTests();
+		const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+			void _url;
+			void _init;
+			return sseResponse([
+				'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_loop","type":"function","function":{"name":"git_status","arguments":"{}"}}]}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const session = await openAICompatibleProvider.openSession(
+			await persistedOpts({ policy: 'allow-all' })
+		);
+
+		const events = await collect(session.send('loop', new AbortController().signal));
+
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: 'error',
+				code: 'max_tool_iterations',
+				message: expect.stringContaining('1 tool-calling iterations')
+			})
+		);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	it('rejects sends after the session is disposed', async () => {

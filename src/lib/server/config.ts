@@ -49,6 +49,7 @@ const Schema = z
 		DEFAULT_MODEL: z.string().default('claude-sonnet-4.5'),
 		OPENAI_COMPATIBLE_BASE_URL: optionalUrl,
 		OPENAI_COMPATIBLE_API_KEY: z.string().optional(),
+		OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS: z.coerce.number().int().positive().default(8),
 
 		IDLE_TIMEOUT_MIN: z.coerce.number().int().positive().default(15),
 		MAX_CONCURRENT_SESSIONS: z.coerce.number().int().positive().default(4),
