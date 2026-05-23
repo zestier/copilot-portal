@@ -1,4 +1,4 @@
-import { copilotProvider } from './bridge';
+import { copilotProvider } from './copilot-provider';
 import type {
 	ModelBackendProvider,
 	ProviderAuthStatus,

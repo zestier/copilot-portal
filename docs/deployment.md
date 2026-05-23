@@ -180,7 +180,7 @@ COPILOT_CLI_URL=host.docker.internal:9000   # portal in Docker, CLI on host
 # COPILOT_CLI_URL=127.0.0.1:9000
 ```
 
-When `COPILOT_CLI_URL` is set, `bridge.ts` constructs the SDK client
+When `COPILOT_CLI_URL` is set, `copilot-provider.ts` constructs the SDK client
 with `{ cliUrl, autoStart: false }` and does NOT pass `gitHubToken` or
 `useLoggedInUser` — those are mutually exclusive with `cliUrl`, and the
 remote CLI manages its own auth.

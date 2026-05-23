@@ -113,7 +113,7 @@ discriminated `{ kind, ... }` body. The legacy
 ## Concurrency model
 
 - **One Copilot provider client per portal user**, lazily started on first use
-  and kept by the default provider implementation in `copilot/bridge.ts`. With
+  and kept by the default provider implementation in `copilot/copilot-provider.ts`. With
   the documented `ALLOWED_GITHUB_LOGINS` allowlist this keeps Copilot API
   attribution (billing, audit) tied to the GitHub identity that actually sent
   the turn instead of whichever user logged in first after process boot. In the

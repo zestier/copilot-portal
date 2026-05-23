@@ -2,8 +2,8 @@
 // `COPILOT_STUB=1` env var. Lets e2e tests exercise the full turn-runner /
 // SSE / persistence path without real Copilot credentials or network.
 //
-// Keep this faithful to the real SDK's event shape — see bridge.ts for the
-// fields each event must carry.
+// Keep this faithful to the real SDK's event shape — see copilot-provider.ts
+// and sdk-events.ts for the fields each event must carry.
 //
 // Test triggers: include any of the following tokens in the prompt to drive
 // interactive flows from a Playwright test without a real Copilot CLI:
@@ -78,7 +78,7 @@ class StubSession {
 		return reply;
 	}
 
-	// Stub equivalents of the SDK's typed RPC surface used by bridge.ts.
+	// Stub equivalents of the SDK's typed RPC surface used by copilot-provider.ts.
 	// No-ops: the stub doesn't model the runtime's permission/mode state
 	// machine, so all the bridge needs from us is "don't blow up".
 	rpc = {

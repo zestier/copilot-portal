@@ -128,7 +128,7 @@ Whatever token the SDK ends up using is never logged and never echoed
 back to the client.
 
 The portal keeps one Copilot SDK subprocess per portal user (see
-`src/lib/server/copilot/bridge.ts`). When `ALLOWED_GITHUB_LOGINS` lists
+`src/lib/server/copilot/copilot-provider.ts`). When `ALLOWED_GITHUB_LOGINS` lists
 multiple users, each gets their own client so Copilot API calls are
 attributed to the right GitHub identity instead of whoever logged in
 first after process boot.

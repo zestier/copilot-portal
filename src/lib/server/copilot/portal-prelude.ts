@@ -11,7 +11,7 @@
 // assume any baked-in knowledge of how the portal mediates permissions.
 //
 // IMPORTANT: nothing here is authoritative. Allow/deny decisions are
-// enforced by the matcher in `bridge.ts`.
+// enforced by the matcher in `interactive-adapter.ts`.
 
 export const PORTAL_PRELUDE = [
 	'[Portal context — auto-injected; not authored by the user]',

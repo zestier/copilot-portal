@@ -43,7 +43,7 @@ events, reasoning events, and subagent lifecycle events. OpenAI-compatible
 providers can start with message/tool/error/done events and add richer
 `PortalEvent` variants as their native APIs support them.
 
-## Module: `$lib/server/copilot/bridge.ts`
+## Module: `$lib/server/copilot/copilot-provider.ts`
 
 A concrete Copilot provider implementation that:
 
@@ -63,7 +63,7 @@ A concrete Copilot provider implementation that:
 ### Sketch
 
 ```ts
-// $lib/server/copilot/bridge.ts
+// $lib/server/copilot/copilot-provider.ts
 import { CopilotClient } from '@github/copilot-sdk';
 import type { PortalEvent } from '$lib/types';
 
@@ -259,8 +259,8 @@ Three modes, in priority order:
 
 ## Testing
 
-- **Unit tests** of `normalize()` in `bridge.ts` against captured SDK event
-  fixtures. The single most important set of tests in the project.
+- **Unit tests** of the Copilot provider and SDK event adapter against captured
+  SDK event fixtures. The single most important set of tests in the project.
 - **Bridge integration tests** with a stub Copilot CLI binary (a tiny Node
   script that speaks the SDK's JSON-RPC and emits scripted events). Keeps
   CI fast and offline.

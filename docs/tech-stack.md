@@ -65,7 +65,8 @@ copilot-portal/
 │  │  │                          # ReasoningBlock, … + ui/
 │  │  ├─ server/
 │  │  │  ├─ copilot/
-│  │  │  │  ├─ bridge.ts          # SDK wrapper, event normalization
+│  │  │  │  ├─ bridge.ts          # compatibility facade
+│  │  │  │  ├─ copilot-provider.ts # SDK wrapper, event normalization
 │  │  │  │  ├─ bridge-stub.ts     # in-process stub (e2e via COPILOT_STUB)
 │  │  │  │  ├─ pool.ts            # conversation→session map, idle reaper
 │  │  │  │  ├─ turn-runner.ts     # per-turn event log + persistence

@@ -56,8 +56,8 @@ const Schema = z
 		// cross-site CSRF).
 		TUNNEL_HOST: z.string().optional(),
 
-		// When "1", `bridge.ts` swaps the real Copilot SDK for the in-process
-		// stub in `bridge-stub.ts`. Used by e2e tests.
+		// When "1", `copilot-provider.ts` swaps the real Copilot SDK for the
+		// in-process stub in `bridge-stub.ts`. Used by e2e tests.
 		COPILOT_STUB: z
 			.string()
 			.optional()
