@@ -232,6 +232,10 @@ describe('bridge.open() session mode and permissions', () => {
 				expect.objectContaining({ name: 'git_log' }),
 				expect.objectContaining({ name: 'git_show_commit' }),
 				expect.objectContaining({ name: 'git_show_file' }),
+				expect.objectContaining({ name: 'ticket_add' }),
+				expect.objectContaining({ name: 'ticket_list' }),
+				expect.objectContaining({ name: 'ticket_get' }),
+				expect.objectContaining({ name: 'ticket_update' }),
 				expect.objectContaining({
 					name: 'request_mode_switch',
 					description: expect.stringContaining('interactive mode')

@@ -61,6 +61,13 @@ describe('seed grants — runtime behaviour', () => {
 		expect(customToolMatch('git_show_file')).toBe('allow');
 	});
 
+	it('auto-approves workspace ticket tools by default', () => {
+		expect(customToolMatch('ticket_add')).toBe('allow');
+		expect(customToolMatch('ticket_list')).toBe('allow');
+		expect(customToolMatch('ticket_get')).toBe('allow');
+		expect(customToolMatch('ticket_update')).toBe('allow');
+	});
+
 	it('denies git commands with feedback to use structured tools by default', () => {
 		expect(shellMatch('git status')).toBe('deny');
 		expect(shellMatch('git --no-pager status')).toBe('deny');

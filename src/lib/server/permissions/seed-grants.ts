@@ -80,6 +80,7 @@ const GIT_STRUCTURED_TOOLS = [
 	'git_show_commit',
 	'git_show_file'
 ];
+const TICKET_STRUCTURED_TOOLS = ['ticket_add', 'ticket_list', 'ticket_get', 'ticket_update'];
 
 function shellGrant(rule: ShellRule): SeedSpec {
 	return { tool: 'shell', permissionKind: 'shell', scope: { kind: 'shell', rule } };
@@ -144,6 +145,9 @@ export function defaultSeedGrants(): SeedSpec[] {
 		seeds.push(shellGrant({ argv0, positionals: { kind: 'workspace-paths' } }));
 	}
 	for (const tool of GIT_STRUCTURED_TOOLS) {
+		seeds.push({ tool, permissionKind: 'custom-tool', scope: { kind: 'any' } });
+	}
+	for (const tool of TICKET_STRUCTURED_TOOLS) {
 		seeds.push({ tool, permissionKind: 'custom-tool', scope: { kind: 'any' } });
 	}
 

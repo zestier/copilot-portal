@@ -50,6 +50,22 @@ export interface Conversation {
 	forkedFromMessageId: string | null;
 }
 
+export type WorkspaceTicketStatus = 'open' | 'done' | 'archived';
+
+export interface WorkspaceTicket {
+	id: string;
+	userId: string;
+	workspaceKey: string;
+	title: string;
+	body: string;
+	status: WorkspaceTicketStatus;
+	sourceConversationId: string | null;
+	sourceMessageId: string | null;
+	createdAt: number;
+	updatedAt: number;
+	closedAt: number | null;
+}
+
 // Portal session modes. `best-effort` is the only portal-only extension; it
 // maps to the runtime's `autopilot` mode while keeping stricter permission
 // semantics in the bridge.

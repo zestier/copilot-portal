@@ -13,6 +13,8 @@ import * as conversationsRepo from '../db/repos/conversations';
 import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
 import { buildGitTools } from '../tools/git';
+import { buildTicketTools } from '../tools/tickets';
+import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 
 // One CopilotClient per portal user. Sharing a single process-wide
 // client would cause the SDK subprocess spawned for whichever user
@@ -202,6 +204,11 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		streaming: true,
 		tools: [
 			...buildGitTools(opts.workingDirectory),
+			...buildTicketTools({
+				userId: opts.userId,
+				workspaceKey: ticketWorkspaceFromConversation(opts.workingDirectory),
+				conversationId: opts.conversationId
+			}),
 			{
 				name: 'request_mode_switch',
 				description:

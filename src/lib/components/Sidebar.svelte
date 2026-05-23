@@ -1,15 +1,21 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 	import { tick } from 'svelte';
-	import type { Conversation, User } from '$lib/types';
+	import type { Conversation, User, WorkspaceTicket } from '$lib/types';
 	import Alert from '$lib/components/ui/Alert.svelte';
 
 	let {
 		conversations,
+		tickets,
+		ticketCount,
+		ticketWorkspace,
 		user,
 		onnavigate
 	}: {
 		conversations: Conversation[];
+		tickets: WorkspaceTicket[];
+		ticketCount: number;
+		ticketWorkspace: string | null;
 		user: User | null;
 		onnavigate?: () => void;
 	} = $props();
@@ -21,6 +27,9 @@
 	let selectMode = $state(false);
 	let selected = $state(new Set<string>());
 	let bulkBusy = $state(false);
+	let ticketDraftOpen = $state(false);
+	let ticketTitle = $state('');
+	let ticketBusy = $state(false);
 	let errorMsg = $state<string | null>(null);
 	let errorTimer: ReturnType<typeof setTimeout> | null = null;
 	let firstMenuItem: HTMLButtonElement | null = $state(null);
@@ -67,6 +76,43 @@
 		await invalidateAll();
 		onnavigate?.();
 		location.href = `/conversations/${body.conversation.id}`;
+	}
+
+	async function addTicket() {
+		const title = ticketTitle.trim();
+		if (!title || !ticketWorkspace || ticketBusy) return;
+		ticketBusy = true;
+		try {
+			const ok = await api(
+				'/api/tickets',
+				{
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ title, workspace: ticketWorkspace })
+				},
+				'Add ticket'
+			);
+			if (ok) {
+				ticketTitle = '';
+				ticketDraftOpen = false;
+				await invalidateAll();
+			}
+		} finally {
+			ticketBusy = false;
+		}
+	}
+
+	async function setTicketDone(id: string) {
+		const ok = await api(
+			`/api/tickets/${id}`,
+			{
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ status: 'done', workspace: ticketWorkspace })
+			},
+			'Update ticket'
+		);
+		if (ok) await invalidateAll();
 	}
 
 	async function openMenu(id: string) {
@@ -239,6 +285,61 @@
 			</button>
 		</div>
 	</div>
+
+	<section class="tickets" aria-label="Workspace tickets">
+		<div class="tickets-head">
+			<span class="count muted">Tickets ({ticketCount})</span>
+			<button
+				class="btn sm ghost"
+				title="Add ticket"
+				aria-label="Add ticket"
+				disabled={!ticketWorkspace}
+				onclick={() => (ticketDraftOpen = !ticketDraftOpen)}
+			>
+				+
+			</button>
+		</div>
+		{#if ticketDraftOpen}
+			<form
+				class="ticket-form"
+				onsubmit={(e) => {
+					e.preventDefault();
+					addTicket();
+				}}
+			>
+				<input
+					bind:value={ticketTitle}
+					maxlength="200"
+					placeholder="Do this later..."
+					aria-label="Ticket title"
+					disabled={ticketBusy}
+				/>
+				<button class="btn sm" disabled={ticketBusy || !ticketTitle.trim()}>Add</button>
+			</form>
+		{/if}
+		{#if tickets.length === 0}
+			<p class="muted empty ticket-empty">No open tickets.</p>
+		{:else}
+			<div class="ticket-list">
+				{#each tickets as ticket (ticket.id)}
+					<div class="ticket">
+						<button
+							class="ticket-done"
+							title="Mark done"
+							aria-label={`Mark ${ticket.title} done`}
+							onclick={() => setTicketDone(ticket.id)}
+						>
+							✓
+						</button>
+						<div class="ticket-title" title={ticket.title}>{ticket.title}</div>
+					</div>
+				{/each}
+			</div>
+			{#if ticketCount > tickets.length}
+				<p class="muted ticket-more">Showing latest {tickets.length} open tickets.</p>
+			{/if}
+		{/if}
+	</section>
 
 	{#if errorMsg}
 		<div class="error-wrap">
@@ -475,6 +576,79 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-2);
+	}
+	.tickets {
+		padding: 0 var(--space-3) var(--space-2);
+		border-bottom: 1px solid var(--border);
+		margin-bottom: var(--space-2);
+	}
+	.tickets-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+		margin-bottom: var(--space-1);
+	}
+	.ticket-form {
+		display: flex;
+		gap: var(--space-1);
+		margin-bottom: var(--space-2);
+	}
+	.ticket-form input {
+		min-width: 0;
+		flex: 1;
+		padding: 0.25rem 0.4rem;
+	}
+	.ticket-empty {
+		padding: 0;
+		margin: var(--space-1) 0 var(--space-2);
+		font-size: var(--fs-sm);
+	}
+	.ticket-more {
+		margin: calc(-1 * var(--space-1)) 0 var(--space-2);
+		font-size: var(--fs-xs);
+	}
+	.ticket-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		margin-bottom: var(--space-2);
+	}
+	.ticket {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		border-radius: var(--radius-sm);
+		padding: 0.25rem 0.35rem;
+	}
+	.ticket:hover,
+	.ticket:focus-within {
+		background: var(--surface-2);
+	}
+	.ticket-done {
+		width: 20px;
+		height: 20px;
+		border-radius: 50%;
+		border: 1px solid var(--border);
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+		padding: 0;
+		line-height: 1;
+		flex-shrink: 0;
+	}
+	.ticket-done:hover,
+	.ticket-done:focus-visible {
+		color: var(--text);
+		border-color: var(--accent);
+		outline: none;
+	}
+	.ticket-title {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: var(--fs-sm);
 	}
 	.count {
 		font-size: var(--fs-xs);
