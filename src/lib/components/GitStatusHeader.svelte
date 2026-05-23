@@ -4,15 +4,18 @@
 
 	let {
 		conversationId,
-		refreshToken = 0
+		refreshToken = 0,
+		onrevert
 	}: {
 		conversationId: string;
 		refreshToken?: number;
+		onrevert?: () => void;
 	} = $props();
 
 	let head = $state<HeadStatus | null>(null);
 	let error = $state<string | null>(null);
 	let loading = $state(false);
+	let reverting = $state(false);
 
 	async function load() {
 		loading = true;
@@ -34,6 +37,29 @@
 			load();
 		});
 	});
+
+	async function revertAll() {
+		if (!head?.initialized || head.dirtyCount === 0 || reverting) return;
+		const confirmed = window.confirm(
+			'Discard all local changes? This resets tracked files and deletes untracked files.'
+		);
+		if (!confirmed) return;
+
+		reverting = true;
+		error = null;
+		try {
+			const res = await fetch(`/api/conversations/${conversationId}/git/changes/revert`, {
+				method: 'POST'
+			});
+			if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+			onrevert?.();
+			await load();
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+		} finally {
+			reverting = false;
+		}
+	}
 </script>
 
 <div class="git-status" aria-label="Git status">
@@ -74,6 +100,16 @@
 				<span class="clean" title="Working tree clean">✓ clean</span>
 			{/if}
 		</div>
+		<button
+			type="button"
+			class="btn danger sm revert-btn"
+			class:is-loading={reverting}
+			disabled={head.dirtyCount === 0 || reverting}
+			title="Revert all local changes"
+			onclick={revertAll}
+		>
+			Revert all
+		</button>
 	{/if}
 </div>
 
@@ -82,7 +118,8 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-1);
-		padding: var(--space-2) var(--space-3);
+		position: relative;
+		padding: var(--space-2) calc(var(--space-3) + 5.5rem) var(--space-2) var(--space-3);
 		background: var(--surface);
 		border-bottom: 1px solid var(--border);
 		font-size: var(--fs-sm);
@@ -92,11 +129,26 @@
 		align-items: baseline;
 		gap: var(--space-2);
 		min-width: 0;
+		overflow: hidden;
 	}
 	.branch {
 		display: inline-flex;
 		align-items: baseline;
 		gap: var(--space-1);
+		flex: 0 1 auto;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.branch strong {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.sha {
+		flex: 0 1 auto;
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -136,5 +188,15 @@
 	}
 	.error {
 		color: var(--danger);
+	}
+	.revert-btn {
+		position: absolute;
+		right: var(--space-3);
+		top: 50%;
+		transform: translateY(-50%);
+		white-space: nowrap;
+	}
+	.is-loading {
+		cursor: wait;
 	}
 </style>

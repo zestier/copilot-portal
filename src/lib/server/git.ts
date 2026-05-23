@@ -284,6 +284,24 @@ export async function status(cwd: string, opts: StatusOptions = {}): Promise<Sta
 	return entries;
 }
 
+export async function discardAllLocalChanges(cwd: string): Promise<void> {
+	if (!(await isGitRepo(cwd))) throw new GitError('not a git repository', emptyResult());
+
+	const head = await runGit(['rev-parse', '--verify', 'HEAD'], { cwd });
+	if (head.code === 0) {
+		await runGitOk(['reset', '--hard', 'HEAD'], { cwd });
+	} else {
+		const entries = await status(cwd);
+		const hasIndexEntries = entries.some(
+			(e) => e.index !== 'unmodified' && e.index !== 'untracked' && e.index !== 'ignored'
+		);
+		if (hasIndexEntries) {
+			await runGitOk(['rm', '-r', '--cached', '--ignore-unmatch', '--', '.'], { cwd });
+		}
+	}
+	await runGitOk(['clean', '-fd'], { cwd });
+}
+
 export interface LogEntry {
 	sha: string;
 	shortSha: string;

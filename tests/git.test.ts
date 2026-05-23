@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -63,6 +63,58 @@ describe('status', () => {
 		const byPath = Object.fromEntries(entries.map((e) => [e.path, e]));
 		expect(byPath['a.txt']?.worktree).toBe('modified');
 		expect(byPath['new.txt']?.worktree).toBe('untracked');
+	});
+});
+
+describe('discardAllLocalChanges', () => {
+	it('resets tracked changes and removes untracked files without removing ignored files', async () => {
+		const tmp = mkdtempSync(join(tmpdir(), 'gitwrap-discard-'));
+		try {
+			const run = (args: string[]) => execFileSync('git', args, { cwd: tmp, stdio: 'pipe' });
+			run(['init', '-q', '-b', 'main']);
+			run(['config', 'user.email', 't@example.com']);
+			run(['config', 'user.name', 'T']);
+			run(['config', 'commit.gpgsign', 'false']);
+			writeFileSync(join(tmp, '.gitignore'), 'ignored.txt\n');
+			writeFileSync(join(tmp, 'tracked.txt'), 'original\n');
+			run(['add', '.']);
+			run(['commit', '-q', '-m', 'init']);
+
+			writeFileSync(join(tmp, 'tracked.txt'), 'changed\n');
+			writeFileSync(join(tmp, 'staged.txt'), 'staged\n');
+			run(['add', 'staged.txt']);
+			writeFileSync(join(tmp, 'untracked.txt'), 'untracked\n');
+			writeFileSync(join(tmp, 'ignored.txt'), 'ignored\n');
+
+			await git.discardAllLocalChanges(tmp);
+
+			expect(readFileSync(join(tmp, 'tracked.txt'), 'utf8')).toBe('original\n');
+			expect(existsSync(join(tmp, 'staged.txt'))).toBe(false);
+			expect(existsSync(join(tmp, 'untracked.txt'))).toBe(false);
+			expect(existsSync(join(tmp, 'ignored.txt'))).toBe(true);
+			expect(await git.status(tmp)).toEqual([]);
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('removes staged and unstaged files from repositories without commits', async () => {
+		const tmp = mkdtempSync(join(tmpdir(), 'gitwrap-discard-unborn-'));
+		try {
+			const run = (args: string[]) => execFileSync('git', args, { cwd: tmp, stdio: 'pipe' });
+			run(['init', '-q', '-b', 'main']);
+			writeFileSync(join(tmp, 'staged.txt'), 'staged\n');
+			run(['add', 'staged.txt']);
+			writeFileSync(join(tmp, 'untracked.txt'), 'untracked\n');
+
+			await git.discardAllLocalChanges(tmp);
+
+			expect(existsSync(join(tmp, 'staged.txt'))).toBe(false);
+			expect(existsSync(join(tmp, 'untracked.txt'))).toBe(false);
+			expect(await git.status(tmp)).toEqual([]);
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
 	});
 });
 

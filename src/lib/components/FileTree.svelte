@@ -242,7 +242,9 @@
 		flex-direction: column;
 		height: 100%;
 		min-height: 0;
+		min-width: 0;
 		font-size: var(--fs-sm);
+		overflow: hidden;
 	}
 	.panel-toolbar {
 		display: flex;
@@ -342,6 +344,7 @@
 		overflow: auto;
 		flex: 1;
 		min-height: 0;
+		min-width: 0;
 		padding: var(--space-1) 0;
 	}
 	.row {
@@ -349,6 +352,8 @@
 		align-items: center;
 		gap: var(--space-1);
 		width: 100%;
+		min-width: 0;
+		max-width: 100%;
 		padding: 0.15rem 0.5rem 0.15rem calc(0.5rem + var(--depth, 0) * 0.9rem);
 		background: transparent;
 		border: 0;
@@ -368,6 +373,7 @@
 	}
 	.caret {
 		display: inline-block;
+		flex: 0 0 auto;
 		width: 0.75rem;
 		transition: transform 100ms;
 		color: var(--text-muted);
@@ -378,9 +384,11 @@
 	}
 	.caret-spacer {
 		display: inline-block;
+		flex: 0 0 auto;
 		width: 0.75rem;
 	}
 	.icon {
+		flex: 0 0 auto;
 		width: 1em;
 		text-align: center;
 	}
@@ -401,6 +409,7 @@
 		font-weight: 600;
 		font-size: var(--fs-xs);
 		padding: 0 0.25rem;
+		flex: 0 0 auto;
 	}
 	.muted {
 		color: var(--text-muted);
