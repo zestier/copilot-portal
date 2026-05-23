@@ -123,6 +123,12 @@ export interface ToolCallRecord {
 	// invoke their own tools; those nested calls are children of the
 	// outermost `task` tool call.
 	parentToolCallId: string | null;
+	// For background `task` calls, these fields track the spawned agent's
+	// lifecycle separately from the launch tool-call status.
+	backgroundAgentStatus?: 'running' | 'completed' | 'failed' | null;
+	backgroundAgentId?: string | null;
+	backgroundAgentStartedAt?: number | null;
+	backgroundAgentEndedAt?: number | null;
 	// Ephemeral live-streaming state. Populated client-side from
 	// `tool.partial_output` and `tool.progress` events while the tool is
 	// running. Not persisted: server-side rehydrations leave these unset.
@@ -407,6 +413,12 @@ export type PortalEvent =
 			parentToolCallId?: string;
 	  }
 	| { type: 'message.end'; messageId: string }
+	| {
+			type: 'subagent.lifecycle';
+			toolCallId: string;
+			agentId: string;
+			status: 'running' | 'completed' | 'failed';
+	  }
 	| {
 			type: 'tool.call';
 			toolCallId: string;

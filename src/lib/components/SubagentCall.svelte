@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { ToolCallRecord, ReasoningBlockRecord, FileEditRecord } from '$lib/types';
 	import { renderMarkdown } from '$lib/client/markdown';
+	import { getSubagentDisplayState, parseSubagentArgs } from '$lib/client/subagent-display';
 	import ToolCall from './ToolCall.svelte';
 	import ReasoningBlock from './ReasoningBlock.svelte';
 	import DiffView from './DiffView.svelte';
@@ -23,7 +24,8 @@
 	// direction by clicking; once they do, we stop auto-managing.
 	let userToggled = $state(false);
 	let manualOpen = $state(false);
-	const pending = $derived(toolCall.status === 'pending');
+	const displayState = $derived(getSubagentDisplayState(toolCall));
+	const pending = $derived(displayState.pending);
 	const open = $derived(userToggled ? manualOpen : pending);
 
 	function onToggle(e: Event) {
@@ -32,74 +34,10 @@
 		manualOpen = el.open;
 	}
 
-	type Args = {
-		name?: string;
-		description?: string;
-		agent_type?: string;
-		model?: string;
-		mode?: string;
-		prompt?: string;
-	};
-
-	function parseArgs(json: string): Args {
-		try {
-			const v = JSON.parse(json);
-			return v && typeof v === 'object' && !Array.isArray(v) ? (v as Args) : {};
-		} catch {
-			return {};
-		}
-	}
-
-	// The SDK stores the subagent's reply in result_json. It can be a JSON
-	// string (most common — markdown wrapped in quotes), a structured object
-	// with a `content`/`result`/`text` field, or — in degenerate cases — raw
-	// text that wasn't valid JSON. We try each shape in order.
-	function extractResultText(resultJson: string | null): string | null {
-		if (!resultJson) return null;
-		try {
-			const v = JSON.parse(resultJson);
-			if (typeof v === 'string') return v;
-			if (v && typeof v === 'object') {
-				const obj = v as Record<string, unknown>;
-				for (const key of ['content', 'result', 'text', 'output', 'response', 'summary']) {
-					const candidate = obj[key];
-					if (typeof candidate === 'string' && candidate.length > 0) return candidate;
-				}
-				// Some SDKs return [{type:'text', text:'…'}]
-				if (Array.isArray(obj.content)) {
-					const parts = obj.content
-						.map((p) =>
-							p && typeof p === 'object' && 'text' in (p as Record<string, unknown>)
-								? String((p as Record<string, unknown>).text)
-								: ''
-						)
-						.filter(Boolean);
-					if (parts.length > 0) return parts.join('\n\n');
-				}
-			}
-			return null;
-		} catch {
-			return resultJson;
-		}
-	}
-
-	const args = $derived(parseArgs(toolCall.argsJson));
-	const resultText = $derived(extractResultText(toolCall.resultJson));
+	const args = $derived(parseSubagentArgs(toolCall.argsJson));
+	const resultText = $derived(displayState.resultText);
 	const promptHtml = $derived(args.prompt ? renderMarkdown(args.prompt) : null);
 	const resultHtml = $derived(resultText ? renderMarkdown(resultText) : null);
-
-	function statusLabel(s: ToolCallRecord['status']): string {
-		switch (s) {
-			case 'ok':
-				return 'completed';
-			case 'error':
-				return 'failed';
-			case 'denied':
-				return 'denied';
-			default:
-				return 'running…';
-		}
-	}
 
 	function firstLine(s: string, max = 80): string {
 		const line =
@@ -161,9 +99,7 @@
 		activityManualOpen = el.open;
 	}
 
-	const elapsedMs = $derived(
-		toolCall.endedAt != null ? toolCall.endedAt - toolCall.startedAt : null
-	);
+	const elapsedMs = $derived(displayState.elapsedMs);
 	const elapsedLabel = $derived.by(() => {
 		if (elapsedMs == null) return null;
 		const s = Math.round(elapsedMs / 1000);
@@ -179,6 +115,7 @@
 	class:open
 	class:is-pending={pending}
 	data-status={toolCall.status}
+	data-display-status={displayState.statusClass}
 	{open}
 	ontoggle={onToggle}
 >
@@ -194,9 +131,9 @@
 		{#if args.mode === 'background'}
 			<span class="badge mode">background</span>
 		{/if}
-		<span class="status status-{toolCall.status}">
+		<span class="status status-{displayState.statusClass}">
 			{#if pending}<span class="dot" aria-hidden="true"></span>{/if}
-			{statusLabel(toolCall.status)}
+			{displayState.statusLabel}
 		</span>
 		{#if elapsedLabel}
 			<span class="elapsed">· {elapsedLabel}</span>
@@ -263,9 +200,30 @@
 				</div>
 			</details>
 		{/if}
+		{#if displayState.isBackgroundLaunch}
+			<div class="section response background-launch">
+				<div class="label static">Response</div>
+				<div class="markdown">
+					{#if displayState.backgroundAgentId}
+						<p>
+							{displayState.lifecycleText} Agent ID:
+							<code>{displayState.backgroundAgentId}</code>.
+						</p>
+					{:else}
+						<p>{displayState.lifecycleText}</p>
+					{/if}
+					<p>
+						Use <code>read_agent</code>{#if displayState.backgroundAgentId}
+							with this ID{/if} to retrieve results, or <code>list_agents</code> to view background agents.
+					</p>
+				</div>
+			</div>
+		{/if}
 		{#if resultHtml}
 			<div class="section response">
-				<div class="label static">Response</div>
+				<div class="label static">
+					{displayState.isBackgroundLaunch ? 'Launch result' : 'Response'}
+				</div>
 				<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 				<div class="markdown">{@html resultHtml}</div>
 			</div>
@@ -386,6 +344,9 @@
 	}
 	.status-ok {
 		color: var(--success, #30a46c);
+	}
+	.status-background {
+		color: var(--accent, #7c5cff);
 	}
 	.status-error {
 		color: var(--danger, #e5484d);

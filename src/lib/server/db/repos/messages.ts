@@ -1,5 +1,6 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
+import type Database from 'better-sqlite3';
 import type {
 	Message,
 	MessageStatus,
@@ -34,6 +35,14 @@ interface ToolRow {
 	parent_tool_call_id: string | null;
 }
 
+interface BackgroundAgentLifecycleRow {
+	tool_call_id: string;
+	agent_id: string;
+	status: 'running' | 'completed' | 'failed';
+	started_at: number;
+	ended_at: number | null;
+}
+
 interface EditRow {
 	id: string;
 	message_id: string;
@@ -55,6 +64,22 @@ interface ReasoningRow {
 	parent_tool_call_id: string | null;
 }
 
+export function ensureBackgroundAgentLifecycleTable(db: Database.Database = getDb()) {
+	db.prepare(
+		`CREATE TABLE IF NOT EXISTS background_agent_lifecycles (
+		   tool_call_id TEXT PRIMARY KEY,
+		   agent_id     TEXT NOT NULL,
+		   status       TEXT NOT NULL,
+		   started_at   INTEGER NOT NULL,
+		   ended_at     INTEGER
+		 )`
+	).run();
+	db.prepare(
+		`CREATE INDEX IF NOT EXISTS idx_background_agent_lifecycles_agent
+		   ON background_agent_lifecycles(agent_id)`
+	).run();
+}
+
 function rowToMessage(r: MsgRow): Message {
 	return {
 		id: r.id,
@@ -69,6 +94,7 @@ function rowToMessage(r: MsgRow): Message {
 
 export function listByConversation(conversationId: string): Message[] {
 	const db = getDb();
+	ensureBackgroundAgentLifecycleTable(db);
 	const rows = db
 		.prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, id ASC')
 		.all(conversationId) as MsgRow[];
@@ -82,6 +108,17 @@ export function listByConversation(conversationId: string): Message[] {
 			`SELECT * FROM tool_calls WHERE message_id IN (${placeholders}) ORDER BY started_at ASC`
 		)
 		.all(...ids) as ToolRow[];
+	const toolIds = toolRows.map((t) => t.id);
+	const lifecycleRows =
+		toolIds.length > 0
+			? (db
+					.prepare(
+						`SELECT * FROM background_agent_lifecycles
+						  WHERE tool_call_id IN (${toolIds.map(() => '?').join(',')})`
+					)
+					.all(...toolIds) as BackgroundAgentLifecycleRow[])
+			: [];
+	const lifecycleByTool = new Map(lifecycleRows.map((r) => [r.tool_call_id, r]));
 	const editRows = db
 		.prepare(
 			`SELECT * FROM file_edits WHERE message_id IN (${placeholders}) ORDER BY created_at ASC`
@@ -95,6 +132,7 @@ export function listByConversation(conversationId: string): Message[] {
 
 	const byMsgT: Record<string, ToolCallRecord[]> = {};
 	for (const t of toolRows) {
+		const lifecycle = lifecycleByTool.get(t.id);
 		(byMsgT[t.message_id] ??= []).push({
 			id: t.id,
 			messageId: t.message_id,
@@ -105,7 +143,11 @@ export function listByConversation(conversationId: string): Message[] {
 			startedAt: t.started_at,
 			endedAt: t.ended_at,
 			textOffset: t.text_offset,
-			parentToolCallId: t.parent_tool_call_id
+			parentToolCallId: t.parent_tool_call_id,
+			backgroundAgentStatus: lifecycle?.status ?? null,
+			backgroundAgentId: lifecycle?.agent_id ?? null,
+			backgroundAgentStartedAt: lifecycle?.started_at ?? null,
+			backgroundAgentEndedAt: lifecycle?.ended_at ?? null
 		});
 	}
 	const byMsgE: Record<string, FileEditRecord[]> = {};
@@ -285,6 +327,31 @@ export function updateToolCall(
 		.run(...values);
 }
 
+export function updateBackgroundAgentLifecycle(
+	toolCallId: string,
+	agentId: string,
+	status: 'running' | 'completed' | 'failed',
+	now: number = Date.now()
+) {
+	const db = getDb();
+	ensureBackgroundAgentLifecycleTable(db);
+	db.prepare(
+		`INSERT INTO background_agent_lifecycles(
+		   tool_call_id, agent_id, status, started_at, ended_at
+		 )
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(tool_call_id) DO UPDATE SET
+		   agent_id = excluded.agent_id,
+		   status = CASE
+		     WHEN background_agent_lifecycles.status IN ('completed', 'failed')
+		       THEN background_agent_lifecycles.status
+		     ELSE excluded.status
+		   END,
+		   started_at = min(background_agent_lifecycles.started_at, excluded.started_at),
+		   ended_at = COALESCE(background_agent_lifecycles.ended_at, excluded.ended_at)`
+	).run(toolCallId, agentId, status, now, status === 'running' ? null : now);
+}
+
 export interface ToolCallWithConversation extends ToolCallRecord {
 	conversationId: string;
 	conversationUserId: string;
@@ -295,12 +362,22 @@ export function getToolCallForConversation(
 	conversationId: string,
 	toolCallId: string
 ): ToolCallWithConversation | null {
-	const row = getDb()
+	const db = getDb();
+	ensureBackgroundAgentLifecycleTable(db);
+	const row = db
 		.prepare(
-			`SELECT tc.*, m.conversation_id, m.role AS message_role, c.user_id AS conversation_user_id
+			`SELECT tc.*,
+			        m.conversation_id,
+			        m.role AS message_role,
+			        c.user_id AS conversation_user_id,
+			        bal.agent_id AS background_agent_id,
+			        bal.status AS background_agent_status,
+			        bal.started_at AS background_agent_started_at,
+			        bal.ended_at AS background_agent_ended_at
 			   FROM tool_calls tc
 			   JOIN messages m ON m.id = tc.message_id
 			   JOIN conversations c ON c.id = m.conversation_id
+			   LEFT JOIN background_agent_lifecycles bal ON bal.tool_call_id = tc.id
 			  WHERE tc.id = ? AND m.conversation_id = ?`
 		)
 		.get(toolCallId, conversationId) as
@@ -308,6 +385,10 @@ export function getToolCallForConversation(
 				conversation_id: string;
 				conversation_user_id: string;
 				message_role: string;
+				background_agent_id: string | null;
+				background_agent_status: ToolCallRecord['backgroundAgentStatus'];
+				background_agent_started_at: number | null;
+				background_agent_ended_at: number | null;
 		  })
 		| undefined;
 	if (!row) return null;
@@ -322,6 +403,10 @@ export function getToolCallForConversation(
 		endedAt: row.ended_at,
 		textOffset: row.text_offset,
 		parentToolCallId: row.parent_tool_call_id,
+		backgroundAgentStatus: row.background_agent_status,
+		backgroundAgentId: row.background_agent_id,
+		backgroundAgentStartedAt: row.background_agent_started_at,
+		backgroundAgentEndedAt: row.background_agent_ended_at,
 		conversationId: row.conversation_id,
 		conversationUserId: row.conversation_user_id,
 		messageRole: row.message_role as Role

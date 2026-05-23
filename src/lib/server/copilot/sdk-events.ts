@@ -26,6 +26,11 @@ interface EventAdapterContext {
 	setQueue(q: AsyncQueue<PortalEvent> | null): void;
 	getMode(): SessionMode;
 	setMode(mode: SessionMode): void;
+	onSubagentLifecycle?(ev: {
+		toolCallId: string;
+		agentId: string;
+		status: 'running' | 'completed' | 'failed';
+	}): void;
 }
 
 interface ChildReasoningState {
@@ -233,8 +238,8 @@ export class SdkEventAdapter {
 		sdkSession.on('tool.execution_partial_result', this.onToolPartialResult);
 		sdkSession.on('tool.execution_progress', this.onToolProgress);
 		sdkSession.on('subagent.started', this.onSubagentStarted);
-		sdkSession.on('subagent.completed', this.onSubagentEnded);
-		sdkSession.on('subagent.failed', this.onSubagentEnded);
+		sdkSession.on('subagent.completed', this.onSubagentCompleted);
+		sdkSession.on('subagent.failed', this.onSubagentFailed);
 		sdkSession.on('session.idle', this.onSessionIdle);
 		sdkSession.on('session.usage_info', this.onUsageInfo);
 		sdkSession.on('session.compaction_start', this.onCompactionStart);
@@ -428,17 +433,42 @@ export class SdkEventAdapter {
 		if (!ev) return;
 		if (ev.agentId && ev.data?.toolCallId) {
 			this.subagentParentByAgentId.set(ev.agentId, ev.data.toolCallId);
+			this.emitSubagentLifecycle(ev.data.toolCallId, ev.agentId, 'running');
 		}
 	};
 
-	private readonly onSubagentEnded = (e: unknown) => {
+	private readonly onSubagentCompleted = (e: unknown) => {
+		this.onSubagentEnded(e, 'completed');
+	};
+
+	private readonly onSubagentFailed = (e: unknown) => {
+		this.onSubagentEnded(e, 'failed');
+	};
+
+	private onSubagentEnded(e: unknown, status: 'completed' | 'failed') {
 		const ev = parseSdkEvent('subagent.ended', AgentEvent, e);
 		if (!ev) return;
 		if (!ev.agentId) return;
+		const toolCallId = this.subagentParentByAgentId.get(ev.agentId);
 		this.closeChildReasoning(ev.agentId);
 		this.childReasoning.delete(ev.agentId);
+		if (toolCallId) this.emitSubagentLifecycle(toolCallId, ev.agentId, status);
 		this.subagentParentByAgentId.delete(ev.agentId);
-	};
+	}
+
+	private emitSubagentLifecycle(
+		toolCallId: string,
+		agentId: string,
+		status: 'running' | 'completed' | 'failed'
+	) {
+		this.ctx.onSubagentLifecycle?.({ toolCallId, agentId, status });
+		this.emit({
+			type: 'subagent.lifecycle',
+			toolCallId,
+			agentId,
+			status
+		});
+	}
 
 	private closeChildReasoning(agentId: string) {
 		const state = this.childReasoning.get(agentId);

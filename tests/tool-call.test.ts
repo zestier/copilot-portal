@@ -1,6 +1,24 @@
 import { describe, it, expect } from 'vitest';
 import { summarizeToolCall } from '../src/lib/client/tool-summary';
 import { decodeToolResult, shouldRenderToolResultAsMarkdown } from '../src/lib/client/tool-result';
+import { getBackgroundAgentId, getSubagentDisplayState } from '../src/lib/client/subagent-display';
+import type { ToolCallRecord } from '../src/lib/types';
+
+function toolCall(overrides: Partial<ToolCallRecord>): ToolCallRecord {
+	return {
+		id: 'tool-1',
+		messageId: 'msg-1',
+		tool: 'task',
+		argsJson: '{}',
+		resultJson: null,
+		status: 'pending',
+		startedAt: 1000,
+		endedAt: null,
+		textOffset: null,
+		parentToolCallId: null,
+		...overrides
+	};
+}
 
 describe('summarizeToolCall', () => {
 	it('uses description over command for bash', () => {
@@ -141,5 +159,109 @@ describe('shouldRenderToolResultAsMarkdown', () => {
 		for (const tool of ['bash', 'view', 'rg', 'sql', 'session_store_sql']) {
 			expect(shouldRenderToolResultAsMarkdown(tool)).toBe(false);
 		}
+	});
+});
+
+describe('getSubagentDisplayState', () => {
+	it('renders successful foreground task calls as completed', () => {
+		const state = getSubagentDisplayState(
+			toolCall({
+				argsJson: JSON.stringify({ mode: 'sync' }),
+				resultJson: JSON.stringify('done'),
+				status: 'ok',
+				endedAt: 2000
+			})
+		);
+
+		expect(state).toMatchObject({
+			pending: false,
+			isBackgroundLaunch: false,
+			statusClass: 'ok',
+			statusLabel: 'completed',
+			lifecycleText: null,
+			resultText: 'done',
+			elapsedMs: 1000
+		});
+	});
+
+	it('renders successful background task calls as launched instead of completed', () => {
+		const state = getSubagentDisplayState(
+			toolCall({
+				argsJson: JSON.stringify({ mode: 'background' }),
+				resultJson: JSON.stringify({ agent_id: 'agent-123', content: 'Started background agent' }),
+				status: 'ok',
+				endedAt: 2000
+			})
+		);
+
+		expect(state).toMatchObject({
+			pending: false,
+			isBackgroundLaunch: true,
+			statusClass: 'background',
+			statusLabel: 'launched',
+			lifecycleText: 'Background agent launched.',
+			resultText: 'Started background agent',
+			backgroundAgentId: 'agent-123',
+			elapsedMs: 1000
+		});
+	});
+
+	it('renders completed background subagent lifecycle as completed', () => {
+		const state = getSubagentDisplayState(
+			toolCall({
+				argsJson: JSON.stringify({ mode: 'background' }),
+				resultJson: JSON.stringify({ agent_id: 'agent-123', content: 'Started background agent' }),
+				status: 'ok',
+				endedAt: 2000,
+				backgroundAgentStatus: 'completed',
+				backgroundAgentId: 'agent-123',
+				backgroundAgentStartedAt: 2500,
+				backgroundAgentEndedAt: 3000
+			})
+		);
+
+		expect(state).toMatchObject({
+			isBackgroundLaunch: true,
+			statusClass: 'ok',
+			statusLabel: 'completed',
+			lifecycleText: 'Background agent completed.',
+			backgroundAgentId: 'agent-123',
+			elapsedMs: 500
+		});
+	});
+
+	it('keeps failed or denied background task launches as failed or denied', () => {
+		expect(
+			getSubagentDisplayState(
+				toolCall({
+					argsJson: JSON.stringify({ mode: 'background' }),
+					status: 'error',
+					endedAt: 2000
+				})
+			).statusLabel
+		).toBe('failed');
+
+		expect(
+			getSubagentDisplayState(
+				toolCall({
+					argsJson: JSON.stringify({ mode: 'background' }),
+					status: 'denied',
+					endedAt: 2000
+				})
+			).statusLabel
+		).toBe('denied');
+	});
+
+	it('extracts background agent ids from tolerated result shapes', () => {
+		expect(getBackgroundAgentId(JSON.stringify({ agentId: 'agent-camel' }))).toBe('agent-camel');
+		expect(getBackgroundAgentId(JSON.stringify({ id: 'agent-id' }))).toBe('agent-id');
+		expect(
+			getBackgroundAgentId(
+				JSON.stringify({ content: [{ type: 'text', text: 'agent_id: agent-array' }] })
+			)
+		).toBe('agent-array');
+		expect(getBackgroundAgentId(JSON.stringify('Started. Use read_agent with agent-text.'))).toBe(
+			'agent-text'
+		);
 	});
 });

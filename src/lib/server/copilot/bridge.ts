@@ -10,6 +10,7 @@ import { AsyncQueue } from './async-queue';
 import { createInteractiveCallbacks } from './interactive-adapter';
 import { SdkEventAdapter, toRuntimeMode, type RuntimeSessionMode } from './sdk-events';
 import * as conversationsRepo from '../db/repos/conversations';
+import * as messagesRepo from '../db/repos/messages';
 import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
 import { buildGitTools } from '../tools/git';
@@ -175,6 +176,9 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		getMode: () => currentMode,
 		setMode: (mode) => {
 			currentMode = mode;
+		},
+		onSubagentLifecycle: (ev) => {
+			messagesRepo.updateBackgroundAgentLifecycle(ev.toolCallId, ev.agentId, ev.status);
 		}
 	});
 	const {

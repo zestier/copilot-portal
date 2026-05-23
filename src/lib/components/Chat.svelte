@@ -364,6 +364,20 @@
 				}
 				break;
 			}
+			case 'subagent.lifecycle': {
+				const tc = findToolCallRecord(messages, ev.toolCallId);
+				if (tc) {
+					tc.backgroundAgentStatus = ev.status;
+					tc.backgroundAgentId = ev.agentId;
+					if (ev.status === 'running') {
+						tc.backgroundAgentStartedAt ??= Date.now();
+						tc.backgroundAgentEndedAt = null;
+					} else {
+						tc.backgroundAgentEndedAt = Date.now();
+					}
+				}
+				break;
+			}
 			case 'tool.partial_output': {
 				const tc = findToolCallRecord(messages, ev.toolCallId);
 				// The SDK emits cumulative snapshots of the tool's stdout/stderr

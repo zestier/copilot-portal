@@ -25,6 +25,7 @@ describe('db migrations + repos', () => {
 				'permission_decisions',
 				'permission_grants',
 				'schema_migrations',
+				'background_agent_lifecycles',
 				'tool_calls',
 				'user_settings',
 				'user_tokens',
@@ -296,6 +297,127 @@ describe('db migrations + repos', () => {
 			id: 'tool-pending',
 			status: 'error',
 			endedAt: 1234
+		});
+	});
+
+	it('persists background agent lifecycle outside tool_calls', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, { title: 'subagent lifecycle', workdir: '/tmp', model: null });
+		const assistant = messages.append(c.id, {
+			role: 'assistant',
+			content: '',
+			status: 'complete'
+		});
+		messages.insertToolCall(assistant.id, {
+			id: 'task-background',
+			tool: 'task',
+			argsJson: JSON.stringify({ mode: 'background' }),
+			resultJson: JSON.stringify({ agent_id: 'agent-1' }),
+			status: 'ok',
+			startedAt: 100,
+			endedAt: 110,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+
+		messages.updateBackgroundAgentLifecycle('task-background', 'agent-1', 'running', 120);
+		messages.updateBackgroundAgentLifecycle('task-background', 'agent-1', 'completed', 130);
+
+		const toolColumns = (
+			getDb().prepare(`PRAGMA table_info(tool_calls)`).all() as { name: string }[]
+		).map((r) => r.name);
+		expect(toolColumns).not.toContain('subagent_status');
+
+		const reloaded = messages.listByConversation(c.id).find((m) => m.id === assistant.id);
+		expect(reloaded?.toolCalls?.[0]).toMatchObject({
+			id: 'task-background',
+			status: 'ok',
+			backgroundAgentStatus: 'completed',
+			backgroundAgentId: 'agent-1',
+			backgroundAgentStartedAt: 120,
+			backgroundAgentEndedAt: 130
+		});
+		expect(messages.getToolCallForConversation(c.id, 'task-background')).toMatchObject({
+			id: 'task-background',
+			backgroundAgentStatus: 'completed',
+			backgroundAgentId: 'agent-1',
+			backgroundAgentStartedAt: 120,
+			backgroundAgentEndedAt: 130
+		});
+	});
+
+	it('does not let late running lifecycle events clobber terminal states', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, {
+			title: 'subagent lifecycle race',
+			workdir: '/tmp',
+			model: null
+		});
+		const assistant = messages.append(c.id, {
+			role: 'assistant',
+			content: '',
+			status: 'complete'
+		});
+		messages.insertToolCall(assistant.id, {
+			id: 'task-race',
+			tool: 'task',
+			argsJson: JSON.stringify({ mode: 'background' }),
+			resultJson: null,
+			status: 'ok',
+			startedAt: 100,
+			endedAt: 110,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+
+		messages.updateBackgroundAgentLifecycle('task-race', 'agent-race', 'completed', 130);
+		messages.updateBackgroundAgentLifecycle('task-race', 'agent-race', 'running', 120);
+
+		const reloaded = messages.listByConversation(c.id).find((m) => m.id === assistant.id);
+		expect(reloaded?.toolCalls?.[0]).toMatchObject({
+			id: 'task-race',
+			backgroundAgentStatus: 'completed',
+			backgroundAgentId: 'agent-race',
+			backgroundAgentStartedAt: 120,
+			backgroundAgentEndedAt: 130
+		});
+	});
+
+	it('self-heals the background lifecycle table if a cached DB handle missed the migration', () => {
+		const db = getDb();
+		db.prepare('DROP TABLE background_agent_lifecycles').run();
+
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, {
+			title: 'subagent lifecycle heal',
+			workdir: '/tmp',
+			model: null
+		});
+		const assistant = messages.append(c.id, {
+			role: 'assistant',
+			content: '',
+			status: 'complete'
+		});
+		messages.insertToolCall(assistant.id, {
+			id: 'task-heal',
+			tool: 'task',
+			argsJson: JSON.stringify({ mode: 'background' }),
+			resultJson: null,
+			status: 'ok',
+			startedAt: 100,
+			endedAt: 110,
+			textOffset: 0,
+			parentToolCallId: null
+		});
+
+		messages.updateBackgroundAgentLifecycle('task-heal', 'agent-heal', 'completed', 140);
+
+		const reloaded = messages.listByConversation(c.id).find((m) => m.id === assistant.id);
+		expect(reloaded?.toolCalls?.[0]).toMatchObject({
+			id: 'task-heal',
+			backgroundAgentStatus: 'completed',
+			backgroundAgentId: 'agent-heal',
+			backgroundAgentEndedAt: 140
 		});
 	});
 });

@@ -18,6 +18,11 @@ class FakeSdkSource {
 function makeHarness() {
 	const source = new FakeSdkSource();
 	const events: PortalEvent[] = [];
+	const subagentLifecycleEvents: Array<{
+		toolCallId: string;
+		agentId: string;
+		status: 'running' | 'completed' | 'failed';
+	}> = [];
 	let ended = false;
 	let mode: SessionMode = 'interactive';
 	let queue: AsyncQueue<PortalEvent> | null = {
@@ -37,6 +42,9 @@ function makeHarness() {
 		getMode: () => mode,
 		setMode: (next) => {
 			mode = next;
+		},
+		onSubagentLifecycle: (ev) => {
+			subagentLifecycleEvents.push(ev);
 		}
 	});
 	adapter.attach(source);
@@ -51,9 +59,38 @@ function makeHarness() {
 		},
 		get queue() {
 			return queue;
-		}
+		},
+		subagentLifecycleEvents
 	};
 }
+
+describe('SdkEventAdapter subagent lifecycle', () => {
+	it('emits and reports started/completed/failed lifecycle events', () => {
+		const h = makeHarness();
+
+		h.source.emit('subagent.started', {
+			agentId: 'agent-1',
+			data: { toolCallId: 'tool-1' }
+		});
+		h.source.emit('subagent.completed', { agentId: 'agent-1' });
+		h.source.emit('subagent.started', {
+			agentId: 'agent-2',
+			data: { toolCallId: 'tool-2' }
+		});
+		h.source.emit('subagent.failed', { agentId: 'agent-2' });
+
+		const expected = [
+			{ toolCallId: 'tool-1', agentId: 'agent-1', status: 'running' },
+			{ toolCallId: 'tool-1', agentId: 'agent-1', status: 'completed' },
+			{ toolCallId: 'tool-2', agentId: 'agent-2', status: 'running' },
+			{ toolCallId: 'tool-2', agentId: 'agent-2', status: 'failed' }
+		];
+		expect(h.subagentLifecycleEvents).toEqual(expected);
+		expect(h.events.filter((e) => e.type === 'subagent.lifecycle')).toEqual(
+			expected.map((e) => ({ type: 'subagent.lifecycle', ...e }))
+		);
+	});
+});
 
 describe('SdkEventAdapter zod event boundary', () => {
 	it('translates valid SDK payloads into portal events', () => {

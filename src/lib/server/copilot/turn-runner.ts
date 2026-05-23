@@ -277,6 +277,8 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 					endedAt: tc.endedAt
 				});
 			}
+		} else if (ev.type === 'subagent.lifecycle') {
+			messages.updateBackgroundAgentLifecycle(ev.toolCallId, ev.agentId, ev.status);
 		} else if (ev.type === 'file.edit') {
 			const isChild = !!ev.parentToolCallId;
 			const textOffset = isChild ? null : assistantBuf.length;

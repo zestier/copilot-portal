@@ -400,6 +400,75 @@ describe('turn-runner', () => {
 		expect(assistant?.fileEdits?.[0]).toMatchObject({ path: 'src/a.ts', diff: edit.diff });
 	});
 
+	it('persists background subagent lifecycle events during a turn', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'subagent lifecycle',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		acquireMock.mockResolvedValue(
+			makeFakeSession([
+				{ type: 'message.start', messageId: 'm1', role: 'assistant' },
+				{
+					type: 'tool.call',
+					toolCallId: 'task-1',
+					tool: 'task',
+					args: { mode: 'background', prompt: 'do work' }
+				},
+				{
+					type: 'tool.result',
+					toolCallId: 'task-1',
+					ok: true,
+					summary: 'launched',
+					output: { agent_id: 'agent-1', content: 'launched' }
+				},
+				{
+					type: 'subagent.lifecycle',
+					toolCallId: 'task-1',
+					agentId: 'agent-1',
+					status: 'running'
+				},
+				{
+					type: 'subagent.lifecycle',
+					toolCallId: 'task-1',
+					agentId: 'agent-1',
+					status: 'completed'
+				},
+				{ type: 'done' }
+			])
+		);
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+
+		for await (const { event } of turn.subscribe()) {
+			if (event.type === 'done') break;
+		}
+
+		const assistant = messages.listByConversation(conv.id).find((m) => m.role === 'assistant');
+		expect(assistant?.toolCalls?.[0]).toMatchObject({
+			id: 'task-1',
+			status: 'ok',
+			backgroundAgentStatus: 'completed',
+			backgroundAgentId: 'agent-1',
+			backgroundAgentStartedAt: expect.any(Number),
+			backgroundAgentEndedAt: expect.any(Number)
+		});
+	});
+
 	it('persists manual rerun tool calls as separate attempts without overwriting the original', async () => {
 		const { users, convs, turnRunner } = await freshImports();
 		const messages = await import('../src/lib/server/db/repos/messages');
