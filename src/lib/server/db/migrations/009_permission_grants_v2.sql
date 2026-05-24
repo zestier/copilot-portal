@@ -8,7 +8,7 @@
 -- New columns:
 --   permission_kind   NULL = any kind (matches legacy rows)
 --   scope_pattern     glob; NULL = any scope (matches legacy rows)
---   decision          'allow' | 'deny' (deny beats allow at match time)
+--   decision          'allow' | 'deny' (later migration 020 adds 'prompt')
 --   expires_at        unix ms; NULL = forever
 --
 -- Existing rows are preserved as wildcard allow grants (NULL kind, NULL

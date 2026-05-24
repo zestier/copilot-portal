@@ -28,9 +28,10 @@
 	type FsRootKind = FsRuleRoot;
 	type FsBehaviorKind = 'any' | FsRuleBehaviorWithValue;
 	type UrlRuleKind = 'exact' | 'host' | 'host-suffix';
+	type GrantDecision = 'allow' | 'deny' | 'prompt';
 
 	let newGrantTool = $state<GrantTool>('shell');
-	let newGrantDecision = $state<'allow' | 'deny'>('allow');
+	let newGrantDecision = $state<GrantDecision>('allow');
 	let newGrantExpiry = $state('');
 	let newGrantDenyReason = $state('');
 	let editingGrantId = $state<number | null>(null);
@@ -42,7 +43,7 @@
 	let editorDetails: HTMLDetailsElement | undefined = $state();
 
 	let searchQuery = $state('');
-	let decisionFilter = $state<'all' | 'allow' | 'deny'>('all');
+	let decisionFilter = $state<'all' | GrantDecision>('all');
 	let toolFilter = $state('all');
 	let kindFilter = $state('all');
 	let scopeFilter = $state<'all' | 'global' | 'conversation'>('all');
@@ -381,6 +382,17 @@
 		return g.isSeedGrant ? 'Default seed' : 'User-created';
 	}
 
+	function decisionLabel(decision: GrantDecision): string {
+		switch (decision) {
+			case 'allow':
+				return 'Approve';
+			case 'deny':
+				return 'Deny';
+			case 'prompt':
+				return 'Prompt';
+		}
+	}
+
 	function groupSearchText(g: PermissionGrant): string {
 		return [
 			String(g.id),
@@ -419,6 +431,7 @@
 			total: items.length,
 			allow: items.filter((g) => g.decision === 'allow').length,
 			deny: items.filter((g) => g.decision === 'deny').length,
+			prompt: items.filter((g) => g.decision === 'prompt').length,
 			global: items.filter((g) => g.conversationId === null).length,
 			conversation: items.filter((g) => g.conversationId !== null).length,
 			seed: items.filter((g) => g.isSeedGrant).length,
@@ -430,6 +443,7 @@
 
 	function buildGrantSections(items: PermissionGrant[]) {
 		const deny = items.filter((g) => g.decision === 'deny');
+		const prompt = items.filter((g) => g.decision === 'prompt');
 		const userGlobal = items.filter(
 			(g) => g.decision === 'allow' && !g.isSeedGrant && g.conversationId === null
 		);
@@ -446,20 +460,28 @@
 				grants: deny
 			},
 			{
+				id: 'prompt',
+				title: 'Prompt rules',
+				description:
+					'Rules that force a human permission dialog, even when a broader approval or policy ' +
+					'would otherwise allow the request.',
+				grants: prompt
+			},
+			{
 				id: 'user-global',
-				title: 'User-created global allows',
-				description: 'Allow rules that apply across conversations.',
+				title: 'User-created global approvals',
+				description: 'Approve rules that apply across conversations.',
 				grants: userGlobal
 			},
 			{
 				id: 'conversation',
-				title: 'Conversation-scoped allows',
-				description: 'Allow rules created from a specific conversation prompt.',
+				title: 'Conversation-scoped approvals',
+				description: 'Approve rules created from a specific conversation prompt.',
 				grants: conversation
 			},
 			{
 				id: 'defaults',
-				title: 'Default seed allows',
+				title: 'Default seed approvals',
 				description: 'Built-in safe defaults installed for each user; revocable and restorable.',
 				grants: defaults
 			}
@@ -494,8 +516,8 @@
 	<div class="section-heading">
 		<h2>Saved permission grants</h2>
 		<p class="muted small">
-			Review persistent allow/deny rules, audit defaults, and find conversation-scoped rules
-			quickly.
+			Review persistent approve, deny, and prompt rules; audit defaults; and find
+			conversation-scoped rules quickly.
 		</p>
 	</div>
 
@@ -506,11 +528,15 @@
 		</div>
 		<div class="summary-card">
 			<span class="summary-value">{stats.allow}</span>
-			<span class="summary-label">Allows</span>
+			<span class="summary-label">Approvals</span>
 		</div>
 		<div class="summary-card danger-card">
 			<span class="summary-value">{stats.deny}</span>
 			<span class="summary-label">Denies</span>
+		</div>
+		<div class="summary-card warning-card">
+			<span class="summary-value">{stats.prompt}</span>
+			<span class="summary-label">Prompts</span>
 		</div>
 		<div class="summary-card">
 			<span class="summary-value">{stats.seed}</span>
@@ -556,8 +582,9 @@
 					<label>
 						Decision
 						<select name="decision" bind:value={newGrantDecision}>
-							<option value="allow">Allow</option>
+							<option value="allow">Approve</option>
 							<option value="deny">Deny</option>
+							<option value="prompt">Prompt</option>
 						</select>
 					</label>
 					<label>
@@ -593,6 +620,13 @@
 					</label>
 				{:else}
 					<input type="hidden" name="denyReason" value="" />
+					{#if newGrantDecision === 'prompt'}
+						<p class="muted small">
+							Prompt grants force the normal permission dialog for matching requests. Persistent
+							choices are disabled for those dialogs; edit or remove the prompt grant here to change
+							that behavior.
+						</p>
+					{/if}
 				{/if}
 
 				{#if newGrantTool === 'shell'}
@@ -877,8 +911,10 @@
 			<h3>No saved grants yet</h3>
 			<p class="muted small">
 				No saved grants. When you click "Allow always" or "Deny always" on a tool prompt, the
-				resulting rule shows up here so you can revoke it later. The button above re-installs the
-				built-in defaults (file/dir reads, git read-only, structured-tool nudge denies).
+				resulting approve or deny rule shows up here so you can revoke it later. You can also add
+				prompt rules here to force interactive approval for matching requests. The button above
+				re-installs the built-in defaults (file/dir reads, git read-only, structured-tool nudge
+				denies).
 			</p>
 		</div>
 	{:else}
@@ -909,8 +945,9 @@
 					Decision filter
 					<select bind:value={decisionFilter}>
 						<option value="all">All decisions</option>
-						<option value="allow">Allow only</option>
+						<option value="allow">Approve only</option>
 						<option value="deny">Deny only</option>
+						<option value="prompt">Prompt only</option>
 					</select>
 				</label>
 				<label>
@@ -972,8 +1009,9 @@
 			</div>
 		{:else}
 			<div class="filtered-summary" aria-live="polite">
-				<span>{filteredStats.allow} allow</span>
+				<span>{filteredStats.allow} approve</span>
 				<span>{filteredStats.deny} deny</span>
+				<span>{filteredStats.prompt} prompt</span>
 				<span>{filteredStats.global} global</span>
 				<span>{filteredStats.conversation} conversation-scoped</span>
 				<span>{filteredStats.seed} default seed matches</span>
@@ -993,9 +1031,7 @@
 							<li class="grant-row">
 								<div class="grant-row-main">
 									<div class="grant-row-title">
-										<span class="decision-tag {g.decision}"
-											>{g.decision === 'allow' ? 'Allow' : 'Deny'}</span
-										>
+										<span class="decision-tag {g.decision}">{decisionLabel(g.decision)}</span>
 										<code class="tool">{g.tool}</code>
 										<span class="kind">{g.permissionKind ?? 'any kind'}</span>
 										<span class="source-tag" class:seed={g.isSeedGrant}>{provenanceLabel(g)}</span>
@@ -1331,6 +1367,10 @@
 	.decision-tag.allow {
 		color: var(--success);
 		border-color: var(--success);
+	}
+	.decision-tag.prompt {
+		color: var(--warning, #d99000);
+		border-color: var(--warning, #d99000);
 	}
 	.decision-tag.deny {
 		color: var(--danger);

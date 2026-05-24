@@ -9,8 +9,8 @@
 // instead of two, and users can disable any seed they don't trust.
 //
 // Two flavors of seed:
-//   1. `allow` seeds make safe shell calls (read-only utilities, git
-//      read-only subcommands) pass without prompting.
+//   1. `allow` (Approve in the UI) seeds make safe shell calls
+//      (read-only utilities, git read-only subcommands) pass without prompting.
 //   2. `deny` seeds with `denyReason` + `pipeline: 'forbid'` nudge the
 //      agent toward structured tools (view / grep / glob) for terminal
 //      reads like `cat foo`, while still allowing the same commands
@@ -26,7 +26,7 @@ interface SeedSpec {
 	tool: string;
 	permissionKind: string | null;
 	scope: GrantScope;
-	decision?: 'allow' | 'deny';
+	decision?: 'allow' | 'deny' | 'prompt';
 	denyReason?: string;
 }
 

@@ -17,8 +17,8 @@ import { shellRuleMatches, shellRuleMatchesSegment } from './predicates/shell';
 import { fsScopeMatches } from './predicates/fs';
 import { urlScopeMatches } from './predicates/url';
 
-export type GrantDecision = 'allow' | 'deny';
-export type MatchOutcome = 'allow' | 'deny' | 'none';
+export type GrantDecision = 'allow' | 'deny' | 'prompt';
+export type MatchOutcome = 'allow' | 'deny' | 'prompt' | 'none';
 
 export interface DetailedMatchOutcome {
 	outcome: MatchOutcome;
@@ -74,12 +74,14 @@ export interface MatchQuery {
 }
 
 /**
- * Decide allow / deny / none against an in-memory list of candidate
+ * Decide allow / deny / prompt / none against an in-memory list of candidate
  * grants. Precedence:
  *
- *   1. Any matching `deny` grant wins.
- *   2. Otherwise any matching `allow` grant wins.
- *   3. Otherwise `none` — caller falls back to policy.
+ *   1. Exact-invocation short-lived `allow` grants override other grants.
+ *   2. Any matching `deny` grant wins.
+ *   3. Otherwise any matching `prompt` grant forces a human prompt.
+ *   4. Otherwise any matching `allow` grant wins.
+ *   5. Otherwise `none` — caller falls back to policy.
  *
  * "Match" means tool matches (exact or wildcard `*`), permission_kind
  * matches (exact, NULL = any, or `*`), and the scope pattern matches
@@ -89,7 +91,8 @@ export interface MatchQuery {
  * For shell requests with multiple parsed segments (e.g. `cd ./src &&
  * git diff`), each segment is evaluated independently against the grant
  * set: the request is allowed only if every segment has at least one
- * matching allow grant, and is denied if any segment is denied. This
+ * matching allow grant, is prompted if any segment is prompted, and is
+ * denied if any segment is denied. This
  * lets a `cd` grant cover the prefix while a `git` grant covers the
  * tail without requiring a single rule that knows about both.
  */
@@ -99,7 +102,7 @@ export function matchGrants(rows: GrantRow[], q: MatchQuery): MatchOutcome {
 
 /**
  * Like `matchGrants`, but additionally returns the matched deny grant's
- * `denyReason` (when one fired). For `allow` / `none` outcomes, the
+ * `denyReason` (when one fired). For `allow` / `prompt` / `none` outcomes, the
  * reason is always null. When multiple deny grants would match, the
  * first one with a non-null reason wins (deny precedence is unchanged
  * — we just pick a reason to surface).
@@ -111,12 +114,15 @@ export function matchGrantsDetailed(rows: GrantRow[], q: MatchQuery): DetailedMa
 		return matchShellSegments(rows, q, q.shellSegments);
 	}
 	let sawAllow = false;
+	let sawPrompt = false;
 	for (const r of rows) {
 		if (!grantApplies(r, q)) continue;
 		if (!rowScopeMatches(r, q)) continue;
 		if (r.decision === 'deny') return { outcome: 'deny', denyReason: r.denyReason };
-		sawAllow = true;
+		if (r.decision === 'prompt') sawPrompt = true;
+		else sawAllow = true;
 	}
+	if (sawPrompt) return { outcome: 'prompt', denyReason: null };
 	return { outcome: sawAllow ? 'allow' : 'none', denyReason: null };
 }
 
@@ -138,6 +144,7 @@ function matchShellSegments(
 	segments: ParsedSegment[]
 ): DetailedMatchOutcome {
 	let allAllowed = true;
+	let sawPrompt = false;
 	for (let i = 0; i < segments.length; i++) {
 		const seg = segments[i];
 		const inPipeline = segmentInPipeline(segments, i);
@@ -151,10 +158,12 @@ function matchShellSegments(
 			if (!grantApplies(r, q)) continue;
 			if (!rowMatchesShellSegment(r, seg, q, ctx)) continue;
 			if (r.decision === 'deny') return { outcome: 'deny', denyReason: r.denyReason };
-			segAllow = true;
+			if (r.decision === 'prompt') sawPrompt = true;
+			else segAllow = true;
 		}
 		if (!segAllow) allAllowed = false;
 	}
+	if (sawPrompt) return { outcome: 'prompt', denyReason: null };
 	return { outcome: allAllowed ? 'allow' : 'none', denyReason: null };
 }
 

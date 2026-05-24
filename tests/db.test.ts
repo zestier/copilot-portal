@@ -210,6 +210,55 @@ describe('db migrations + repos', () => {
 		).toBe(false);
 	});
 
+	it('round-trips prompt grants and fails closed for malformed decisions', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, { title: 'prompt grants', workdir: '/tmp', model: null });
+		settings.addGrant({
+			userId: u.id,
+			conversationId: null,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopePattern: 'npm *',
+			decision: 'prompt'
+		});
+		settings.addGrant({
+			userId: u.id,
+			conversationId: null,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopePattern: 'node *',
+			decision: 'deny',
+			denyReason: 'node is blocked'
+		});
+		settings.addGrant({
+			userId: u.id,
+			conversationId: null,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopePattern: 'ls *',
+			decision: 'allow'
+		});
+		getDb()
+			.prepare(
+				`INSERT INTO permission_grants(
+					user_id, conversation_id, tool, permission_kind, scope_pattern, decision, granted_at
+				) VALUES (?, NULL, 'shell', 'shell', 'bogus *', 'unexpected', ?)`
+			)
+			.run(u.id, Date.now());
+
+		expect(settings.matchGrant(u.id, c.id, 'shell', 'shell', 'npm install')).toBe('prompt');
+		expect(settings.matchGrantDetailed(u.id, c.id, 'shell', 'shell', 'node test')).toMatchObject({
+			outcome: 'deny',
+			denyReason: 'node is blocked'
+		});
+		expect(settings.matchGrant(u.id, c.id, 'shell', 'shell', 'ls src')).toBe('allow');
+		expect(settings.matchGrant(u.id, c.id, 'shell', 'shell', 'bogus value')).toBe('deny');
+
+		const listed = settings.listGrantsForUser(u.id).filter((g) => g.scope === null);
+		expect(listed.find((g) => g.scopePattern === 'npm *')?.decision).toBe('prompt');
+		expect(listed.find((g) => g.scopePattern === 'bogus *')?.decision).toBe('deny');
+	});
+
 	it('archives and unarchives conversations and filters list accordingly', () => {
 		const u = users.ensureLocalUser();
 		const a = convs.create(u.id, { title: 'a', workdir: '/tmp', model: null });

@@ -113,10 +113,6 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			}
 		}
 
-		if (!alwaysPrompt && opts.getApproveAll()) {
-			audit('auto-allow');
-			return { kind: 'approve-once' } as const;
-		}
 		if (alwaysPrompt) {
 			const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
 				'permission',
@@ -192,6 +188,37 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			audit('auto-deny');
 			if (grant.denyReason) return { kind: 'reject', feedback: grant.denyReason } as const;
 			return { kind: 'reject' } as const;
+		}
+		if (grant.outcome === 'prompt') {
+			if (opts.getMode() === 'best-effort') {
+				audit('auto-deny');
+				return {
+					kind: 'reject',
+					feedback: bestEffortPromptGrantFeedback({ permissionKind })
+				} as const;
+			}
+			const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
+				'permission',
+				{
+					kind: 'permission',
+					tool,
+					permissionKind,
+					summary,
+					args: req.args ?? null,
+					userPolicy: opts.policy,
+					canPersistDecision: false,
+					shellAnalysis
+				}
+			);
+			if (response.decision === 'deny' || response.decision === 'deny-always') {
+				return rejectWithFeedback(response);
+			}
+			return { kind: 'approve-once' } as const;
+		}
+
+		if (opts.getApproveAll()) {
+			audit('auto-allow');
+			return { kind: 'approve-once' } as const;
 		}
 
 		const decision = decideByPolicy(opts.policy, 'permission', permissionKind, {
@@ -362,6 +389,15 @@ function bestEffortPermissionFeedback(view: { permissionKind: string }): string 
 	return (
 		`A ${permissionKind} permission request was auto-rejected because this conversation is in \`best-effort\` mode. ` +
 		`${alternative} Use \`permission_capabilities\` to inspect alternatives. If still blocked after verifying no allowed alternative works, retry sparingly with \`forcePermissionPrompt\`.`
+	);
+}
+
+function bestEffortPromptGrantFeedback(view: { permissionKind: string }): string {
+	const permissionKind = bestEffortPermissionKindLabel(view.permissionKind);
+	return (
+		`A ${permissionKind} permission request matched a saved prompt grant and ` +
+		'requires interactive approval, ' +
+		'but this conversation is in `best-effort` mode and cannot display permission dialogs.'
 	);
 }
 

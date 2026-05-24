@@ -322,12 +322,7 @@ function parseGrantFormData(data: FormData, formId: string): ParseGrantResult {
 function markSeedGrants(grants: settings.GrantSummary[]) {
 	const seedKeys = new Set(
 		defaultSeedGrants().map((seed) =>
-			defaultSeedGrantKey(
-				seed.tool,
-				seed.permissionKind,
-				seed.scope,
-				seed.decision === 'deny' ? 'deny' : 'allow'
-			)
+			defaultSeedGrantKey(seed.tool, seed.permissionKind, seed.scope, seed.decision ?? 'allow')
 		)
 	);
 

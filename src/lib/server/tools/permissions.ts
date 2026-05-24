@@ -19,7 +19,7 @@ type CapabilityStatus = 'allowed' | 'denied' | 'prompt_required' | 'partially_al
 
 interface CapabilityRule {
 	kind: 'tool' | 'filesystem' | 'shell' | 'url' | 'legacy' | 'exact-invocation' | 'policy';
-	decision: 'allow' | 'deny';
+	decision: 'allow' | 'deny' | 'prompt';
 	scope: 'all-conversations' | 'current-conversation';
 	summary: string;
 }
@@ -30,6 +30,7 @@ interface Capability {
 	guidance: string;
 	allowed?: CapabilityRule[];
 	denied?: CapabilityRule[];
+	promptRequired?: CapabilityRule[];
 }
 
 export function buildPermissionTools(opts: {
@@ -135,27 +136,34 @@ function capabilityForKind(
 	const relevant = grants.filter((g) => grantCoversPermissionKind(g, permissionKind));
 	const allowed = relevant.filter((g) => g.decision === 'allow').map(grantToRule);
 	const denied = relevant.filter((g) => g.decision === 'deny').map(grantToRule);
+	const promptRequired = relevant.filter((g) => g.decision === 'prompt').map(grantToRule);
 	const policyRule = policyRuleFor(permissionKind, policy);
 	if (policyRule?.decision === 'allow') allowed.push(policyRule);
 	if (policyRule?.decision === 'deny') denied.push(policyRule);
 
-	const status = capabilityStatus(allowed, denied, policy);
+	const status = capabilityStatus(allowed, denied, promptRequired, policy);
 	return pruneEmptyArrays({
 		permissionKind,
 		status,
 		guidance: guidanceFor(permissionKind, status),
 		allowed,
-		denied
+		denied,
+		promptRequired
 	});
 }
 
 function capabilityStatus(
 	allowed: CapabilityRule[],
 	denied: CapabilityRule[],
+	promptRequired: CapabilityRule[],
 	policy: PermissionPolicy
 ): CapabilityStatus {
-	if (allowed.length > 0 && denied.length > 0) return 'partially_allowed';
+	if (denied.length > 0 && (allowed.length > 0 || promptRequired.length > 0)) {
+		return 'partially_allowed';
+	}
+	if (allowed.length > 0 && promptRequired.length > 0) return 'partially_allowed';
 	if (allowed.length > 0) return 'allowed';
+	if (promptRequired.length > 0) return 'prompt_required';
 	if (denied.length > 0 || policy === 'deny-all') return 'denied';
 	return 'prompt_required';
 }
@@ -205,8 +213,10 @@ function grantSummary(g: settings.GrantSummary): string {
 	return `${decisionVerb(g)} ${g.tool} for ${scopeSummary(g.scope)}.`;
 }
 
-function decisionVerb(g: settings.GrantSummary): 'Allow' | 'Deny' {
-	return g.decision === 'deny' ? 'Deny' : 'Allow';
+function decisionVerb(g: settings.GrantSummary): 'Approve' | 'Deny' | 'Prompt for' {
+	if (g.decision === 'deny') return 'Deny';
+	if (g.decision === 'prompt') return 'Prompt for';
+	return 'Approve';
 }
 
 function scopeSummary(scope: GrantScope): string {
@@ -263,7 +273,7 @@ function guidanceFor(permissionKind: string, status: CapabilityStatus): string {
 	if (status === 'allowed')
 		return `${permissionKind} has allowed paths available; prefer those first.`;
 	if (status === 'partially_allowed') {
-		return `${permissionKind} has both allow and deny rules; use the allowed alternatives and avoid denied shapes.`;
+		return `${permissionKind} has a mix of approve, prompt, or deny rules; use approved alternatives and avoid denied shapes.`;
 	}
 	if (status === 'denied') {
 		return `${permissionKind} is currently denied by policy or grants; use escalation if no other kind works.`;
@@ -277,5 +287,6 @@ function guidanceFor(permissionKind: string, status: CapabilityStatus): string {
 function pruneEmptyArrays(capability: Capability): Capability {
 	if (capability.allowed?.length === 0) delete capability.allowed;
 	if (capability.denied?.length === 0) delete capability.denied;
+	if (capability.promptRequired?.length === 0) delete capability.promptRequired;
 	return capability;
 }

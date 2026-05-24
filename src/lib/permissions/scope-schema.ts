@@ -151,7 +151,7 @@ export const GrantScopeSchema: z.ZodType<Exclude<GrantScope, { kind: 'any' }>> =
 export const GrantInputSchema = z
 	.object({
 		tool: z.enum(['shell', 'read', 'write', 'edit', 'url']),
-		decision: z.enum(['allow', 'deny']),
+		decision: z.enum(['allow', 'deny', 'prompt']),
 		scope: GrantScopeSchema,
 		/** Unix ms. `null` = never expires. */
 		expiresAt: z

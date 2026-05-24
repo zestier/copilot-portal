@@ -14,6 +14,7 @@ import {
 import { createInteractiveCallbacks } from '../src/lib/server/copilot/interactive-adapter';
 import * as users from '../src/lib/server/db/repos/users';
 import * as convs from '../src/lib/server/db/repos/conversations';
+import * as settings from '../src/lib/server/db/repos/settings';
 import type {
 	InteractiveKind,
 	InteractiveResponse,
@@ -502,15 +503,21 @@ describe('interactive permission adapter feedback', () => {
 		conversationId = convs.create(userId, { title: 'adapter', workdir: '/tmp', model: null }).id;
 	});
 
-	function callbacks(events: PortalEvent[] = []) {
+	function callbacks(
+		events: PortalEvent[] = [],
+		opts: {
+			mode?: 'interactive' | 'best-effort';
+			policy?: 'prompt' | 'allow-all' | 'deny-all';
+		} = {}
+	) {
 		return createInteractiveCallbacks({
 			conversationId,
 			userId,
 			workingDirectory: '/tmp',
-			policy: 'prompt',
+			policy: opts.policy ?? 'prompt',
 			emit: (ev) => events.push(ev),
 			getApproveAll: () => false,
-			getMode: () => 'interactive',
+			getMode: () => opts.mode ?? 'interactive',
 			getSessionWorkspacePath: () => null,
 			getPermissionBehavior: () => 'normal'
 		});
@@ -559,5 +566,76 @@ describe('interactive permission adapter feedback', () => {
 		});
 
 		await expect(permission).resolves.toEqual({ kind: 'reject' });
+	});
+
+	it('matching prompt grants force a non-persistent dialog before policy auto-approval', async () => {
+		settings.addGrant({
+			userId,
+			conversationId: null,
+			tool: 'url_fetcher',
+			permissionKind: 'url',
+			scope: { kind: 'url', rule: { kind: 'host', host: 'example.com' } },
+			decision: 'allow'
+		});
+		settings.addGrant({
+			userId,
+			conversationId: null,
+			tool: 'url_fetcher',
+			permissionKind: 'url',
+			scope: { kind: 'url', rule: { kind: 'host', host: 'example.com' } },
+			decision: 'prompt'
+		});
+		const events: PortalEvent[] = [];
+		const permission = callbacks(events, { policy: 'allow-all' }).onPermissionRequest({
+			kind: 'url',
+			toolName: 'url_fetcher',
+			url: 'https://example.com/',
+			args: { url: 'https://example.com/' }
+		});
+		await Promise.resolve();
+		const request = events.find((ev) => ev.type === 'interactive.request');
+		if (request?.type !== 'interactive.request') throw new Error('expected interactive request');
+		expect(request.request).toMatchObject({
+			kind: 'permission',
+			tool: 'url_fetcher',
+			permissionKind: 'url',
+			canPersistDecision: false
+		});
+
+		resolve(request.request.requestId, userId, {
+			kind: 'permission',
+			decision: 'allow-once'
+		});
+
+		await expect(permission).resolves.toEqual({ kind: 'approve-once' });
+		expect(settings.listRecentDecisionsForUser(userId, 5)[0]).toMatchObject({
+			tool: 'url_fetcher',
+			decision: 'allow-once'
+		});
+	});
+
+	it('matching prompt grants reject clearly in best-effort mode', async () => {
+		settings.addGrant({
+			userId,
+			conversationId: null,
+			tool: 'url_fetcher',
+			permissionKind: 'url',
+			scope: { kind: 'url', rule: { kind: 'host', host: 'example.com' } },
+			decision: 'prompt'
+		});
+
+		await expect(
+			callbacks([], { mode: 'best-effort', policy: 'allow-all' }).onPermissionRequest({
+				kind: 'url',
+				toolName: 'url_fetcher',
+				url: 'https://example.com/',
+				args: { url: 'https://example.com/' }
+			})
+		).resolves.toEqual(
+			expect.objectContaining({
+				kind: 'reject',
+				feedback: expect.stringContaining('requires interactive approval')
+			})
+		);
 	});
 });

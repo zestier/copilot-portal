@@ -121,6 +121,16 @@ describe('GrantInputSchema — valid shapes', () => {
 		});
 		expect(parsed.expiresAt).toBe(future);
 	});
+
+	it('accepts prompt grants without denyReason', () => {
+		const parsed = GrantInputSchema.parse({
+			tool: 'shell',
+			decision: 'prompt',
+			scope: { kind: 'shell', rule: { argv0: 'npm' } }
+		});
+		expect(parsed.decision).toBe('prompt');
+		expect(parsed.denyReason).toBeNull();
+	});
 });
 
 describe('GrantInputSchema — rejections', () => {
@@ -230,6 +240,16 @@ describe('GrantInputSchema — rejections', () => {
 			decision: 'allow',
 			scope: { kind: 'shell', rule: { argv0: 'ls' } },
 			denyReason: 'this should not be settable on an allow'
+		});
+		expect(r.success).toBe(false);
+	});
+
+	it('rejects denyReason on a prompt grant', () => {
+		const r = GrantInputSchema.safeParse({
+			tool: 'shell',
+			decision: 'prompt',
+			scope: { kind: 'shell', rule: { argv0: 'npm' } },
+			denyReason: 'prompt grants should not reject directly'
 		});
 		expect(r.success).toBe(false);
 	});

@@ -90,8 +90,8 @@ export function save(userId: string, s: UserSettings) {
 // Schema is `permission_grants(user_id, conversation_id, tool,
 // permission_kind, scope_pattern, decision, expires_at, granted_at)`
 // after migration 009. `conversation_id` NULL means a user-global grant.
-// All the matching precedence (deny beats allow, expiry, wildcards) lives
-// in the pure matcher module so it's testable without a DB.
+// All the matching precedence (deny beats prompt beats allow, expiry,
+// wildcards) lives in the pure matcher module so it's testable without a DB.
 
 import {
 	matchGrantsDetailed,
@@ -124,12 +124,17 @@ function dbRowToGrant(r: GrantDbRow): GrantRow {
 		permissionKind: r.permission_kind,
 		scopePattern: r.scope_pattern,
 		scope: decodeScope(r.scope_json),
-		decision: r.decision === 'deny' ? 'deny' : 'allow',
+		decision: normalizeGrantDecision(r.decision),
 		expiresAt: r.expires_at,
 		denyReason: r.deny_reason,
 		conversationId: r.conversation_id,
 		argsHash: r.args_hash
 	};
+}
+
+function normalizeGrantDecision(decision: string): GrantDecision {
+	if (decision === 'allow' || decision === 'deny' || decision === 'prompt') return decision;
+	return 'deny';
 }
 
 /**
@@ -170,7 +175,7 @@ export interface MatchGrantContext {
 
 /**
  * Resolve a permission request against the user's stored grants.
- * Returns 'allow' / 'deny' / 'none'; callers fall back to the policy
+ * Returns 'allow' / 'deny' / 'prompt' / 'none'; callers fall back to the policy
  * table when 'none'. Drops any deny-feedback the matched row carried;
  * callers that need it should use `matchGrantDetailed`.
  */
@@ -367,7 +372,7 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		permissionKind: r.permission_kind,
 		scopePattern: r.scope_pattern,
 		scope: decodeScope(r.scope_json),
-		decision: r.decision === 'deny' ? 'deny' : 'allow',
+		decision: normalizeGrantDecision(r.decision),
 		expiresAt: r.expires_at,
 		grantedAt: r.granted_at,
 		denyReason: r.deny_reason,

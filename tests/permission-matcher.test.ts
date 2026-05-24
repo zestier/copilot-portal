@@ -80,9 +80,29 @@ describe('matchGrants precedence', () => {
 		).toBe('deny');
 	});
 
+	it('deny beats prompt and prompt beats allow when grants match', () => {
+		expect(
+			matchGrants(
+				[grant({ decision: 'allow' }), grant({ decision: 'prompt', scopePattern: 'npm *' })],
+				{ tool: 'shell', permissionKind: 'shell', scopeKey: 'npm install', now: NOW }
+			)
+		).toBe('prompt');
+		expect(
+			matchGrants(
+				[
+					grant({ decision: 'allow' }),
+					grant({ decision: 'prompt', scopePattern: 'npm *' }),
+					grant({ decision: 'deny', scopePattern: 'npm install' })
+				],
+				{ tool: 'shell', permissionKind: 'shell', scopeKey: 'npm install', now: NOW }
+			)
+		).toBe('deny');
+	});
+
 	it('exact-args short-lived allow grants override broader denies', () => {
 		const rows = [
 			grant({ decision: 'deny', scopePattern: 'cat *' }),
+			grant({ decision: 'prompt', scopePattern: 'cat *' }),
 			grant({
 				decision: 'allow',
 				scopePattern: null,
@@ -259,6 +279,19 @@ describe('matchGrants — shell segments (per-segment OR across grants)', () => 
 				now: NOW
 			})
 		).toBe('deny');
+	});
+
+	it('prompt on any segment forces a prompt over matching allows', () => {
+		const rows = [shellGrant('cd'), shellGrant('git'), shellGrant('git', 'prompt')];
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'cd ./src && git diff',
+				shellSegments: parse('cd ./src && git diff'),
+				now: NOW
+			})
+		).toBe('prompt');
 	});
 
 	it('wildcard "any" grant covers every segment', () => {
