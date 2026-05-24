@@ -39,7 +39,6 @@ beforeEach(async () => {
 	await setupLocalEnv('portal-lm-studio-');
 	process.env.LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234';
 	delete process.env.LMSTUDIO_API_KEY;
-	delete process.env.LMSTUDIO_CONTEXT_LENGTH;
 	delete process.env.LMSTUDIO_REASONING;
 	resetConfigForTests();
 });
@@ -47,7 +46,6 @@ beforeEach(async () => {
 afterEach(() => {
 	delete process.env.LMSTUDIO_BASE_URL;
 	delete process.env.LMSTUDIO_API_KEY;
-	delete process.env.LMSTUDIO_CONTEXT_LENGTH;
 	delete process.env.LMSTUDIO_REASONING;
 	resetConfigForTests();
 	vi.restoreAllMocks();
@@ -108,11 +106,23 @@ describe('lmStudioProvider', () => {
 	});
 
 	it('streams native chat events, reasoning, MCP tool results, usage, and stores response ids', async () => {
-		process.env.LMSTUDIO_CONTEXT_LENGTH = '8192';
 		process.env.LMSTUDIO_REASONING = 'on';
 		resetConfigForTests();
-		const fetchMock = vi.fn(async (..._args: [string | URL | Request, RequestInit?]) => {
-			void _args;
+		const fetchMock = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+			void _init;
+			const href = String(url);
+			if (href.endsWith('/api/v1/models')) {
+				return Response.json({
+					models: [
+						{
+							type: 'llm',
+							key: 'local-model',
+							display_name: 'Local Model',
+							max_context_length: 8192
+						}
+					]
+				});
+			}
 			return sseResponse([
 				'event: reasoning.start\n',
 				'data: {"type":"reasoning.start"}\n\n',
@@ -166,18 +176,57 @@ describe('lmStudioProvider', () => {
 			expect.objectContaining({ type: 'tool.call', tool: 'lm_studio:browser_navigate' })
 		);
 		expect(events).toContainEqual(
-			expect.objectContaining({ type: 'context.usage', currentTokens: 42, tokenLimit: 8192 })
+			expect.objectContaining({ type: 'context.usage', currentTokens: 45, tokenLimit: 8192 })
 		);
 		expect(session.providerSessionId).toBe('resp_abc');
 		expect(convs.get(baseOpts.conversationId, user.id)?.providerSessionId).toBe('resp_abc');
-		expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+		const chatCall = fetchMock.mock.calls.find(([, init]) => init?.body);
+		expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({
 			model: 'local-model',
 			input: 'hello',
 			stream: true,
 			store: true,
-			context_length: 8192,
 			reasoning: 'on'
 		});
+		expect(JSON.parse(String(chatCall?.[1]?.body))).not.toHaveProperty('context_length');
+	});
+
+	it('derives context usage token limit from model metadata when no context override is set', async () => {
+		const opts = { ...baseOpts, model: 'local-model-large' };
+		const fetchMock = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+			void _init;
+			const href = String(url);
+			if (href.endsWith('/api/v1/models')) {
+				return Response.json({
+					models: [
+						{
+							type: 'llm',
+							key: opts.model,
+							display_name: 'Local Model',
+							max_context_length: 131072,
+							loaded_instances: [{ id: opts.model, config: { context_length: 16384 } }]
+						}
+					]
+				});
+			}
+			return sseResponse([
+				'event: message.delta\n',
+				'data: {"type":"message.delta","content":"Hello"}\n\n',
+				'event: chat.end\n',
+				'data: {"type":"chat.end","result":{"response_id":"resp_ctx","stats":{"input_tokens":100,"total_output_tokens":25}}}\n\n'
+			]);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const session = await lmStudioProvider.openSession(opts);
+
+		const events = await collect(session.send('hello', new AbortController().signal));
+
+		expect(events).toContainEqual(
+			expect.objectContaining({ type: 'context.usage', currentTokens: 125, tokenLimit: 16384 })
+		);
+		expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).not.toHaveProperty(
+			'context_length'
+		);
 	});
 
 	it('continues server-backed chats with previous_response_id', async () => {
@@ -198,7 +247,8 @@ describe('lmStudioProvider', () => {
 
 		await collect(session.send('follow up', new AbortController().signal));
 
-		expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+		const chatCall = fetchMock.mock.calls.find(([, init]) => init?.body);
+		expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({
 			input: 'follow up',
 			previous_response_id: 'resp_prev'
 		});

@@ -54,7 +54,6 @@ const Schema = z
 		OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES: z.coerce.number().int().positive().default(20),
 		LMSTUDIO_BASE_URL: z.string().trim().url().default('http://127.0.0.1:1234'),
 		LMSTUDIO_API_KEY: z.string().optional(),
-		LMSTUDIO_CONTEXT_LENGTH: z.coerce.number().int().positive().optional(),
 		LMSTUDIO_REASONING: z.enum(['off', 'low', 'medium', 'high', 'on']).optional(),
 
 		IDLE_TIMEOUT_MIN: z.coerce.number().int().positive().default(15),

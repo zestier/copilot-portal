@@ -17,18 +17,23 @@ interface LMStudioConfig {
 	displayName: string;
 	baseUrl: string;
 	apiKey: string | null;
-	contextLength: number | null;
+	/** Best known effective context window, used for portal context metering. */
+	tokenLimit: number | null;
 	reasoning: 'off' | 'low' | 'medium' | 'high' | 'on' | null;
 }
 
+interface LMStudioModel {
+	type?: string;
+	key?: string;
+	display_name?: string;
+	max_context_length?: number;
+	loaded_instances?: Array<{ id?: string; config?: { context_length?: number } }>;
+	variants?: string[];
+	selected_variant?: string;
+}
+
 interface ModelsResponse {
-	models?: Array<{
-		type?: string;
-		key?: string;
-		display_name?: string;
-		max_context_length?: number;
-		loaded_instances?: Array<{ id?: string; config?: { context_length?: number } }>;
-	}>;
+	models?: LMStudioModel[];
 	error?: {
 		message?: string;
 	};
@@ -65,6 +70,8 @@ interface LMStudioStreamEvent {
 
 const providerId = 'lm-studio' satisfies Extract<BackendProviderId, 'lm-studio'>;
 const displayName = 'LM Studio';
+const MODEL_CONTEXT_CACHE_TTL_MS = 5 * 60_000;
+const modelContextCache = new Map<string, { at: number; contextLength: number }>();
 
 export const lmStudioProvider: ModelBackendProvider = {
 	id: providerId,
@@ -118,7 +125,7 @@ export const lmStudioProvider: ModelBackendProvider = {
 				behavior: 'supported',
 				label: 'Context usage',
 				description:
-					'LM Studio reports prompt token usage; when LMSTUDIO_CONTEXT_LENGTH is set the portal shows it in the context meter.'
+					'LM Studio token stats are shown when the context window is known from model metadata.'
 			},
 			subagents: {
 				supported: false,
@@ -222,7 +229,8 @@ export const lmStudioProvider: ModelBackendProvider = {
 		}
 	},
 	async openSession(opts: ProviderOpenOptions): Promise<ProviderSession> {
-		return openLMStudioSession(providerConfig(), opts);
+		const cfg = providerConfig();
+		return openLMStudioSession(await withTokenLimit(cfg, opts.model), opts);
 	},
 	shouldEmbedPriorMessages(providerSessionId: string): boolean {
 		return !providerSessionId.startsWith('resp_');
@@ -236,7 +244,7 @@ function providerConfig(): LMStudioConfig {
 		displayName,
 		baseUrl: cfg.LMSTUDIO_BASE_URL,
 		apiKey: cfg.LMSTUDIO_API_KEY ?? null,
-		contextLength: cfg.LMSTUDIO_CONTEXT_LENGTH ?? null,
+		tokenLimit: null,
 		reasoning: cfg.LMSTUDIO_REASONING ?? null
 	};
 }
@@ -248,6 +256,64 @@ function requestHeaders(cfg: LMStudioConfig): HeadersInit {
 function endpoint(baseUrl: string, path: string): string {
 	const base = baseUrl.replace(/\/+$/, '');
 	return `${base.endsWith('/api/v1') ? base : `${base}/api/v1`}${path}`;
+}
+
+async function withTokenLimit(cfg: LMStudioConfig, modelId: string): Promise<LMStudioConfig> {
+	if (cfg.tokenLimit) return cfg;
+	const tokenLimit = await fetchModelContextLength(cfg, modelId);
+	return { ...cfg, tokenLimit };
+}
+
+async function fetchModelContextLength(
+	cfg: LMStudioConfig,
+	modelId: string
+): Promise<number | null> {
+	const cacheKey = `${cfg.baseUrl}\0${modelId}`;
+	const cached = modelContextCache.get(cacheKey);
+	if (cached && Date.now() - cached.at < MODEL_CONTEXT_CACHE_TTL_MS) {
+		return cached.contextLength;
+	}
+	try {
+		const res = await fetch(endpoint(cfg.baseUrl, '/models'), {
+			headers: requestHeaders(cfg)
+		});
+		const body = (await parseJson(res)) as ModelsResponse;
+		if (!res.ok) return null;
+		const model = (body.models ?? []).find((candidate) => matchesModel(candidate, modelId));
+		if (!model) return null;
+		const exactLoadedContext = model.loaded_instances?.find((instance) => instance.id === modelId)
+			?.config?.context_length;
+		if (typeof exactLoadedContext === 'number') {
+			modelContextCache.set(cacheKey, { at: Date.now(), contextLength: exactLoadedContext });
+			return exactLoadedContext;
+		}
+		const firstLoadedContext = model.loaded_instances?.find(
+			(instance) => instance.config?.context_length
+		)?.config?.context_length;
+		if (typeof firstLoadedContext === 'number') {
+			modelContextCache.set(cacheKey, { at: Date.now(), contextLength: firstLoadedContext });
+			return firstLoadedContext;
+		}
+		const contextLength =
+			typeof model.max_context_length === 'number' ? model.max_context_length : null;
+		if (contextLength !== null) {
+			modelContextCache.set(cacheKey, { at: Date.now(), contextLength });
+		}
+		return contextLength;
+	} catch (e) {
+		log.warn('lm_studio.context_length_lookup_failed', { modelId, err: String(e) });
+		return null;
+	}
+}
+
+function matchesModel(model: LMStudioModel, modelId: string): boolean {
+	return (
+		model.type === 'llm' &&
+		(model.key === modelId ||
+			model.selected_variant === modelId ||
+			model.variants?.includes(modelId) === true ||
+			model.loaded_instances?.some((instance) => instance.id === modelId) === true)
+	);
 }
 
 function backendErrorMessage(cfg: LMStudioConfig, e: unknown): string {
@@ -370,7 +436,6 @@ async function runTurn(
 	};
 	const previousResponseId = state.getPreviousResponseId();
 	if (previousResponseId) body.previous_response_id = previousResponseId;
-	if (cfg.contextLength) body.context_length = cfg.contextLength;
 	if (cfg.reasoning) body.reasoning = cfg.reasoning;
 
 	const res = await fetch(endpoint(cfg.baseUrl, '/chat'), {
@@ -504,13 +569,16 @@ async function streamNativeChat(
 		}
 	}
 
-	if (stats?.input_tokens !== undefined && cfg.contextLength) {
+	if (stats?.input_tokens !== undefined && cfg.tokenLimit) {
+		const outputTokens =
+			typeof stats.total_output_tokens === 'number' ? stats.total_output_tokens : 0;
+		const currentTokens = stats.input_tokens + outputTokens;
 		q.push({
 			type: 'context.usage',
-			currentTokens: stats.input_tokens,
-			tokenLimit: cfg.contextLength,
+			currentTokens,
+			tokenLimit: cfg.tokenLimit,
 			messagesLength: 0,
-			conversationTokens: stats.input_tokens,
+			conversationTokens: currentTokens,
 			systemTokens: 0,
 			toolDefinitionsTokens: 0
 		});
