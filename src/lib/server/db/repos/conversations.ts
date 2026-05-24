@@ -21,6 +21,7 @@ interface ConvRow {
 	archived_at: number | null;
 	forked_from_conversation_id: string | null;
 	forked_from_message_id: string | null;
+	provider_session_id: string | null;
 	mode: string | null;
 	approve_all_tools: number | null;
 }
@@ -40,7 +41,8 @@ function rowToConv(r: ConvRow): Conversation {
 		updatedAt: r.updated_at,
 		archivedAt: r.archived_at,
 		forkedFromConversationId: r.forked_from_conversation_id,
-		forkedFromMessageId: r.forked_from_message_id
+		forkedFromMessageId: r.forked_from_message_id,
+		providerSessionId: r.provider_session_id ?? r.id
 	};
 }
 
@@ -90,6 +92,7 @@ export interface CreateInput {
 	id?: string;
 	forkedFromConversationId?: string | null;
 	forkedFromMessageId?: string | null;
+	providerSessionId?: string | null;
 }
 
 /**
@@ -106,6 +109,7 @@ export function create(userId: string, input: CreateInput): Conversation {
 	const now = Date.now();
 	const forkConv = input.forkedFromConversationId ?? null;
 	const forkMsg = input.forkedFromMessageId ?? null;
+	const providerSessionId = input.providerSessionId ?? id;
 	const mode = input.mode ?? 'interactive';
 	const provider =
 		input.provider ?? normalizeBackendProvider(loadConfig().DEFAULT_BACKEND_PROVIDER);
@@ -113,8 +117,8 @@ export function create(userId: string, input: CreateInput): Conversation {
 		.prepare(
 			`INSERT INTO conversations(
 			   id, user_id, title, workdir, provider, model, mode, created_at, updated_at,
-			   forked_from_conversation_id, forked_from_message_id
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			   forked_from_conversation_id, forked_from_message_id, provider_session_id
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			id,
@@ -127,7 +131,8 @@ export function create(userId: string, input: CreateInput): Conversation {
 			now,
 			now,
 			forkConv,
-			forkMsg
+			forkMsg,
+			providerSessionId
 		);
 	return {
 		id,
@@ -142,8 +147,21 @@ export function create(userId: string, input: CreateInput): Conversation {
 		updatedAt: now,
 		archivedAt: null,
 		forkedFromConversationId: forkConv,
-		forkedFromMessageId: forkMsg
+		forkedFromMessageId: forkMsg,
+		providerSessionId
 	};
+}
+
+export function rotateProviderSession(id: string, userId: string): string | null {
+	const providerSessionId = ulid();
+	const r = getDb()
+		.prepare(
+			`UPDATE conversations
+			    SET provider_session_id = ?, updated_at = ?
+			  WHERE id = ? AND user_id = ?`
+		)
+		.run(providerSessionId, Date.now(), id, userId);
+	return r.changes > 0 ? providerSessionId : null;
 }
 
 export function rename(id: string, userId: string, title: string): boolean {

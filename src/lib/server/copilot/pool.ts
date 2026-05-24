@@ -76,10 +76,14 @@ function setReaperTimer(t: NodeJS.Timeout | null) {
 export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSession> {
 	const existing = sessions.get(opts.conversationId);
 	const requestedProvider = opts.provider ?? getDefaultProviderId();
+	const requestedProviderSessionId = opts.providerSessionId ?? opts.conversationId;
 	if (existing) {
 		const cachedProvider = existing.session.provider ?? getDefaultProviderId();
+		const cachedProviderSessionId =
+			existing.session.providerSessionId ?? existing.session.conversationId;
 		if (
 			existing.session.workingDirectory === opts.workingDirectory &&
+			cachedProviderSessionId === requestedProviderSessionId &&
 			cachedProvider === requestedProvider
 		) {
 			existing.lastUsed = Date.now();
@@ -90,7 +94,9 @@ export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSessio
 			cachedProvider,
 			requestedProvider,
 			cachedWorkdir: existing.session.workingDirectory,
-			requestedWorkdir: opts.workingDirectory
+			requestedWorkdir: opts.workingDirectory,
+			cachedProviderSessionId,
+			requestedProviderSessionId
 		});
 		await existing.session.dispose().catch(() => undefined);
 		sessions.delete(opts.conversationId);

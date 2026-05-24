@@ -49,6 +49,8 @@ export interface Conversation {
 	forkedFromConversationId: string | null;
 	/** The message in the source conversation whose edit produced this fork. */
 	forkedFromMessageId: string | null;
+	/** Backend runtime session id. May rotate when a conversation is destructively rewritten. */
+	providerSessionId: string;
 }
 
 export type WorkspaceTicketStatus = 'open' | 'done' | 'archived';

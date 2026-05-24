@@ -382,6 +382,7 @@ function openOpenAICompatibleSession(
 	cfg: OpenAICompatibleConfig,
 	opts: ProviderOpenOptions
 ): ProviderSession {
+	const providerSessionId = opts.providerSessionId ?? opts.conversationId;
 	let aborted = false;
 	let disposed = false;
 	let activeAbortController: AbortController | null = null;
@@ -564,6 +565,7 @@ function openOpenAICompatibleSession(
 	return {
 		provider: cfg.id,
 		conversationId: opts.conversationId,
+		providerSessionId,
 		workingDirectory: opts.workingDirectory,
 		lastUsed: Date.now(),
 		async *send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent> {

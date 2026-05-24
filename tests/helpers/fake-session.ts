@@ -13,6 +13,7 @@ export function makeFakeSession(
 ): ConversationSession {
 	return {
 		conversationId,
+		providerSessionId: conversationId,
 		workingDirectory,
 		async *send(): AsyncIterable<PortalEvent> {
 			for (const e of events) yield e;

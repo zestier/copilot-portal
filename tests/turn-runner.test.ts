@@ -24,6 +24,55 @@ describe('turn-runner', () => {
 		acquireMock.mockReset();
 	});
 
+	it('marks a turn running before opening the provider session', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'Custom title',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		let resolveAcquire: (session: ReturnType<typeof makeFakeSession>) => void = () => {};
+		acquireMock.mockReturnValue(
+			new Promise((resolve) => {
+				resolveAcquire = resolve;
+			})
+		);
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+
+		expect(turnRunner.getTurn(conv.id)).toBe(turn);
+		await expect(
+			turnRunner.startTurn({
+				bridge: {
+					conversationId: conv.id,
+					userId: user.id,
+					workingDirectory: wd,
+					model: 'gpt-4',
+					policy: 'prompt'
+				},
+				prompt: 'second',
+				conversationId: conv.id
+			})
+		).rejects.toThrow('turn already in progress');
+
+		resolveAcquire(makeFakeSession([{ type: 'done' }], conv.id, wd));
+		for await (const { event } of turn.subscribe()) {
+			if (event.type === 'done') break;
+		}
+	});
+
 	it('emits conversation.update before the terminal done so clients see the auto-title', async () => {
 		const { users, convs, turnRunner } = await freshImports();
 		const user = users.ensureLocalUser();

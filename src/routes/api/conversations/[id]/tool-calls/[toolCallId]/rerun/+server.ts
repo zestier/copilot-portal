@@ -81,6 +81,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		prompt,
 		bridge: {
 			conversationId: conv.id,
+			providerSessionId: conv.providerSessionId,
 			userId: conv.userId,
 			workingDirectory: effectiveWorkdir(conv.workdir),
 			provider: conv.provider,

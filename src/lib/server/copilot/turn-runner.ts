@@ -121,6 +121,7 @@ export interface StartTurnOptions {
 	bridge: ProviderOpenOptions;
 	prompt: string;
 	conversationId: string;
+	beforeSend?: () => Promise<void>;
 }
 
 export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
@@ -133,11 +134,10 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		turns.delete(opts.conversationId);
 	}
 
-	const session = await pool.acquire(opts.bridge);
-
 	const eventLog: PortalEvent[] = [];
 	const subscribers = new Set<AsyncQueue<IdentifiedEvent>>();
 	const turnAc = new AbortController();
+	let session: Awaited<ReturnType<typeof pool.acquire>> | null = null;
 
 	// Append an event to the log and fan it out to live subscribers with
 	// its monotonic id (= index in `eventLog`). All paths that need to
@@ -175,7 +175,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 			turnAc.abort();
 			interactiveRequests.cancelConversation(opts.conversationId, 'turn_aborted');
 			try {
-				await session.abort();
+				await session?.abort();
 			} catch {
 				/* ignore */
 			}
@@ -337,10 +337,17 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 
 	turn.finishedPromise = (async () => {
 		try {
+			await opts.beforeSend?.();
+			session = await pool.acquire(opts.bridge);
+			if (turnAc.signal.aborted) {
+				await session.abort();
+				return;
+			}
 			for await (const ev of session.send(promptToSend, turnAc.signal)) {
 				dispatch(ev);
 			}
 		} catch (e) {
+			if (turnAc.signal.aborted) return;
 			log.warn('turn.stream.failed', {
 				conversationId: opts.conversationId,
 				err: String(e)

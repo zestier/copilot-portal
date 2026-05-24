@@ -40,6 +40,7 @@ export interface ProviderStatusBehavior {
 export interface ProviderOpenOptions {
 	provider?: BackendProviderId;
 	conversationId: string;
+	providerSessionId?: string;
 	userId: string;
 	workingDirectory: string;
 	model: string;
@@ -56,6 +57,7 @@ export interface ProviderOpenOptions {
 export interface ProviderSession {
 	provider?: BackendProviderId;
 	conversationId: string;
+	providerSessionId: string;
 	workingDirectory: string;
 	lastUsed: number;
 	send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent>;

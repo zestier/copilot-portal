@@ -67,6 +67,7 @@ export interface ForkInput {
 
 export interface ForkResult {
 	conversation: Conversation;
+	userMessage: Message | null;
 }
 
 /**
@@ -143,8 +144,9 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 	const prefixEnd = mode === 'edit' ? targetIdx : targetIdx + 1;
 	const prefix = all.slice(0, prefixEnd);
 	cloneMessagePrefix(newConv.id, prefix);
+	let userMessage: Message | null = null;
 	if (mode === 'edit') {
-		messages.append(newConv.id, { role: 'user', content: input.newContent! });
+		userMessage = messages.append(newConv.id, { role: 'user', content: input.newContent! });
 	}
 
 	const refreshed = convs.get(newConv.id, input.userId);
@@ -156,7 +158,7 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 		messageId: target.id,
 		prefix: prefix.length
 	});
-	return { conversation: refreshed };
+	return { conversation: refreshed, userMessage };
 }
 
 function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {

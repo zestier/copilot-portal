@@ -97,6 +97,7 @@ describe('provider registry', () => {
 		const session: ProviderSession = {
 			provider: 'openai-compatible',
 			conversationId: 'conv-provider',
+			providerSessionId: 'conv-provider',
 			workingDirectory: '/tmp',
 			lastUsed: 1,
 			send: async function* () {},

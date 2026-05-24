@@ -12,13 +12,17 @@
 		message,
 		conversationId,
 		forks = [],
+		conversationIdle = true,
 		onForked,
+		onInlineEdited,
 		onToolRerunStarted
 	}: {
 		message: Message;
 		conversationId?: string;
 		forks?: Array<{ id: string; title: string; archivedAt: number | null }>;
+		conversationIdle?: boolean;
 		onForked?: () => void;
+		onInlineEdited?: (messageId: string, content: string, turnId: string) => void;
 		onToolRerunStarted?: (turnId: string) => void;
 	} = $props();
 
@@ -34,6 +38,7 @@
 	const canEdit = $derived(
 		message.role === 'user' &&
 			!!conversationId &&
+			conversationIdle &&
 			!message.id.startsWith('local-') &&
 			!message.id.startsWith('err-')
 	);
@@ -61,7 +66,7 @@
 		errorMsg = null;
 	}
 
-	async function submitEdit() {
+	async function submitForkEdit() {
 		const text = editText.trim();
 		if (!text || !conversationId || submitting) return;
 		submitting = true;
@@ -77,9 +82,39 @@
 				errorMsg = body || `Fork failed (${r.status})`;
 				return;
 			}
-			const data = (await r.json()) as { conversationId: string };
+			const data = (await r.json()) as { conversationId: string; turnId?: string };
 			onForked?.();
 			await goto(`/conversations/${data.conversationId}`);
+		} catch (e) {
+			errorMsg = e instanceof Error ? e.message : String(e);
+		} finally {
+			submitting = false;
+		}
+	}
+
+	async function submitInlineEdit() {
+		const text = editText.trim();
+		if (!text || !conversationId || submitting) return;
+		const confirmed = window.confirm(
+			'Edit this message in the current conversation? This will discard all later messages in this thread and re-run from the edited prompt.'
+		);
+		if (!confirmed) return;
+		submitting = true;
+		errorMsg = null;
+		try {
+			const r = await fetch(`/api/conversations/${conversationId}/messages/${message.id}/edit`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ content: text })
+			});
+			if (!r.ok) {
+				const body = await r.text();
+				errorMsg = body || `Inline edit failed (${r.status})`;
+				return;
+			}
+			const data = (await r.json()) as { turnId: string; userMessageId: string };
+			editing = false;
+			onInlineEdited?.(data.userMessageId, text, data.turnId);
 		} catch (e) {
 			errorMsg = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -303,8 +338,8 @@
 				type="button"
 				class="action-btn edit-btn"
 				onclick={beginEdit}
-				title="Edit this message and re-run from here in a new conversation"
-				aria-label="Edit message and fork"
+				title="Edit this message inline or fork it into a new conversation"
+				aria-label="Edit message"
 			>
 				<svg
 					width="12"
@@ -385,20 +420,34 @@
 				class="edit-form"
 				onsubmit={(e) => {
 					e.preventDefault();
-					submitEdit();
+					submitForkEdit();
 				}}
 			>
 				<textarea bind:value={editText} rows="3" disabled={submitting} aria-label="Edited message"
 				></textarea>
 				<div class="edit-actions">
 					<span class="hint muted">
-						Re-running will create a new conversation with the workdir restored to this point.
+						Fork keeps this thread unchanged. Inline edit discards later messages in this thread.
 					</span>
 					<button type="button" class="btn sm" onclick={cancelEdit} disabled={submitting}
 						>Cancel</button
 					>
-					<button type="submit" class="btn primary sm" disabled={submitting || !editText.trim()}>
-						{submitting ? 'Forking…' : 'Save & re-run'}
+					<button
+						type="button"
+						class="btn danger sm"
+						disabled={submitting || !editText.trim()}
+						title="Destructively replace this message, remove later history, and re-run here"
+						onclick={submitInlineEdit}
+					>
+						Edit inline & re-run
+					</button>
+					<button
+						type="submit"
+						class="btn primary sm"
+						disabled={submitting || !editText.trim()}
+						title="Create a fork with the edited prompt, leave this thread unchanged, and re-run there"
+					>
+						{submitting ? 'Saving…' : 'Fork & re-run'}
 					</button>
 				</div>
 				{#if errorMsg}

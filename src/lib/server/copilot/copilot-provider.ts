@@ -137,6 +137,7 @@ interface SdkSession {
 
 export async function open(opts: BridgeOpenOptions): Promise<ConversationSession> {
 	const client = await getClient(opts.userId, opts.providerAuthToken);
+	const providerSessionId = opts.providerSessionId ?? opts.conversationId;
 
 	let activeQueue: AsyncQueue<PortalEvent> | null = null;
 
@@ -187,10 +188,11 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 
 	let existingMetadata: unknown;
 	try {
-		existingMetadata = await client.getSessionMetadata(opts.conversationId);
+		existingMetadata = await client.getSessionMetadata(providerSessionId);
 	} catch (e) {
 		log.warn('copilot.session.metadata_lookup_failed', {
 			conversationId: opts.conversationId,
+			providerSessionId,
 			err: (e as Error).message
 		});
 	}
@@ -229,23 +231,24 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	if (existingMetadata) {
 		try {
 			sdkSession = (await client.resumeSession(
-				opts.conversationId,
+				providerSessionId,
 				sessionConfig
 			)) as unknown as SdkSession;
 		} catch (e) {
 			log.warn('copilot.session.resume_failed_falling_back_to_create', {
 				conversationId: opts.conversationId,
+				providerSessionId,
 				err: (e as Error).message
 			});
 			sdkSession = (await client.createSession({
 				...sessionConfig,
-				sessionId: opts.conversationId
+				sessionId: providerSessionId
 			})) as unknown as SdkSession;
 		}
 	} else {
 		sdkSession = (await client.createSession({
 			...sessionConfig,
-			sessionId: opts.conversationId
+			sessionId: providerSessionId
 		})) as unknown as SdkSession;
 	}
 	sessionWorkspacePath = normalizeSessionWorkspacePath(sdkSession.workspacePath);
@@ -293,6 +296,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	const session: ConversationSession = {
 		provider: 'copilot',
 		conversationId: opts.conversationId,
+		providerSessionId,
 		workingDirectory: opts.workingDirectory,
 		lastUsed: Date.now(),
 		async *send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent> {

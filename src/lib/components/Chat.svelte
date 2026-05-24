@@ -265,6 +265,24 @@
 		if (!eventSource) attachStream(turnId);
 	}
 
+	function handleInlineEdited(messageId: string, content: string, turnId: string) {
+		const idx = messages.findIndex((m) => m.id === messageId);
+		if (idx >= 0) {
+			messages = messages.slice(0, idx + 1);
+			messages[idx] = {
+				...messages[idx],
+				content,
+				status: 'complete',
+				errorCode: null
+			};
+		} else {
+			void refreshMessages();
+		}
+		pendingInteractive = [];
+		streaming = true;
+		attachStream(turnId);
+	}
+
 	function applyEvent(ev: PortalEvent) {
 		switch (ev.type) {
 			case 'message.start': {
@@ -625,7 +643,9 @@
 					message={m}
 					conversationId={conversation.id}
 					forks={forksByMessage[m.id] ?? []}
+					conversationIdle={!streaming}
 					onForked={refreshForks}
+					onInlineEdited={handleInlineEdited}
 					onToolRerunStarted={handleToolRerunStarted}
 				/>
 			{/each}

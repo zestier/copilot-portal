@@ -3,13 +3,8 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
-import * as settings from '$lib/server/db/repos/settings';
-import { loadConfig } from '$lib/server/config';
-import { startTurn, getTurn } from '$lib/server/runtime/turn-runner';
-import { providerAuthToken } from '$lib/server/providers/auth';
-import { snapshot as takeSnapshot } from '$lib/server/snapshots';
-import { effectiveWorkdir } from '$lib/server/workdir';
-import { log } from '$lib/server/log';
+import { getTurn } from '$lib/server/runtime/turn-runner';
+import { startTurnFromUserMessage } from '$lib/server/turn-start';
 import { parseBody } from '$lib/server/validate';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 
@@ -39,43 +34,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const userMsg = messages.append(conv.id, { role: 'user', content });
 	convs.touch(conv.id);
 
-	// Resolve the workdir we actually hand to the SDK / snapshotter. This
-	// rewrites legacy `DATA_DIR/workspaces/<id>/` rows (empty dirs from
-	// before workdirs were wired up to the SDK) back to PROJECT_ROOT so
-	// existing conversations don't get a useless empty workspace.
-	const workdir = effectiveWorkdir(conv.workdir);
-
-	// Capture a pre-turn snapshot of the workdir so the user can later
-	// inspect / roll back what the agent saw at this point. Non-fatal on
-	// failure (worst case: that turn just has no pre-snapshot).
-	try {
-		await takeSnapshot(workdir, userMsg.id, 'pre');
-	} catch (e) {
-		log.warn('snapshot.pre.failed', {
-			conversationId: conv.id,
-			messageId: userMsg.id,
-			err: String(e)
-		});
-	}
-
-	const cfg = loadConfig();
-	const userSettings = settings.get(conv.userId) ?? settings.defaults();
-
-	const turn = await startTurn({
-		conversationId: conv.id,
-		prompt: content,
-		bridge: {
-			conversationId: conv.id,
-			userId: conv.userId,
-			workingDirectory: workdir,
-			provider: conv.provider,
-			model: conv.model ?? cfg.DEFAULT_MODEL,
-			policy: userSettings.defaultPolicy,
-			mode: conv.mode,
-			approveAllTools: conv.approveAllTools,
-			providerAuthToken: providerAuthToken(conv.provider, conv.userId)
-		}
-	});
+	const turn = await startTurnFromUserMessage(conv, userMsg);
 
 	return json({ turnId: turn.id, userMessageId: userMsg.id });
 };

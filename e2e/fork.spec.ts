@@ -25,8 +25,8 @@ async function waitForIdle(request: APIRequestContext, conversationId: string) {
  *     is captured server-side for the user message.
  *  2. POST /messages/:id/fork with new content to fork from that user
  *     message.
- *  3. Verify the new conversation has the edited prompt, contains a fresh
- *     stubbed reply, and the source conversation is untouched.
+ *  3. Verify the new conversation has the edited prompt, automatically gets
+ *     a fresh stubbed reply, and the source conversation is untouched.
  */
 test('fork by editing a user message produces a new conversation with the edited prompt', async ({
 	page,
@@ -41,6 +41,13 @@ test('fork by editing a user message produces a new conversation with the edited
 	// pre-snapshot (the POST /turns endpoint is what calls snapshot()).
 	await page.goto(`/conversations/${sourceId}`);
 	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
+	await composer.click();
+	await composer.fill('context seed');
+	await composer.press('Enter');
+	await expect(page.getByText('Stubbed reply to: context seed').first()).toBeVisible({
+		timeout: 10_000
+	});
+	await waitForIdle(request, sourceId);
 	await composer.click();
 	await composer.fill('original prompt');
 	await composer.press('Enter');
@@ -66,13 +73,20 @@ test('fork by editing a user message produces a new conversation with the edited
 	expect(typeof newId).toBe('string');
 	expect(newId).not.toBe(sourceId);
 
-	// The new conversation has the edited user message but no assistant
-	// reply yet (the client is expected to navigate and trigger a turn).
+	await waitForIdle(request, newId);
 	const newMsgs = await request.get(`/api/conversations/${newId}`).then((r) => r.json());
 	const contents = (newMsgs.messages as Array<{ role: string; content: string }>).map(
 		(m) => `${m.role}:${m.content}`
 	);
+	expect(contents).toContain('user:context seed');
+	expect(contents).toContain('assistant:Stubbed reply to: context seed');
 	expect(contents).toContain('user:edited prompt');
+	const assistantReply = contents.find(
+		(m) => m.startsWith('assistant:Stubbed reply to:') && m.includes('edited prompt')
+	);
+	expect(assistantReply).toContain('context seed');
+	expect(assistantReply).toContain('Stubbed reply to: context seed');
+	expect(assistantReply).toContain('edited prompt');
 	expect(contents).not.toContain('user:original prompt');
 
 	// Source conversation still has the original turn intact.
@@ -121,4 +135,52 @@ test('retry from an assistant message clones up to it without a new user prompt'
 	expect(list).toHaveLength(2);
 	expect(list[0]).toMatchObject({ role: 'user', content: 'first' });
 	expect(list[1]).toMatchObject({ role: 'assistant' });
+});
+
+test('inline edit replaces a user message, truncates later messages, and reruns in place', async ({
+	page,
+	request
+}) => {
+	const created = await request
+		.post('/api/conversations', { data: { title: 'Inline Source' } })
+		.then((r) => r.json());
+	const sourceId = created.conversation.id as string;
+
+	await page.goto(`/conversations/${sourceId}`);
+	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
+	await composer.click();
+	await composer.fill('first prompt');
+	await composer.press('Enter');
+	await expect(page.getByText('Stubbed reply to: first prompt').first()).toBeVisible({
+		timeout: 10_000
+	});
+	await waitForIdle(request, sourceId);
+
+	await composer.click();
+	await composer.fill('second prompt');
+	await composer.press('Enter');
+	await expect(page.getByText('Stubbed reply to: second prompt').first()).toBeVisible({
+		timeout: 10_000
+	});
+
+	const before = await waitForIdle(request, sourceId);
+	const firstUser = (before.messages as Array<{ id: string; role: string; content: string }>).find(
+		(m) => m.role === 'user' && m.content === 'first prompt'
+	);
+	expect(firstUser).toBeDefined();
+
+	const editRes = await request.post(
+		`/api/conversations/${sourceId}/messages/${firstUser!.id}/edit`,
+		{ data: { content: 'first prompt edited inline' } }
+	);
+	expect(editRes.ok()).toBeTruthy();
+	await waitForIdle(request, sourceId);
+
+	const after = await request.get(`/api/conversations/${sourceId}`).then((r) => r.json());
+	const list = after.messages as Array<{ id: string; role: string; content: string }>;
+	expect(list.map((m) => `${m.role}:${m.content}`)).toEqual([
+		'user:first prompt edited inline',
+		'assistant:Stubbed reply to: first prompt edited inline'
+	]);
+	expect(list[0].id).toBe(firstUser!.id);
 });
