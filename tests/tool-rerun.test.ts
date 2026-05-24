@@ -5,7 +5,7 @@ import { argsHash } from '../src/lib/server/tool-invocation';
 const startTurnMock = vi.fn();
 const getTurnMock = vi.fn();
 
-vi.mock('../src/lib/server/copilot/turn-runner', () => ({
+vi.mock('../src/lib/server/runtime/turn-runner', () => ({
 	getTurn: (...args: unknown[]) => getTurnMock(...args),
 	startTurn: (...args: unknown[]) => startTurnMock(...args)
 }));

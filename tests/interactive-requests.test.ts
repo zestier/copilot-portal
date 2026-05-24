@@ -10,7 +10,7 @@ import {
 	cancelConversation,
 	newRequestId,
 	get
-} from '../src/lib/server/copilot/interactive-requests';
+} from '../src/lib/server/runtime/interactive-requests';
 import { createInteractiveCallbacks } from '../src/lib/server/copilot/interactive-adapter';
 import * as users from '../src/lib/server/db/repos/users';
 import * as convs from '../src/lib/server/db/repos/conversations';

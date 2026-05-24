@@ -31,7 +31,7 @@ import { ulid } from './db/ids';
 import { getDb } from './db';
 import * as convs from './db/repos/conversations';
 import * as messages from './db/repos/messages';
-import { getTurn } from './copilot/turn-runner';
+import { getTurn } from './runtime/turn-runner';
 import { log } from './log';
 import type { Conversation, Message } from '$lib/types';
 

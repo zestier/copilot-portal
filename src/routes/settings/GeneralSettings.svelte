@@ -6,7 +6,12 @@
 		type ProviderStatus,
 		type SettingsData
 	} from './settings-types';
-	import type { BackendProviderId, ProviderRuntimeFeatureStatus, SessionMode } from '$lib/types';
+	import {
+		BACKEND_PROVIDER_IDS,
+		type BackendProviderId,
+		type ProviderRuntimeFeatureStatus,
+		type SessionMode
+	} from '$lib/types';
 
 	const CUSTOM_MODEL_OPTION = '__custom__';
 
@@ -43,7 +48,7 @@
 		form: FormResult | null;
 	} = $props();
 
-	let selectedProvider = $state<BackendProviderId>('copilot');
+	let selectedProvider = $state<BackendProviderId>(BACKEND_PROVIDER_IDS[0]);
 	let selectedModelChoice = $state('');
 	let customModel = $state('');
 	$effect(() => {
@@ -80,6 +85,7 @@
 	}
 
 	function modelAvailability(provider: ProviderStatus): string {
+		if (!provider.statusChecked) return 'Not checked; save this provider as the default to check';
 		if (!provider.capabilities.modelList) return 'Model discovery unsupported';
 		if (provider.models.length > 0) return `${provider.models.length} model(s) available`;
 		if (provider.error) return `Model discovery failed: ${provider.error}`;
@@ -116,13 +122,20 @@
 				<article
 					class="provider-card"
 					class:selected={provider.id === selectedProvider}
-					class:ok={provider.auth.isAuthenticated}
-					class:bad={!provider.auth.isAuthenticated}
+					class:ok={provider.statusChecked && provider.auth.isAuthenticated}
+					class:bad={provider.statusChecked && !provider.auth.isAuthenticated}
 				>
 					<div class="provider-card-header">
 						<strong>{provider.displayName}</strong>
-						<span class="status-pill" class:ok={provider.auth.isAuthenticated}>
-							{provider.auth.isAuthenticated ? 'Configured' : 'Needs setup'}
+						<span
+							class="status-pill"
+							class:ok={provider.statusChecked && provider.auth.isAuthenticated}
+						>
+							{!provider.statusChecked
+								? 'Not selected'
+								: provider.auth.isAuthenticated
+									? 'Configured'
+									: 'Needs setup'}
 						</span>
 					</div>
 					<dl>
@@ -141,17 +154,9 @@
 							</div>
 						{/if}
 					</dl>
-					{#if provider.id === 'copilot' && !provider.auth.isAuthenticated}
+					{#if provider.ui.setupHint && (provider.ui.setupHintVisibility === 'always' || (provider.statusChecked && !provider.auth.isAuthenticated))}
 						<p class="muted small">
-							Run <code>copilot auth login</code> on the host, or set a per-user token in the database,
-							then reload.
-						</p>
-					{/if}
-					{#if provider.id === 'openai-compatible'}
-						<p class="muted small">
-							Configure <code>OPENAI_COMPATIBLE_BASE_URL</code> to a local or remote
-							OpenAI-compatible <code>/v1</code> endpoint. Add
-							<code>OPENAI_COMPATIBLE_API_KEY</code> only if the backend requires bearer auth.
+							{provider.ui.setupHint}
 						</p>
 					{/if}
 				</article>
@@ -187,7 +192,7 @@
 				{#if selectedModelChoice === CUSTOM_MODEL_OPTION}
 					<input
 						bind:value={customModel}
-						placeholder={selectedProvider === 'copilot' ? 'claude-sonnet-4.5' : 'model-id'}
+						placeholder={selectedProviderStatus.ui.defaultModelPlaceholder}
 						aria-label="Custom default model id"
 					/>
 				{/if}
@@ -198,7 +203,7 @@
 				<input
 					name="defaultModel"
 					value={settings.defaultModel ?? ''}
-					placeholder={selectedProvider === 'copilot' ? 'claude-sonnet-4.5' : 'model-id'}
+					placeholder={selectedProviderStatus.ui.defaultModelPlaceholder}
 				/>
 				<span class="muted small">
 					Model list unavailable{selectedProviderStatus.error
@@ -433,10 +438,5 @@
 	}
 	.small {
 		font-size: 0.85em;
-	}
-	code {
-		background: var(--code-bg);
-		padding: 0 0.25rem;
-		border-radius: var(--radius-sm);
 	}
 </style>

@@ -3,13 +3,14 @@ import { setupLocalEnv } from './helpers/env';
 
 const openMock = vi.fn();
 
-vi.mock('../src/lib/server/copilot/providers', () => ({
+vi.mock('../src/lib/server/providers', () => ({
+	getDefaultProviderId: () => 'copilot',
 	open: (...args: unknown[]) => openMock(...args)
 }));
 
 async function importPool() {
 	vi.resetModules();
-	return await import('../src/lib/server/copilot/pool');
+	return await import('../src/lib/server/runtime/pool');
 }
 
 describe('copilot session pool', () => {

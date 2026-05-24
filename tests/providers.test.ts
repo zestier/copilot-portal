@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resetConfigForTests } from '../src/lib/server/config';
+import * as settings from '../src/lib/server/db/repos/settings';
+import * as tokens from '../src/lib/server/db/repos/tokens';
 import { openAICompatibleProvider } from '../src/lib/server/copilot/openai-compatible-provider';
-import type { ProviderSession } from '../src/lib/server/copilot/provider';
+import { providerAuthToken } from '../src/lib/server/providers/auth';
+import { loadProviderStatus } from '../src/lib/server/providers/status';
+import type { ProviderSession } from '../src/lib/server/providers/provider';
 import {
 	fetchAuthStatus,
 	fetchModels,
@@ -9,17 +13,19 @@ import {
 	getProvider,
 	listProviders,
 	open
-} from '../src/lib/server/copilot/providers';
+} from '../src/lib/server/providers';
 import { setupLocalEnv } from './helpers/env';
 
 beforeEach(async () => {
 	await setupLocalEnv('portal-providers-test-');
 	delete process.env.DEFAULT_BACKEND_PROVIDER;
+	delete process.env.COPILOT_GITHUB_TOKEN;
 	resetConfigForTests();
 });
 
 afterEach(() => {
 	delete process.env.DEFAULT_BACKEND_PROVIDER;
+	delete process.env.COPILOT_GITHUB_TOKEN;
 	resetConfigForTests();
 	vi.restoreAllMocks();
 });
@@ -38,6 +44,53 @@ describe('provider registry', () => {
 		resetConfigForTests();
 
 		expect(getDefaultProviderId()).toBe('openai-compatible');
+		expect(settings.defaults().defaultProvider).toBe('openai-compatible');
+	});
+
+	it('does not probe Copilot status when another provider is the default', async () => {
+		const loader = {
+			fetchAuthStatus: vi.fn().mockResolvedValue({ isAuthenticated: true }),
+			fetchModels: vi.fn().mockResolvedValue([])
+		};
+		const copilot = getProvider('copilot');
+
+		await expect(
+			loadProviderStatus(copilot, {
+				userId: 'user-1',
+				defaultProvider: 'openai-compatible',
+				loader
+			})
+		).resolves.toMatchObject({
+			id: 'copilot',
+			statusChecked: false,
+			auth: { isAuthenticated: false }
+		});
+		expect(loader.fetchAuthStatus).not.toHaveBeenCalled();
+		expect(loader.fetchModels).not.toHaveBeenCalled();
+	});
+
+	it('resolves credentials only for providers that need them', () => {
+		const tokenSpy = vi.spyOn(tokens, 'getGithubToken');
+		process.env.COPILOT_GITHUB_TOKEN = 'fallback-token';
+		resetConfigForTests();
+
+		expect(providerAuthToken('openai-compatible', 'user-1')).toBeUndefined();
+		expect(tokenSpy).not.toHaveBeenCalled();
+
+		expect(providerAuthToken('copilot', 'user-1')).toBe('fallback-token');
+		expect(tokenSpy).toHaveBeenCalledWith('user-1');
+	});
+
+	it('uses the configured default provider when repository callers omit one', async () => {
+		process.env.DEFAULT_BACKEND_PROVIDER = 'openai-compatible';
+		resetConfigForTests();
+		const users = await import('../src/lib/server/db/repos/users');
+		const convs = await import('../src/lib/server/db/repos/conversations');
+
+		const user = users.ensureLocalUser();
+		const conv = convs.create(user.id, { title: 'default provider', workdir: '/tmp', model: null });
+
+		expect(conv.provider).toBe('openai-compatible');
 	});
 
 	it('delegates auth, model, and session calls to the requested provider', async () => {

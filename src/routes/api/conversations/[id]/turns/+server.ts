@@ -4,9 +4,9 @@ import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
 import * as settings from '$lib/server/db/repos/settings';
-import * as tokens from '$lib/server/db/repos/tokens';
 import { loadConfig } from '$lib/server/config';
-import { startTurn, getTurn } from '$lib/server/copilot/turn-runner';
+import { startTurn, getTurn } from '$lib/server/runtime/turn-runner';
+import { providerAuthToken } from '$lib/server/providers/auth';
 import { snapshot as takeSnapshot } from '$lib/server/snapshots';
 import { effectiveWorkdir } from '$lib/server/workdir';
 import { log } from '$lib/server/log';
@@ -60,7 +60,6 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 	const cfg = loadConfig();
 	const userSettings = settings.get(conv.userId) ?? settings.defaults();
-	const authToken = tokens.getGithubToken(conv.userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
 
 	const turn = await startTurn({
 		conversationId: conv.id,
@@ -74,7 +73,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			policy: userSettings.defaultPolicy,
 			mode: conv.mode,
 			approveAllTools: conv.approveAllTools,
-			authToken
+			providerAuthToken: providerAuthToken(conv.provider, conv.userId)
 		}
 	});
 

@@ -5,12 +5,14 @@
 		value = $bindable(''),
 		streaming = false,
 		inputDisabled = false,
+		placeholder = 'Message...',
 		onSend,
 		onStop
 	}: {
 		value?: string;
 		streaming?: boolean;
 		inputDisabled?: boolean;
+		placeholder?: string;
 		onSend: () => void;
 		onStop: () => void;
 	} = $props();
@@ -65,7 +67,7 @@
 			bind:value
 			onkeydown={onKeydown}
 			oninput={autoGrow}
-			placeholder="Message Copilot…"
+			{placeholder}
 			rows="1"
 			disabled={inputDisabled}
 		></textarea>

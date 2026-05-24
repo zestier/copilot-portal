@@ -1,7 +1,7 @@
 // Compatibility facade for older imports. Copilot-specific SDK code lives in
 // copilot-provider.ts behind the provider interface.
 
-import type { ProviderOpenOptions, ProviderSession } from './provider';
+import type { ProviderOpenOptions, ProviderSession } from '../providers/provider';
 import {
 	copilotProvider,
 	fetchAuthStatus,

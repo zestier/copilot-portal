@@ -76,10 +76,13 @@ export function normalizeSessionMode(raw: string | null | undefined): SessionMod
 	return raw === 'plan' || raw === 'autopilot' || raw === 'best-effort' ? raw : 'interactive';
 }
 
-export type BackendProviderId = 'copilot' | 'openai-compatible';
+export const BACKEND_PROVIDER_IDS = ['copilot', 'openai-compatible'] as const;
+export type BackendProviderId = (typeof BACKEND_PROVIDER_IDS)[number];
 
 export function normalizeBackendProvider(raw: string | null | undefined): BackendProviderId {
-	return raw === 'openai-compatible' ? raw : 'copilot';
+	return BACKEND_PROVIDER_IDS.includes(raw as BackendProviderId)
+		? (raw as BackendProviderId)
+		: 'copilot';
 }
 
 export type ProviderRuntimeFeature =
@@ -137,17 +140,16 @@ export interface ProviderCapabilities {
 		resetSessionApprovals: boolean;
 	};
 	/**
-	 * User-facing runtime capability contract. Non-Copilot providers must mark
-	 * unsupported Copilot SDK features explicitly so API clients and UI copy do
-	 * not imply unavailable runtime behavior is active.
+	 * User-facing runtime capability contract. Providers must mark unsupported
+	 * runtime features explicitly so API clients and UI copy do not imply
+	 * unavailable behavior is active.
 	 */
 	features: ProviderRuntimeFeatureMap;
 	/**
-	 * Copilot SDK features the portal can consume when present. Alternative
-	 * providers, including OpenAI-compatible backends, may leave these false and
-	 * still satisfy the core PortalEvent stream contract.
+	 * Optional event families the portal can consume when present. Providers may
+	 * leave these false and still satisfy the core PortalEvent stream contract.
 	 */
-	optionalCopilotFeatures: {
+	optionalRuntimeFeatures: {
 		infiniteSessionMetadata: boolean;
 		permissionCallbacks: boolean;
 		userInputCallbacks: boolean;

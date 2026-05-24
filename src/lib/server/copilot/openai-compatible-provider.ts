@@ -14,7 +14,7 @@ import type {
 	ProviderModelInfo,
 	ProviderOpenOptions,
 	ProviderSession
-} from './provider';
+} from '../providers/provider';
 
 interface OpenAICompatibleConfig {
 	id: Extract<BackendProviderId, 'openai-compatible'>;
@@ -95,6 +95,16 @@ const displayName = 'OpenAI compatible';
 export const openAICompatibleProvider: ModelBackendProvider = {
 	id: providerId,
 	displayName,
+	ui: {
+		chatPlaceholder: `Message ${displayName}...`,
+		defaultModelPlaceholder: 'model-id',
+		setupHint:
+			'Configure OPENAI_COMPATIBLE_BASE_URL to a local or remote OpenAI-compatible /v1 endpoint. Add OPENAI_COMPATIBLE_API_KEY only if the backend requires bearer auth.',
+		setupHintVisibility: 'always'
+	},
+	status: {
+		probe: 'always'
+	},
 	capabilities: {
 		authStatus: true,
 		modelList: true,
@@ -164,7 +174,7 @@ export const openAICompatibleProvider: ModelBackendProvider = {
 					'OpenAI-compatible sessions do not support Copilot elicitation callbacks; no elicitation dialogs are raised.'
 			}
 		},
-		optionalCopilotFeatures: {
+		optionalRuntimeFeatures: {
 			infiniteSessionMetadata: false,
 			permissionCallbacks: true,
 			userInputCallbacks: false,

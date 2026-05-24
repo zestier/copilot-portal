@@ -28,7 +28,7 @@ test('auto-mode-switch dialog can be declined and the turn completes', async ({
 	const id = await createConversation(request);
 	await page.goto(`/conversations/${id}`);
 
-	const composer = page.getByPlaceholder(/Message Copilot/);
+	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
 	await composer.click();
 	await composer.fill('please @trigger-auto-mode-switch now');
 	await composer.press('Enter');
@@ -47,7 +47,7 @@ test('exit-plan-mode dialog approves and unblocks the turn', async ({ page, requ
 	const id = await createConversation(request);
 	await page.goto(`/conversations/${id}`);
 
-	const composer = page.getByPlaceholder(/Message Copilot/);
+	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
 	await composer.fill('go @trigger-exit-plan-mode');
 	await composer.press('Enter');
 
@@ -70,7 +70,7 @@ test('elicitation form posts the user-supplied values', async ({ page, request }
 	const id = await createConversation(request);
 	await page.goto(`/conversations/${id}`);
 
-	const composer = page.getByPlaceholder(/Message Copilot/);
+	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
 	await composer.fill('hi @trigger-elicitation please');
 	await composer.press('Enter');
 
@@ -95,7 +95,7 @@ test('permission flow still works via the new interactive endpoint', async ({ pa
 	const id = await createConversation(request);
 	await page.goto(`/conversations/${id}`);
 
-	const composer = page.getByPlaceholder(/Message Copilot/);
+	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
 	await composer.fill('run @trigger-permission for me');
 	await composer.press('Enter');
 

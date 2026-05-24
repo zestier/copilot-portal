@@ -21,7 +21,7 @@ test('streamed assistant reply (stubbed) appears and persists across reloads', a
 	const id = await createConversation(request);
 	await page.goto(`/conversations/${id}`);
 
-	const composer = page.getByPlaceholder(/Message Copilot/);
+	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
 	await composer.click();
 	await composer.fill('hello world');
 	await composer.press('Enter');

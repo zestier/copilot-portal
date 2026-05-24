@@ -22,7 +22,7 @@ import { PORTAL_PRELUDE } from './portal-prelude';
 import { isStubMode } from './bridge-stub';
 import { AsyncQueue } from './async-queue';
 import { snapshot as takeSnapshot } from '../snapshots';
-import type { ProviderOpenOptions } from './providers';
+import type { ProviderOpenOptions } from '../providers';
 import type { PortalEvent } from '$lib/types';
 
 interface PendingTool {

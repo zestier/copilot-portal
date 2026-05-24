@@ -15,7 +15,7 @@ async function freshImports() {
 	await setupLocalEnv();
 	const users = await import('../src/lib/server/db/repos/users');
 	const convs = await import('../src/lib/server/db/repos/conversations');
-	const turnRunner = await import('../src/lib/server/copilot/turn-runner');
+	const turnRunner = await import('../src/lib/server/runtime/turn-runner');
 	return { users, convs, turnRunner };
 }
 

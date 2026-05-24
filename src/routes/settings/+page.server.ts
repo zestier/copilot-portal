@@ -2,21 +2,25 @@ import { redirect, fail } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { PageServerLoad, Actions } from './$types';
 import * as settings from '$lib/server/db/repos/settings';
-import * as tokens from '$lib/server/db/repos/tokens';
 import {
 	fetchAuthStatus,
 	fetchModels,
 	getDefaultProviderId,
 	listProviders
-} from '$lib/server/copilot/providers';
+} from '$lib/server/providers';
+import {
+	loadProviderStatus,
+	shouldProbeProviderStatus,
+	type ProviderStatusSnapshot
+} from '$lib/server/providers/status';
+import { providerAuthToken } from '$lib/server/providers/auth';
 import { loadConfig } from '$lib/server/config';
 import { getDeployMetadata } from '$lib/server/deploy';
 import { log } from '$lib/server/log';
 import {
 	normalizeBackendProvider,
-	type BackendProviderId,
+	BACKEND_PROVIDER_IDS,
 	type PermissionPolicy,
-	type ProviderCapabilities,
 	type SessionMode,
 	type UserSettings
 } from '$lib/types';
@@ -27,64 +31,48 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.userId) throw redirect(302, '/login');
 	const userId = locals.userId;
 	const cfg = loadConfig();
-	const authToken = tokens.getGithubToken(userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
+	const currentSettings = settings.get(userId) ?? settings.defaults();
+	const defaultProvider = currentSettings.defaultProvider;
 
 	// Garbage-collect expired grants on load so the management table
 	// doesn't show TTL'd rows the matcher is already ignoring.
 	const purged = settings.pruneExpiredGrants();
 	if (purged > 0) log.info('settings.grants_pruned', { count: purged });
 
-	type ProviderStatus = {
-		id: BackendProviderId;
-		displayName: string;
-		auth: { isAuthenticated: boolean; authType?: string; login?: string; statusMessage?: string };
-		models: { id: string; name: string; maxContextWindowTokens?: number }[];
-		capabilities: ProviderCapabilities;
-		error?: string;
-	};
 	const providers = await Promise.all(
-		listProviders().map(async (provider): Promise<ProviderStatus> => {
+		listProviders().map(async (provider): Promise<ProviderStatusSnapshot> => {
 			try {
-				const [auth, models] = await Promise.all([
-					fetchAuthStatus(userId, authToken, provider.id),
-					fetchModels(userId, authToken, provider.id)
-				]);
-				return {
-					id: provider.id,
-					displayName: provider.displayName,
-					auth: {
-						isAuthenticated: auth.isAuthenticated,
-						authType: auth.authType,
-						login: auth.login,
-						statusMessage: auth.statusMessage
-					},
-					models: models.map((m) => ({
-						id: m.id,
-						name: m.name,
-						maxContextWindowTokens: m.capabilities?.limits?.max_context_window_tokens
-					})),
-					capabilities: provider.capabilities
-				};
+				return await loadProviderStatus(provider, {
+					userId,
+					providerAuthToken: shouldProbeProviderStatus(provider, defaultProvider)
+						? providerAuthToken(provider.id, userId)
+						: undefined,
+					defaultProvider,
+					loader: { fetchAuthStatus, fetchModels }
+				});
 			} catch (e) {
 				log.warn('settings.provider_status_failed', { provider: provider.id, err: String(e) });
 				return {
 					id: provider.id,
 					displayName: provider.displayName,
+					ui: provider.ui,
 					auth: { isAuthenticated: false, statusMessage: String(e) },
 					models: [],
 					capabilities: provider.capabilities,
+					statusChecked: true,
 					error: e instanceof Error ? e.message : String(e)
 				};
 			}
 		})
 	);
-	const copilot = providers.find((provider) => provider.id === 'copilot') ?? providers[0];
+	const defaultProviderStatus =
+		providers.find((provider) => provider.id === defaultProvider) ?? providers[0];
 
 	return {
-		settings: settings.get(userId) ?? settings.defaults(),
+		settings: currentSettings,
 		defaultProvider: getDefaultProviderId(),
 		providers,
-		copilot,
+		defaultProviderStatus,
 		recentDecisions: settings.listRecentDecisionsForUser(userId, 25),
 		grants: markSeedGrants(settings.listGrantsForUser(userId)),
 		enableRedeploy: cfg.ENABLE_REDEPLOY,
@@ -93,7 +81,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 const SaveSchema = z.object({
-	defaultProvider: z.enum(['copilot', 'openai-compatible']),
+	defaultProvider: z.enum(BACKEND_PROVIDER_IDS),
 	defaultModel: z.string().optional(),
 	defaultWorkdir: z.string().optional(),
 	defaultConversationMode: z.enum(['interactive', 'plan', 'autopilot', 'best-effort']),

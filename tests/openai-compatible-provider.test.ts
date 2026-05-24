@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resetConfigForTests } from '../src/lib/server/config';
 import { openAICompatibleProvider } from '../src/lib/server/copilot/openai-compatible-provider';
-import type { ProviderOpenOptions } from '../src/lib/server/copilot/provider';
+import type { ProviderOpenOptions } from '../src/lib/server/providers/provider';
 import type { PortalEvent } from '../src/lib/types';
 import { setupLocalEnv } from './helpers/env';
 
@@ -125,7 +125,7 @@ describe('openAICompatibleProvider', () => {
 			planExit: { supported: false, behavior: 'unsupported' },
 			elicitation: { supported: false, behavior: 'unsupported' }
 		});
-		expect(openAICompatibleProvider.capabilities.optionalCopilotFeatures).toMatchObject({
+		expect(openAICompatibleProvider.capabilities.optionalRuntimeFeatures).toMatchObject({
 			contextWindowEvents: false,
 			contextCompactionEvents: false,
 			subagentLifecycleEvents: false,

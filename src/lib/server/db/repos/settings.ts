@@ -1,5 +1,6 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
+import { loadConfig } from '../../config';
 import {
 	normalizeBackendProvider,
 	normalizeSessionMode,
@@ -48,7 +49,7 @@ export function get(userId: string): UserSettings | null {
  */
 export function defaults(): UserSettings {
 	return {
-		defaultProvider: 'copilot',
+		defaultProvider: normalizeBackendProvider(loadConfig().DEFAULT_BACKEND_PROVIDER),
 		defaultModel: null,
 		defaultWorkdir: null,
 		defaultConversationMode: 'interactive',

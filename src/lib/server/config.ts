@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BACKEND_PROVIDER_IDS } from '$lib/types';
 
 const optionalUrl = z
 	.string()
@@ -45,7 +46,7 @@ const Schema = z
 		SHARED_SECRET: z.string().optional(),
 
 		COPILOT_GITHUB_TOKEN: z.string().optional(),
-		DEFAULT_BACKEND_PROVIDER: z.enum(['copilot', 'openai-compatible']).default('copilot'),
+		DEFAULT_BACKEND_PROVIDER: z.enum(BACKEND_PROVIDER_IDS).default('copilot'),
 		DEFAULT_MODEL: z.string().default('claude-sonnet-4.5'),
 		OPENAI_COMPATIBLE_BASE_URL: optionalUrl,
 		OPENAI_COMPATIBLE_API_KEY: z.string().optional(),

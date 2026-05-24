@@ -4,10 +4,10 @@ import type { RequestHandler } from './$types';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 import * as messages from '$lib/server/db/repos/messages';
 import * as settings from '$lib/server/db/repos/settings';
-import * as tokens from '$lib/server/db/repos/tokens';
 import { loadConfig } from '$lib/server/config';
 import { effectiveWorkdir } from '$lib/server/workdir';
-import { getTurn, startTurn } from '$lib/server/copilot/turn-runner';
+import { getTurn, startTurn } from '$lib/server/runtime/turn-runner';
+import { providerAuthToken } from '$lib/server/providers/auth';
 import { parseBody } from '$lib/server/validate';
 import { argsHash } from '$lib/server/tool-invocation';
 
@@ -70,7 +70,6 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 	const cfg = loadConfig();
 	const userSettings = settings.get(conv.userId) ?? settings.defaults();
-	const authToken = tokens.getGithubToken(conv.userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
 	const prompt = buildRerunPrompt(original.tool, original.argsJson);
 	messages.append(conv.id, {
 		role: 'user',
@@ -89,7 +88,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			policy: userSettings.defaultPolicy,
 			mode: conv.mode,
 			approveAllTools: conv.approveAllTools,
-			authToken
+			providerAuthToken: providerAuthToken(conv.provider, conv.userId)
 		}
 	});
 

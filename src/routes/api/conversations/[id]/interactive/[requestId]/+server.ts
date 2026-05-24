@@ -1,7 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
-import * as interactive from '$lib/server/copilot/interactive-requests';
+import * as interactive from '$lib/server/runtime/interactive-requests';
 import { parseBody } from '$lib/server/validate';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 import type { InteractiveResponse } from '$lib/types';

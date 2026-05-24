@@ -58,8 +58,14 @@
 			<p class="eyebrow">Portal preferences</p>
 			<h1>Settings</h1>
 		</div>
-		<span class="auth-pill" class:ok={data.copilot.auth.isAuthenticated}>
-			Copilot: {authLabel(data.copilot.auth)}
+		<span
+			class="auth-pill"
+			class:ok={data.defaultProviderStatus.statusChecked &&
+				data.defaultProviderStatus.auth.isAuthenticated}
+		>
+			{data.defaultProviderStatus.displayName}: {data.defaultProviderStatus.statusChecked
+				? authLabel(data.defaultProviderStatus.auth)
+				: 'not selected'}
 		</span>
 	</header>
 

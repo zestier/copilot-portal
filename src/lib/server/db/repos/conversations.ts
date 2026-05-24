@@ -1,5 +1,6 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
+import { loadConfig } from '../../config';
 import {
 	normalizeBackendProvider,
 	normalizeSessionMode,
@@ -106,7 +107,8 @@ export function create(userId: string, input: CreateInput): Conversation {
 	const forkConv = input.forkedFromConversationId ?? null;
 	const forkMsg = input.forkedFromMessageId ?? null;
 	const mode = input.mode ?? 'interactive';
-	const provider = input.provider ?? 'copilot';
+	const provider =
+		input.provider ?? normalizeBackendProvider(loadConfig().DEFAULT_BACKEND_PROVIDER);
 	getDb()
 		.prepare(
 			`INSERT INTO conversations(

@@ -29,10 +29,14 @@
 		initialActiveTurnId = null,
 		initialPendingInteractive = [],
 		initialComposer = '',
-		providerCapabilities
+		providerCapabilities,
+		providerDisplayName,
+		chatPlaceholder
 	}: {
 		conversation: Conversation;
 		providerCapabilities: ProviderCapabilities;
+		providerDisplayName: string;
+		chatPlaceholder: string;
 		initialMessages: Message[];
 		initialUsage?: ConversationUsage | null;
 		parent?: {
@@ -602,6 +606,7 @@
 		{title}
 		{conversation}
 		{providerCapabilities}
+		{providerDisplayName}
 		{parent}
 		{usage}
 		{recentCompaction}
@@ -663,6 +668,7 @@
 		bind:value={composer}
 		{streaming}
 		inputDisabled={streaming && pendingInteractive.length === 0}
+		placeholder={chatPlaceholder}
 		onSend={send}
 		onStop={stop}
 	/>

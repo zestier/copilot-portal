@@ -590,7 +590,7 @@ describe('bridge.open() session mode and permissions', () => {
 
 	it('raises a one-time prompt for shell git escalation even in best-effort mode', async () => {
 		const { open } = await importBridge();
-		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const interactive = await import('../src/lib/server/runtime/interactive-requests');
 		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
 		const user = ensureLocalUser();
 		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
@@ -633,7 +633,7 @@ describe('bridge.open() session mode and permissions', () => {
 
 	it('recognizes top-level forcePermissionPrompt for escalation', async () => {
 		const { open } = await importBridge();
-		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const interactive = await import('../src/lib/server/runtime/interactive-requests');
 		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
 		const user = ensureLocalUser();
 		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
@@ -674,7 +674,7 @@ describe('bridge.open() session mode and permissions', () => {
 
 	it('recognizes forcePermissionPrompt from persisted tool args via toolCallId', async () => {
 		const { open } = await importBridge();
-		const interactive = await import('../src/lib/server/copilot/interactive-requests');
+		const interactive = await import('../src/lib/server/runtime/interactive-requests');
 		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
 		const messages = await import('../src/lib/server/db/repos/messages');
 		const convs = await import('../src/lib/server/db/repos/conversations');
@@ -912,14 +912,24 @@ describe('bridge.open() per-user CopilotClient caching', () => {
 	it('starts a separate CopilotClient for each distinct userId', async () => {
 		const { open } = await importBridge();
 
-		await open({ ...baseOpts, conversationId: 'conv-a', userId: 'alice', authToken: 'tok-A' });
-		await open({ ...baseOpts, conversationId: 'conv-b', userId: 'bob', authToken: 'tok-B' });
+		await open({
+			...baseOpts,
+			conversationId: 'conv-a',
+			userId: 'alice',
+			providerAuthToken: 'tok-A'
+		});
+		await open({
+			...baseOpts,
+			conversationId: 'conv-b',
+			userId: 'bob',
+			providerAuthToken: 'tok-B'
+		});
 
 		// One construction per portal user. This is the guard against the
 		// "first-logged-in-user's token serves every other user" bug.
 		expect(clientCtor).toHaveBeenCalledTimes(2);
 		// Each construction sees that user's own token. The bridge wires
-		// gitHubToken from opts.authToken, so we can assert the SDK was
+		// gitHubToken from opts.providerAuthToken, so we can assert the SDK was
 		// handed the right credentials per user.
 		const firstArgs = clientCtor.mock.calls[0][0] as { gitHubToken?: string };
 		const secondArgs = clientCtor.mock.calls[1][0] as { gitHubToken?: string };

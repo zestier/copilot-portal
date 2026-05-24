@@ -758,7 +758,7 @@
 		<div class="head">Switch to auto mode?</div>
 		<div class="body">
 			<p>
-				Copilot hit a rate limit
+				The model provider hit a rate limit
 				{#if request.errorCode}<span class="muted">({request.errorCode})</span>{/if}
 				and is offering to switch models so this turn can continue.
 				{#if request.retryAfterSeconds}

@@ -2,7 +2,12 @@
 
 import { loadConfig } from '../config';
 import { log } from '../log';
-import { open, type ProviderOpenOptions, type ProviderSession } from './providers';
+import {
+	getDefaultProviderId,
+	open,
+	type ProviderOpenOptions,
+	type ProviderSession
+} from '../providers';
 
 interface Entry {
 	session: ProviderSession;
@@ -40,9 +45,9 @@ function setReaperTimer(t: NodeJS.Timeout | null) {
 
 export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSession> {
 	const existing = sessions.get(opts.conversationId);
-	const requestedProvider = opts.provider ?? 'copilot';
+	const requestedProvider = opts.provider ?? getDefaultProviderId();
 	if (existing) {
-		const cachedProvider = existing.session.provider ?? 'copilot';
+		const cachedProvider = existing.session.provider ?? getDefaultProviderId();
 		if (
 			existing.session.workingDirectory === opts.workingDirectory &&
 			cachedProvider === requestedProvider

@@ -11,7 +11,6 @@ export type FormResult = {
 export type SettingsTab = 'general' | 'permissions' | 'activity' | 'update';
 
 export type SettingsData = PageData['settings'];
-export type CopilotStatus = PageData['copilot'];
 export type ProviderStatus = PageData['providers'][number];
 export type PermissionGrant = PageData['grants'][number];
 export type PermissionDecision = PageData['recentDecisions'][number];
@@ -29,7 +28,7 @@ export function formatContextWindow(tokens: number | undefined): string {
 	return `${tokens} ctx`;
 }
 
-export function authLabel(a: CopilotStatus['auth']): string {
+export function authLabel(a: ProviderStatus['auth']): string {
 	if (!a.isAuthenticated) return 'Not signed in';
 	const who = a.login ? `@${a.login}` : 'signed in';
 	const via = a.authType ? ` via ${a.authType}` : '';

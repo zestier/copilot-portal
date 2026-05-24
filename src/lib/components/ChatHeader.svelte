@@ -12,6 +12,7 @@
 		title,
 		conversation,
 		providerCapabilities,
+		providerDisplayName,
 		parent = null,
 		usage = null,
 		recentCompaction = null,
@@ -22,6 +23,7 @@
 		title: string;
 		conversation: Conversation;
 		providerCapabilities: ProviderCapabilities;
+		providerDisplayName: string;
 		parent?: {
 			id: string;
 			title: string;
@@ -66,11 +68,6 @@
 			hint: 'Autopilot-style execution, but permission prompts auto-reject with feedback.'
 		}
 	];
-
-	const PROVIDER_LABELS: Record<Conversation['provider'], string> = {
-		copilot: 'GitHub Copilot',
-		'openai-compatible': 'OpenAI compatible'
-	};
 
 	const modeFeature = $derived(providerCapabilities.features.modes);
 	const approveAllFeature = $derived(providerCapabilities.features.approveAll);
@@ -193,7 +190,7 @@
 			<div class="details-body">
 				<dl class="header-meta">
 					<dt>Provider</dt>
-					<dd>{PROVIDER_LABELS[conversation.provider]}</dd>
+					<dd>{providerDisplayName}</dd>
 					{#if conversation.model}
 						<dt>Model</dt>
 						<dd>{conversation.model}</dd>

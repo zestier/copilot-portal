@@ -4,8 +4,8 @@ import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as settings from '$lib/server/db/repos/settings';
 import { loadConfig } from '$lib/server/config';
-import { getDefaultProviderId } from '$lib/server/copilot/providers';
-import { normalizeBackendProvider } from '$lib/types';
+import { getDefaultProviderId } from '$lib/server/providers';
+import { BACKEND_PROVIDER_IDS, normalizeBackendProvider } from '$lib/types';
 import { projectRoot, resolveAndValidate } from '$lib/server/workdir';
 import { parseBody } from '$lib/server/validate';
 import { requireUserId } from '$lib/server/auth/require';
@@ -18,7 +18,7 @@ export const GET: RequestHandler = ({ locals, url }) => {
 
 const CreateBody = z.object({
 	title: z.string().min(1).max(200).default('New chat'),
-	provider: z.enum(['copilot', 'openai-compatible']).optional(),
+	provider: z.enum(BACKEND_PROVIDER_IDS).optional(),
 	model: z.string().min(1).optional(),
 	workdir: z.string().min(1).optional()
 });

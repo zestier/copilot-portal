@@ -71,6 +71,8 @@
 		<Chat
 			conversation={data.conversation}
 			providerCapabilities={data.providerCapabilities}
+			providerDisplayName={data.providerDisplayName}
+			chatPlaceholder={data.chatPlaceholder}
 			initialMessages={data.messages}
 			initialUsage={data.contextUsage}
 			parent={data.parent}

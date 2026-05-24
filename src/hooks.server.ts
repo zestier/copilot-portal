@@ -7,7 +7,7 @@ import * as settings from '$lib/server/db/repos/settings';
 import { read as readSession, generateCsrfToken } from '$lib/server/auth/session';
 import { perWindow } from '$lib/server/rate-limit';
 import { apiErrorResponse } from '$lib/server/http';
-import { startIdleReaper } from '$lib/server/copilot/pool';
+import { startIdleReaper } from '$lib/server/runtime/pool';
 import * as messages from '$lib/server/db/repos/messages';
 
 // One-time bootstrap.

@@ -16,8 +16,10 @@ import type {
 	ProviderModelInfo,
 	ProviderOpenOptions,
 	ProviderSession
-} from './provider';
+} from '../providers/provider';
 import * as messagesRepo from '../db/repos/messages';
+import * as tokens from '../db/repos/tokens';
+import { loadConfig } from '../config';
 import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
 import { buildGitTools } from '../tools/git';
@@ -34,7 +36,10 @@ import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 const clients = new Map<string, CopilotClient>();
 const starting = new Map<string, Promise<CopilotClient>>();
 
-export async function getClient(userId: string, authToken?: string): Promise<CopilotClient> {
+export async function getClient(
+	userId: string,
+	providerAuthToken?: string
+): Promise<CopilotClient> {
 	const existing = clients.get(userId);
 	if (existing) return existing;
 	const inflight = starting.get(userId);
@@ -49,7 +54,7 @@ export async function getClient(userId: string, authToken?: string): Promise<Cop
 						useStdio: true,
 						autoStart: false,
 						useLoggedInUser: true,
-						gitHubToken: authToken
+						gitHubToken: providerAuthToken
 					});
 		await client.start();
 		clients.set(userId, client);
@@ -84,21 +89,21 @@ const MODELS_TTL_MS = 5 * 60_000;
 
 export async function fetchAuthStatus(
 	userId: string,
-	authToken?: string
+	providerAuthToken?: string
 ): Promise<ProviderAuthStatus> {
-	const client = await getClient(userId, authToken);
+	const client = await getClient(userId, providerAuthToken);
 	return client.getAuthStatus();
 }
 
 export async function fetchModels(
 	userId: string,
-	authToken?: string
+	providerAuthToken?: string
 ): Promise<ProviderModelInfo[]> {
 	const cached = modelsCache.get(userId);
 	if (cached && Date.now() - cached.at < MODELS_TTL_MS) {
 		return cached.models;
 	}
-	const client = await getClient(userId, authToken);
+	const client = await getClient(userId, providerAuthToken);
 	const models = await client.listModels();
 	modelsCache.set(userId, { at: Date.now(), models });
 	return models;
@@ -131,7 +136,7 @@ interface SdkSession {
 }
 
 export async function open(opts: BridgeOpenOptions): Promise<ConversationSession> {
-	const client = await getClient(opts.userId, opts.authToken);
+	const client = await getClient(opts.userId, opts.providerAuthToken);
 
 	let activeQueue: AsyncQueue<PortalEvent> | null = null;
 
@@ -360,6 +365,17 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 export const copilotProvider: ModelBackendProvider = {
 	id: 'copilot',
 	displayName: 'GitHub Copilot',
+	ui: {
+		chatPlaceholder: 'Message GitHub Copilot...',
+		defaultModelPlaceholder: 'claude-sonnet-4.5',
+		setupHint:
+			'Run `copilot auth login` on the host, or set a per-user token in the database, then reload.',
+		setupHintVisibility: 'when-unauthenticated'
+	},
+	status: {
+		probe: 'when-default',
+		skippedStatusMessage: 'Not checked because GitHub Copilot is not the default provider.'
+	},
 	capabilities: {
 		authStatus: true,
 		modelList: true,
@@ -422,7 +438,7 @@ export const copilotProvider: ModelBackendProvider = {
 				description: 'Copilot elicitation callbacks are rendered as interactive requests.'
 			}
 		},
-		optionalCopilotFeatures: {
+		optionalRuntimeFeatures: {
 			infiniteSessionMetadata: true,
 			permissionCallbacks: true,
 			userInputCallbacks: true,
@@ -435,6 +451,10 @@ export const copilotProvider: ModelBackendProvider = {
 			reasoningEvents: true,
 			subagentLifecycleEvents: true
 		}
+	},
+	resolveAuthToken(userId: string): string | undefined {
+		const cfg = loadConfig();
+		return tokens.getGithubToken(userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
 	},
 	fetchAuthStatus,
 	listModels: fetchModels,

@@ -4,9 +4,9 @@ import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
 import * as tickets from '$lib/server/db/repos/tickets';
 import * as usage from '$lib/server/db/repos/usage';
-import { getTurn } from '$lib/server/copilot/turn-runner';
-import { listForConversation as listPendingInteractive } from '$lib/server/copilot/interactive-requests';
-import { getProvider } from '$lib/server/copilot/providers';
+import { getTurn } from '$lib/server/runtime/turn-runner';
+import { listForConversation as listPendingInteractive } from '$lib/server/runtime/interactive-requests';
+import { getProvider } from '$lib/server/providers';
 import { ticketWorkspaceFromConversation } from '$lib/server/ticket-workspace';
 import { isTicketChatMode, ticketChatPrompt } from '$lib/tickets/chat';
 
@@ -38,6 +38,7 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 	// page load shows them immediately, without waiting for the SSE stream
 	// to (re-)emit the `interactive.request` event.
 	const pendingInteractive = listPendingInteractive(conv.id);
+	const provider = getProvider(conv.provider);
 
 	// If this conversation was forked, surface parent info for a
 	// breadcrumb. Resolves silently to null if the parent was deleted or
@@ -68,7 +69,9 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 
 	return {
 		conversation: conv,
-		providerCapabilities: getProvider(conv.provider).capabilities,
+		providerCapabilities: provider.capabilities,
+		providerDisplayName: provider.displayName,
+		chatPlaceholder: provider.ui.chatPlaceholder,
 		messages: msgs,
 		contextUsage,
 		parent,

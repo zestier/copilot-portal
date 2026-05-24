@@ -40,7 +40,7 @@ test('fork by editing a user message produces a new conversation with the edited
 	// Drive the first turn through the UI so the server captures the
 	// pre-snapshot (the POST /turns endpoint is what calls snapshot()).
 	await page.goto(`/conversations/${sourceId}`);
-	const composer = page.getByPlaceholder(/Message Copilot/);
+	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
 	await composer.click();
 	await composer.fill('original prompt');
 	await composer.press('Enter');
@@ -94,7 +94,7 @@ test('retry from an assistant message clones up to it without a new user prompt'
 	const sourceId = created.conversation.id as string;
 
 	await page.goto(`/conversations/${sourceId}`);
-	const composer = page.getByPlaceholder(/Message Copilot/);
+	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
 	await composer.click();
 	await composer.fill('first');
 	await composer.press('Enter');
