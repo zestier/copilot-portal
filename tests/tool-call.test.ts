@@ -147,7 +147,6 @@ describe('shouldRenderToolResultAsMarkdown', () => {
 			'exit_plan_mode',
 			'read_agent',
 			'report_intent',
-			'request_mode_switch',
 			'task_complete'
 		]) {
 			expect(shouldRenderToolResultAsMarkdown(tool)).toBe(true);

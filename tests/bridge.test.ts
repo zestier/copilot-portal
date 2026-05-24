@@ -245,10 +245,6 @@ describe('bridge.open() session mode and permissions', () => {
 				expect.objectContaining({
 					name: 'permission_capabilities',
 					description: expect.stringContaining('allowed alternatives')
-				}),
-				expect.objectContaining({
-					name: 'request_mode_switch',
-					description: expect.stringContaining('interactive mode')
 				})
 			])
 		);
@@ -307,7 +303,6 @@ describe('bridge.open() session mode and permissions', () => {
 			}>;
 			escalation: {
 				forcePermissionPrompt: { supported: boolean };
-				requestModeSwitch: { supported: boolean };
 			};
 		};
 
@@ -315,8 +310,7 @@ describe('bridge.open() session mode and permissions', () => {
 			mode: 'best-effort',
 			bestEffort: true,
 			escalation: {
-				forcePermissionPrompt: { supported: true },
-				requestModeSwitch: { supported: true }
+				forcePermissionPrompt: { supported: true }
 			}
 		});
 		expect(response.capabilities).toEqual([
@@ -428,11 +422,6 @@ describe('bridge.open() session mode and permissions', () => {
 		);
 		expect(result).toEqual(
 			expect.objectContaining({
-				feedback: expect.stringContaining('request_mode_switch')
-			})
-		);
-		expect(result).toEqual(
-			expect.objectContaining({
 				feedback: expect.stringContaining('forcePermissionPrompt')
 			})
 		);
@@ -498,7 +487,6 @@ describe('bridge.open() session mode and permissions', () => {
 			expect(kindFeedback).toContain(c.expectedHint);
 			expect(kindFeedback).toContain('permission_capabilities');
 			expect(kindFeedback).toContain('forcePermissionPrompt');
-			expect(kindFeedback).toContain('request_mode_switch');
 			expect(kindFeedback).not.toContain(c.forbiddenDetail);
 		}
 	});
@@ -748,101 +736,6 @@ describe('bridge.open() session mode and permissions', () => {
 		});
 		ac.abort();
 		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
-	});
-
-	it('does not auto-deny the request_mode_switch tool in best-effort mode', async () => {
-		const { open } = await importBridge();
-		const interactive = await import('../src/lib/server/copilot/interactive-requests');
-		const session = await open({ ...baseOpts, mode: 'best-effort' });
-		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
-			req: unknown
-		) => Promise<unknown>;
-
-		sdkSessionStub.send.mockReset().mockImplementation(async () => {
-			await Promise.resolve();
-			void onPermissionRequest({
-				kind: 'custom-tool',
-				toolName: 'request_mode_switch',
-				toolDescription:
-					'Request switching this conversation to interactive mode when blocked by permissions.',
-				args: { mode: 'interactive', reason: 'Need extra permission to continue.' }
-			});
-			return 'msg-id';
-		});
-
-		const ac = new AbortController();
-		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
-		const first = await iter.next();
-		expect(first.value).toMatchObject({
-			type: 'interactive.request',
-			request: {
-				kind: 'permission',
-				tool: 'request_mode_switch',
-				permissionKind: 'custom-tool',
-				canPersistDecision: false
-			}
-		});
-		ac.abort();
-		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
-	});
-
-	it('always prompts request_mode_switch even when approve-all is enabled', async () => {
-		const { open } = await importBridge();
-		const interactive = await import('../src/lib/server/copilot/interactive-requests');
-		const session = await open({ ...baseOpts, approveAllTools: true });
-		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
-			req: unknown
-		) => Promise<unknown>;
-
-		sdkSessionStub.send.mockReset().mockImplementation(async () => {
-			await Promise.resolve();
-			void onPermissionRequest({
-				kind: 'custom-tool',
-				toolName: 'request_mode_switch',
-				toolDescription:
-					'Request switching this conversation to interactive mode when blocked by permissions.',
-				args: { mode: 'interactive', reason: 'Need extra permission to continue.' }
-			});
-			return 'msg-id';
-		});
-
-		const ac = new AbortController();
-		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
-		const first = await iter.next();
-		expect(first.value).toMatchObject({
-			type: 'interactive.request',
-			request: {
-				kind: 'permission',
-				tool: 'request_mode_switch',
-				permissionKind: 'custom-tool',
-				canPersistDecision: false
-			}
-		});
-		ac.abort();
-		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
-	});
-
-	it('switches to interactive mode when request_mode_switch runs', async () => {
-		const { open } = await importBridge();
-		await open({ ...baseOpts, mode: 'best-effort' });
-
-		const tools = clientStub.createSession.mock.calls[0][0].tools as Array<{
-			name: string;
-			handler: (args: unknown) => Promise<unknown>;
-		}>;
-		const tool = tools.find((t) => t.name === 'request_mode_switch');
-		expect(tool).toBeTruthy();
-		sdkSessionStub.rpc.mode.set.mockClear();
-
-		const result = await tool!.handler({
-			mode: 'interactive',
-			reason: 'Need to request an additional permission.'
-		});
-
-		expect(sdkSessionStub.rpc.mode.set).toHaveBeenCalledWith({ mode: 'interactive' });
-		expect(result).toBe(
-			'Switched conversation to interactive mode. Reason: Need to request an additional permission.'
-		);
 	});
 });
 

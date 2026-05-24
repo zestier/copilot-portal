@@ -317,13 +317,13 @@ describe('openAICompatibleProvider', () => {
 		});
 	});
 
-	it('emits and enforces permission callbacks before running portal tools', async () => {
+	it('enforces permission callbacks before running portal tools', async () => {
 		const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
 			void _url;
 			void _init;
 			if (fetchMock.mock.calls.length === 1) {
 				return sseResponse([
-					'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_prompted","type":"function","function":{"name":"request_mode_switch","arguments":"{\\"mode\\":\\"interactive\\",\\"reason\\":\\"Need permission prompt coverage\\"}"}}]}}]}\n\n',
+					'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_prompted","type":"function","function":{"name":"permission_capabilities","arguments":"{}"}}]}}]}\n\n',
 					'data: [DONE]\n\n'
 				]);
 			}
@@ -333,8 +333,16 @@ describe('openAICompatibleProvider', () => {
 			]);
 		});
 		vi.stubGlobal('fetch', fetchMock);
-		const { resolve } = await import('../src/lib/server/copilot/interactive-requests');
-		const opts = await persistedOpts();
+		const opts = await persistedOpts({ policy: 'deny-all' });
+		const settings = await import('../src/lib/server/db/repos/settings');
+		settings.addGrant({
+			userId: opts.userId,
+			conversationId: opts.conversationId,
+			tool: 'permission_capabilities',
+			permissionKind: 'custom-tool',
+			scope: { kind: 'any' },
+			decision: 'deny'
+		});
 		const session = await openAICompatibleProvider.openSession(opts);
 		const iter = session
 			.send('status please', new AbortController().signal)
@@ -344,36 +352,13 @@ describe('openAICompatibleProvider', () => {
 		expect((await iter.next()).value).toMatchObject({
 			type: 'tool.call',
 			toolCallId: 'call_prompted',
-			tool: 'request_mode_switch'
-		});
-		const requestEvent = (await iter.next()).value as Extract<
-			PortalEvent,
-			{ type: 'interactive.request' }
-		>;
-		expect(requestEvent).toMatchObject({
-			type: 'interactive.request',
-			request: {
-				kind: 'permission',
-				tool: 'request_mode_switch',
-				permissionKind: 'custom-tool'
-			}
-		});
-
-		expect(
-			resolve(requestEvent.request.requestId, opts.userId, {
-				kind: 'permission',
-				decision: 'allow-once'
-			})
-		).toBe(true);
-
-		expect((await iter.next()).value).toMatchObject({
-			type: 'interactive.resolved',
-			requestId: requestEvent.request.requestId
+			tool: 'permission_capabilities'
 		});
 		expect((await iter.next()).value).toMatchObject({
 			type: 'tool.result',
 			toolCallId: 'call_prompted',
-			ok: true
+			ok: false,
+			summary: expect.stringContaining('Permission denied')
 		});
 		expect((await iter.next()).value).toMatchObject({
 			type: 'message.delta',

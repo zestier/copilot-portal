@@ -122,11 +122,6 @@ function permissionCapabilities(opts: {
 				supported: true,
 				guidance:
 					'Always available. Retry the blocked request with forcePermissionPrompt and a concise reason when no allowed alternative works.'
-			},
-			requestModeSwitch: {
-				supported: true,
-				guidance:
-					'Use request_mode_switch when repeated permission prompts block progress in best-effort mode.'
 			}
 		}
 	};

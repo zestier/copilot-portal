@@ -1,7 +1,6 @@
 import { ulid } from 'ulid';
 import { loadConfig } from '../config';
 import { log } from '../log';
-import * as conversationsRepo from '../db/repos/conversations';
 import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 import { buildGitTools, type PortalTool } from '../tools/git';
 import { buildPermissionTools } from '../tools/permissions';
@@ -395,9 +394,7 @@ function openOpenAICompatibleSession(
 
 	const tools = buildOpenAITools({
 		opts,
-		getMode: () => currentMode,
-		applyMode,
-		emit
+		getMode: () => currentMode
 	});
 	const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
 	const toolPermissionBehavior = new Map(
@@ -697,8 +694,6 @@ function toolMessageContent(result: ToolExecutionResult): string {
 function buildOpenAITools(opts: {
 	opts: ProviderOpenOptions;
 	getMode: () => SessionMode;
-	applyMode: (mode: SessionMode) => Promise<void>;
-	emit: (ev: PortalEvent) => void;
 }): PortalTool[] {
 	return [
 		...buildGitTools(opts.opts.workingDirectory),
@@ -712,64 +707,6 @@ function buildOpenAITools(opts: {
 			conversationId: opts.opts.conversationId,
 			policy: opts.opts.policy,
 			getMode: opts.getMode
-		}),
-		{
-			name: 'request_mode_switch',
-			permissionBehavior: 'always-prompt',
-			description:
-				'Request switching this conversation to interactive mode when you are blocked in best-effort mode because a needed permission keeps being denied. Use only after trying reasonable alternatives.',
-			parameters: {
-				type: 'object',
-				properties: {
-					mode: {
-						type: 'string',
-						enum: ['interactive'],
-						description: 'The target mode to switch to.'
-					},
-					reason: {
-						type: 'string',
-						description: 'Why the mode switch is needed.'
-					}
-				},
-				required: ['mode', 'reason'],
-				additionalProperties: false
-			},
-			async handler(args: unknown) {
-				const req = parseModeSwitchToolArgs(args);
-				if (opts.getMode() === 'interactive') return 'Conversation is already in interactive mode.';
-				const persisted = conversationsRepo.updateSessionSettings(
-					opts.opts.conversationId,
-					opts.opts.userId,
-					{ mode: 'interactive' }
-				);
-				if (!persisted) {
-					log.warn('openai_compatible.request_mode_switch.persist_failed', {
-						conversationId: opts.opts.conversationId
-					});
-				}
-				await opts.applyMode('interactive');
-				opts.emit({
-					type: 'session.settings',
-					conversationId: opts.opts.conversationId,
-					mode: 'interactive',
-					source: 'agent'
-				});
-				return `Switched conversation to interactive mode. Reason: ${req.reason}`;
-			}
-		}
+		})
 	];
-}
-
-function parseModeSwitchToolArgs(args: unknown): { mode: 'interactive'; reason: string } {
-	if (!args || typeof args !== 'object') {
-		throw new Error('request_mode_switch requires an object argument.');
-	}
-	const record = args as Record<string, unknown>;
-	if (record.mode !== 'interactive') {
-		throw new Error('request_mode_switch only supports mode="interactive".');
-	}
-	if (typeof record.reason !== 'string' || record.reason.trim().length === 0) {
-		throw new Error('request_mode_switch requires a non-empty reason.');
-	}
-	return { mode: 'interactive', reason: record.reason.trim() };
 }

@@ -17,7 +17,6 @@ import type {
 	ProviderOpenOptions,
 	ProviderSession
 } from './provider';
-import * as conversationsRepo from '../db/repos/conversations';
 import * as messagesRepo from '../db/repos/messages';
 import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
@@ -207,55 +206,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 				conversationId: opts.conversationId,
 				policy: opts.policy,
 				getMode: () => currentMode
-			}),
-			{
-				name: 'request_mode_switch',
-				permissionBehavior: 'always-prompt',
-				description:
-					'Request switching this conversation to interactive mode when you are blocked in best-effort mode because a needed permission keeps being denied. Use only after trying reasonable alternatives.',
-				parameters: {
-					type: 'object',
-					properties: {
-						mode: {
-							type: 'string',
-							enum: ['interactive'],
-							description: 'The target mode to switch to.'
-						},
-						reason: {
-							type: 'string',
-							description: 'Why the mode switch is needed.'
-						}
-					},
-					required: ['mode', 'reason'],
-					additionalProperties: false
-				},
-				async handler(args: unknown) {
-					const req = parseModeSwitchToolArgs(args);
-					if (currentMode === 'interactive') {
-						return 'Conversation is already in interactive mode.';
-					}
-					const persisted = conversationsRepo.updateSessionSettings(
-						opts.conversationId,
-						opts.userId,
-						{
-							mode: 'interactive'
-						}
-					);
-					if (!persisted) {
-						log.warn('copilot.request_mode_switch.persist_failed', {
-							conversationId: opts.conversationId
-						});
-					}
-					await applyMode('interactive');
-					emit({
-						type: 'session.settings',
-						conversationId: opts.conversationId,
-						mode: 'interactive',
-						source: 'agent'
-					});
-					return `Switched conversation to interactive mode. Reason: ${req.reason}`;
-				}
-			}
+			})
 		],
 		onPermissionRequest,
 		onUserInputRequest,
@@ -490,21 +441,6 @@ export const copilotProvider: ModelBackendProvider = {
 	openSession: open,
 	shutdown: shutdownClient
 };
-
-function parseModeSwitchToolArgs(args: unknown): { mode: 'interactive'; reason: string } {
-	if (!args || typeof args !== 'object') {
-		throw new Error('request_mode_switch requires object arguments.');
-	}
-	const mode = (args as Record<string, unknown>).mode;
-	const reason = (args as Record<string, unknown>).reason;
-	if (mode !== 'interactive') {
-		throw new Error('request_mode_switch only supports switching to interactive mode.');
-	}
-	if (typeof reason !== 'string' || reason.trim().length === 0) {
-		throw new Error('request_mode_switch requires a non-empty reason.');
-	}
-	return { mode, reason: reason.trim() };
-}
 
 function normalizeSessionWorkspacePath(path: string | undefined): string | null {
 	const trimmed = path?.trim();
