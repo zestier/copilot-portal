@@ -1,4 +1,5 @@
 import { copilotProvider } from '../copilot/copilot-provider';
+import { lmStudioProvider } from './lm-studio-provider';
 import { openAICompatibleProvider } from './openai-compatible-provider';
 import { loadConfig } from '../config';
 import { normalizeBackendProvider, type BackendProviderId } from '$lib/types';
@@ -23,7 +24,8 @@ export type {
 
 const providers: Record<BackendProviderId, ModelBackendProvider> = {
 	copilot: copilotProvider,
-	'openai-compatible': openAICompatibleProvider
+	'openai-compatible': openAICompatibleProvider,
+	'lm-studio': lmStudioProvider
 };
 
 export function listProviders(): ModelBackendProvider[] {

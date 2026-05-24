@@ -46,6 +46,12 @@ enter the exact model id manually.
 Existing conversations keep the provider and model selected when they were
 created. Change settings before starting a new conversation.
 
+If you are using LM Studio 0.4.0 or newer, prefer the dedicated **LM Studio**
+provider (`DEFAULT_BACKEND_PROVIDER=lm-studio`) for its native `/api/v1/chat`
+API, server-backed `previous_response_id` chats, reasoning events, and native
+model metadata. Use this generic provider only when you specifically need LM
+Studio's OpenAI-compatible `/v1` endpoints.
+
 When a live OpenAI-compatible provider session is unavailable, the portal
 restores continuity by replaying a bounded suffix of persisted complete messages
 before the new user turn. The replay is capped by

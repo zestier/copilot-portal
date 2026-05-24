@@ -5,6 +5,7 @@ import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 import { buildGitTools, type PortalTool } from '../tools/git';
 import { buildPermissionTools } from '../tools/permissions';
 import { buildTicketTools } from '../tools/tickets';
+import { jsonRequestHeaders, parseJson, streamSseData } from './provider-utils';
 import type { BackendProviderId, PortalEvent, SessionMode, ToolCallRecord } from '$lib/types';
 import { AsyncQueue } from '../runtime/async-queue';
 import { createInteractiveCallbacks } from '../copilot/interactive-adapter';
@@ -252,68 +253,12 @@ function providerConfig(): OpenAICompatibleConfig {
 }
 
 function requestHeaders(cfg: OpenAICompatibleConfig): HeadersInit {
-	const headers: Record<string, string> = {
-		'content-type': 'application/json'
-	};
-	if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`;
-	return headers;
+	return jsonRequestHeaders(cfg.apiKey);
 }
 
 function endpoint(baseUrl: string, path: string): string {
 	const base = baseUrl.replace(/\/+$/, '');
 	return `${base}${path}`;
-}
-
-async function parseJson(res: Response): Promise<unknown> {
-	return await res.json().catch(() => ({}));
-}
-
-async function* streamSseData(body: ReadableStream<Uint8Array>): AsyncIterable<string> {
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	let buffer = '';
-	let dataLines: string[] = [];
-
-	function drainLine(line: string): string | null {
-		const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line;
-		if (trimmed === '') {
-			if (dataLines.length === 0) return null;
-			const data = dataLines.join('\n');
-			dataLines = [];
-			return data;
-		}
-		if (trimmed.startsWith(':')) return null;
-		const separator = trimmed.indexOf(':');
-		const field = separator === -1 ? trimmed : trimmed.slice(0, separator);
-		if (field !== 'data') return null;
-		const value = separator === -1 ? '' : trimmed.slice(separator + 1).replace(/^ /, '');
-		dataLines.push(value);
-		return null;
-	}
-
-	try {
-		while (true) {
-			const { value, done } = await reader.read();
-			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
-			let newline = buffer.indexOf('\n');
-			while (newline !== -1) {
-				const line = buffer.slice(0, newline);
-				buffer = buffer.slice(newline + 1);
-				const data = drainLine(line);
-				if (data !== null) yield data;
-				newline = buffer.indexOf('\n');
-			}
-		}
-		buffer += decoder.decode();
-		if (buffer) {
-			const data = drainLine(buffer);
-			if (data !== null) yield data;
-		}
-		if (dataLines.length > 0) yield dataLines.join('\n');
-	} finally {
-		reader.releaseLock();
-	}
 }
 
 function stringContent(content: unknown): string {

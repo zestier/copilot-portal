@@ -25,9 +25,12 @@ export async function startTurnFromUserMessage(
 	const cfg = loadConfig();
 	const userSettings = settings.get(conv.userId) ?? settings.defaults();
 	const provider = getProvider(conv.provider);
+	const promptIncludesPriorMessages =
+		opts.includePriorMessages ||
+		provider.shouldEmbedPriorMessages?.(conv.providerSessionId) === true;
 	const turn = await startTurn({
 		conversationId: conv.id,
-		prompt: opts.includePriorMessages
+		prompt: promptIncludesPriorMessages
 			? buildPromptWithPriorMessages(conv.id, userMsg)
 			: userMsg.content,
 		bridge: {
@@ -42,9 +45,17 @@ export async function startTurnFromUserMessage(
 			approveAllTools: conv.approveAllTools,
 			providerAuthToken: providerAuthToken(conv.provider, conv.userId),
 			initialMessages:
-				!opts.includePriorMessages && !provider.capabilities.session.resume
+				!promptIncludesPriorMessages && !provider.capabilities.session.resume
 					? buildProviderInitialMessages(conv.id, userMsg)
-					: undefined
+					: undefined,
+			onProviderSessionIdChange: (providerSessionId) => {
+				const updated = convs.setProviderSessionId(conv.id, conv.userId, providerSessionId);
+				if (!updated) {
+					throw new Error(
+						`Failed to persist ${conv.provider} provider session id for conversation ${conv.id}: ${providerSessionId}`
+					);
+				}
+			}
 		},
 		beforeSend: async () => {
 			try {

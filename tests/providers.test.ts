@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resetConfigForTests } from '../src/lib/server/config';
+import { lmStudioProvider } from '../src/lib/server/providers/lm-studio-provider';
 import * as settings from '../src/lib/server/db/repos/settings';
 import * as tokens from '../src/lib/server/db/repos/tokens';
 import { openAICompatibleProvider } from '../src/lib/server/providers/openai-compatible-provider';
@@ -34,9 +35,11 @@ describe('provider registry', () => {
 	it('lists and normalizes configured backend providers', () => {
 		expect(listProviders().map((provider) => provider.id)).toEqual([
 			'copilot',
-			'openai-compatible'
+			'openai-compatible',
+			'lm-studio'
 		]);
 		expect(getProvider('openai-compatible')).toBe(openAICompatibleProvider);
+		expect(getProvider('lm-studio')).toBe(lmStudioProvider);
 		expect(getProvider('unknown').id).toBe('copilot');
 		expect(getDefaultProviderId()).toBe('copilot');
 
@@ -45,6 +48,12 @@ describe('provider registry', () => {
 
 		expect(getDefaultProviderId()).toBe('openai-compatible');
 		expect(settings.defaults().defaultProvider).toBe('openai-compatible');
+
+		process.env.DEFAULT_BACKEND_PROVIDER = 'lm-studio';
+		resetConfigForTests();
+
+		expect(getDefaultProviderId()).toBe('lm-studio');
+		expect(settings.defaults().defaultProvider).toBe('lm-studio');
 	});
 
 	it('does not probe Copilot status when another provider is the default', async () => {
@@ -69,12 +78,35 @@ describe('provider registry', () => {
 		expect(loader.fetchModels).not.toHaveBeenCalled();
 	});
 
+	it('does not probe LM Studio status unless it is the default provider', async () => {
+		const loader = {
+			fetchAuthStatus: vi.fn().mockResolvedValue({ isAuthenticated: true }),
+			fetchModels: vi.fn().mockResolvedValue([])
+		};
+		const lmStudio = getProvider('lm-studio');
+
+		await expect(
+			loadProviderStatus(lmStudio, {
+				userId: 'user-1',
+				defaultProvider: 'copilot',
+				loader
+			})
+		).resolves.toMatchObject({
+			id: 'lm-studio',
+			statusChecked: false,
+			auth: { isAuthenticated: false }
+		});
+		expect(loader.fetchAuthStatus).not.toHaveBeenCalled();
+		expect(loader.fetchModels).not.toHaveBeenCalled();
+	});
+
 	it('resolves credentials only for providers that need them', () => {
 		const tokenSpy = vi.spyOn(tokens, 'getGithubToken');
 		process.env.COPILOT_GITHUB_TOKEN = 'fallback-token';
 		resetConfigForTests();
 
 		expect(providerAuthToken('openai-compatible', 'user-1')).toBeUndefined();
+		expect(providerAuthToken('lm-studio', 'user-1')).toBeUndefined();
 		expect(tokenSpy).not.toHaveBeenCalled();
 
 		expect(providerAuthToken('copilot', 'user-1')).toBe('fallback-token');

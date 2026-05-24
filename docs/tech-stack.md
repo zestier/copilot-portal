@@ -162,12 +162,16 @@ invalid config.
 | `SHARED_SECRET`           | —                        | If `AUTH_MODE=shared-secret`.        |
 | `COPILOT_GITHUB_TOKEN`    | —                        | Optional: forwarded to the SDK.      |
 | `COPILOT_CLI_URL`         | —                        | If set, connect to an external `copilot --headless --port N` instead of spawning the bundled CLI. See `docs/deployment.md` Topology C. |
-| `DEFAULT_BACKEND_PROVIDER`| `copilot`                | Default backend for new conversations: `copilot` \| `openai-compatible`. |
+| `DEFAULT_BACKEND_PROVIDER`| `copilot`                | Default backend for new conversations: `copilot` \| `openai-compatible` \| `lm-studio`. |
 | `DEFAULT_MODEL`           | `claude-sonnet-4.5`      | Default model id for new conversations, stored separately from the provider id. |
 | `OPENAI_COMPATIBLE_BASE_URL` | —                     | Base `/v1` URL for an OpenAI-compatible backend. |
 | `OPENAI_COMPATIBLE_API_KEY` | —                      | Optional bearer token for the generic OpenAI-compatible backend. |
 | `OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS` | `8`       | Maximum OpenAI-compatible tool-calling loops before the portal stops the turn. |
 | `OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES` | `20`  | Maximum complete portal messages replayed when a fresh OpenAI-compatible session restores context. |
+| `LMSTUDIO_BASE_URL`       | `http://127.0.0.1:1234`  | Base URL for LM Studio's native REST API server; `/api/v1` is appended automatically if omitted. |
+| `LMSTUDIO_API_KEY`        | —                        | Optional LM Studio API token when server authentication is enabled. |
+| `LMSTUDIO_CONTEXT_LENGTH` | —                        | Optional context length sent to `/api/v1/chat`; also lets the portal show LM Studio token usage. |
+| `LMSTUDIO_REASONING`      | —                        | Optional LM Studio reasoning setting: `off`, `low`, `medium`, `high`, or `on`. |
 | `IDLE_TIMEOUT_MIN`        | `15`                     | SDK session idle reap.               |
 | `MAX_CONCURRENT_SESSIONS` | `4`                      | Hard cap on live sessions.           |
 | `LOG_LEVEL`               | `info`                   | `debug` \| `info` \| `warn` \| `error`. |

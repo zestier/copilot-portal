@@ -60,6 +60,14 @@ export interface ProviderOpenOptions {
 	 * can hydrate fresh sessions without seeing portal database ids.
 	 */
 	initialMessages?: ProviderConversationMessage[];
+	/**
+	 * Called when a provider rotates or discovers a durable backend session id.
+	 * The route/runtime layer owns persistence; provider implementations should
+	 * not write portal conversation rows directly. If this callback rejects, the
+	 * provider must treat the id as uncommitted and fail the current turn rather
+	 * than continuing with backend state the portal cannot resume.
+	 */
+	onProviderSessionIdChange?: (providerSessionId: string) => void | Promise<void>;
 	onEvent?: (e: PortalEvent) => void;
 }
 
@@ -102,5 +110,11 @@ export interface ModelBackendProvider {
 	 * session while keeping the portal conversation durable in SQLite.
 	 */
 	openSession(opts: ProviderOpenOptions): Promise<ProviderSession>;
+	/**
+	 * Providers with durable resume but no request-time assistant-history import
+	 * can ask the portal to wrap prior messages into the next prompt until a
+	 * backend-native session id exists.
+	 */
+	shouldEmbedPriorMessages?(providerSessionId: string): boolean;
 	shutdown?(): Promise<void>;
 }

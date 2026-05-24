@@ -164,6 +164,21 @@ export function rotateProviderSession(id: string, userId: string): string | null
 	return r.changes > 0 ? providerSessionId : null;
 }
 
+export function setProviderSessionId(
+	id: string,
+	userId: string,
+	providerSessionId: string
+): boolean {
+	const r = getDb()
+		.prepare(
+			`UPDATE conversations
+			    SET provider_session_id = ?, updated_at = ?
+			  WHERE id = ? AND user_id = ?`
+		)
+		.run(providerSessionId, Date.now(), id, userId);
+	return r.changes > 0;
+}
+
 export function rename(id: string, userId: string, title: string): boolean {
 	const r = getDb()
 		.prepare('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?')
