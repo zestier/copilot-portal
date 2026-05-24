@@ -18,13 +18,15 @@ import type {
 	ProviderSession
 } from './provider';
 
-interface OpenAICompatibleConfig {
-	id: Extract<BackendProviderId, 'openai-compatible'>;
+export interface OpenAICompatibleConfig {
+	id: BackendProviderId;
 	displayName: string;
 	baseUrl: string | null;
 	apiKey: string | null;
 	maxToolIterations: number;
 	contextRestoreMessages: number;
+	contextTokenLimit?: number | null;
+	includeUsage?: boolean;
 }
 
 interface ChatChoiceDelta {
@@ -44,6 +46,11 @@ interface ChatStreamChunk {
 	}>;
 	error?: {
 		message?: string;
+	};
+	usage?: {
+		prompt_tokens?: number;
+		completion_tokens?: number;
+		total_tokens?: number;
 	};
 }
 
@@ -75,6 +82,7 @@ type ChatMessage =
 interface AssistantTurn {
 	content: string;
 	toolCalls: OpenAIToolCall[];
+	usage?: ChatStreamChunk['usage'];
 }
 
 interface ToolExecutionResult {
@@ -143,11 +151,11 @@ export const openAICompatibleProvider: ModelBackendProvider = {
 					'Approve-all is enforced by the portal for portal-hosted tools. OpenAI-compatible backends do not receive a separate runtime approve-all signal.'
 			},
 			contextUsage: {
-				supported: false,
-				behavior: 'unsupported',
+				supported: true,
+				behavior: 'supported',
 				label: 'Context usage',
 				description:
-					'OpenAI-compatible streaming does not include Copilot context-window or compaction events, so no context meter is shown unless usage was previously recorded.'
+					'OpenAI-compatible usage is shown when the backend streams token usage and a model context window is known.'
 			},
 			subagents: {
 				supported: false,
@@ -185,7 +193,7 @@ export const openAICompatibleProvider: ModelBackendProvider = {
 			elicitationCallbacks: false,
 			exitPlanModeCallbacks: false,
 			autoModeSwitchCallbacks: false,
-			contextWindowEvents: false,
+			contextWindowEvents: true,
 			contextCompactionEvents: false,
 			fileEditEvents: false,
 			reasoningEvents: false,
@@ -307,10 +315,12 @@ async function* streamChatCompletionTurn(
 	let content = '';
 	const toolCallParts: OpenAIToolCall[] = [];
 	let lastToolCallIndex = -1;
+	let usage: ChatStreamChunk['usage'];
 	for await (const data of streamSseData(res.body)) {
 		if (data === '[DONE]') break;
 		const chunk = JSON.parse(data) as ChatStreamChunk;
 		if (chunk.error?.message) throw new Error(chunk.error.message);
+		if (chunk.usage) usage = chunk.usage;
 		const text = chunkText(chunk);
 		if (text) {
 			content += text;
@@ -324,10 +334,10 @@ async function* streamChatCompletionTurn(
 			lastToolCallIndex = applyToolCallDelta(toolCallParts, delta, lastToolCallIndex);
 		}
 	}
-	return { content, toolCalls: finalizeToolCalls(toolCallParts) };
+	return { content, toolCalls: finalizeToolCalls(toolCallParts), usage };
 }
 
-function openOpenAICompatibleSession(
+export function openOpenAICompatibleSession(
 	cfg: OpenAICompatibleConfig,
 	opts: ProviderOpenOptions
 ): ProviderSession {
@@ -389,6 +399,7 @@ function openOpenAICompatibleSession(
 		}
 		messages.push({ role: 'user', content: prompt });
 		for (let iteration = 0; iteration < cfg.maxToolIterations; iteration += 1) {
+			const messagesLength = messages.length;
 			const res = await fetch(endpoint(cfg.baseUrl!, '/chat/completions'), {
 				method: 'POST',
 				headers: requestHeaders(cfg),
@@ -397,13 +408,15 @@ function openOpenAICompatibleSession(
 					messages,
 					tools: openAITools,
 					tool_choice: 'auto',
-					stream: true
+					stream: true,
+					...(cfg.includeUsage ? { stream_options: { include_usage: true } } : {})
 				}),
 				signal: activeAbortController?.signal
 			});
 			const turn = yieldFromQueue(streamChatCompletionTurn(cfg, res, messageId), q);
 			const assistantTurn = await turn;
 			if (aborted) return;
+			emitContextUsage(q, cfg, assistantTurn.usage, messagesLength);
 			messages.push({
 				role: 'assistant',
 				content: assistantTurn.content || null,
@@ -583,6 +596,29 @@ function openOpenAICompatibleSession(
 			activeAbortController?.abort();
 		}
 	};
+}
+
+function emitContextUsage(
+	q: AsyncQueue<PortalEvent>,
+	cfg: OpenAICompatibleConfig,
+	usage: ChatStreamChunk['usage'],
+	messagesLength: number
+) {
+	if (!usage || !cfg.contextTokenLimit) return;
+	const currentTokens =
+		typeof usage.total_tokens === 'number'
+			? usage.total_tokens
+			: typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number'
+				? usage.prompt_tokens + usage.completion_tokens
+				: null;
+	if (currentTokens === null) return;
+	q.push({
+		type: 'context.usage',
+		currentTokens,
+		tokenLimit: cfg.contextTokenLimit,
+		messagesLength,
+		conversationTokens: currentTokens
+	});
 }
 
 function restoreInitialMessages(

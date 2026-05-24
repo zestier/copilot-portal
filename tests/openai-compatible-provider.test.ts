@@ -119,14 +119,14 @@ describe('openAICompatibleProvider', () => {
 		expect(openAICompatibleProvider.capabilities.features).toMatchObject({
 			modes: { supported: false, behavior: 'no-op' },
 			approveAll: { supported: true, behavior: 'portal-enforced' },
-			contextUsage: { supported: false, behavior: 'unsupported' },
+			contextUsage: { supported: true, behavior: 'supported' },
 			subagents: { supported: false, behavior: 'unsupported' },
 			mcpInfoEvents: { supported: false, behavior: 'unsupported' },
 			planExit: { supported: false, behavior: 'unsupported' },
 			elicitation: { supported: false, behavior: 'unsupported' }
 		});
 		expect(openAICompatibleProvider.capabilities.optionalRuntimeFeatures).toMatchObject({
-			contextWindowEvents: false,
+			contextWindowEvents: true,
 			contextCompactionEvents: false,
 			subagentLifecycleEvents: false,
 			exitPlanModeCallbacks: false,

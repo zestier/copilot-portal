@@ -39,24 +39,22 @@ beforeEach(async () => {
 	await setupLocalEnv('portal-lm-studio-');
 	process.env.LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234';
 	delete process.env.LMSTUDIO_API_KEY;
-	delete process.env.LMSTUDIO_REASONING;
 	resetConfigForTests();
 });
 
 afterEach(() => {
 	delete process.env.LMSTUDIO_BASE_URL;
 	delete process.env.LMSTUDIO_API_KEY;
-	delete process.env.LMSTUDIO_REASONING;
 	resetConfigForTests();
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
 
 describe('lmStudioProvider', () => {
-	it('does not expose unsupported live control methods', async () => {
+	it('reuses OpenAI-compatible live controls except unsupported runtime modes', async () => {
 		expect(lmStudioProvider.capabilities.controls).toEqual({
 			mode: false,
-			approveAll: false,
+			approveAll: true,
 			resetSessionApprovals: false
 		});
 		expect(lmStudioProvider.capabilities.features.mcpInfoEvents).toMatchObject({
@@ -66,8 +64,8 @@ describe('lmStudioProvider', () => {
 
 		const session = await lmStudioProvider.openSession(baseOpts);
 
-		expect(session.setMode).toBeUndefined();
-		expect(session.setApproveAll).toBeUndefined();
+		expect(session.setMode).toBeDefined();
+		expect(session.setApproveAll).toBeDefined();
 		expect(session.resetSessionApprovals).toBeUndefined();
 	});
 
@@ -105,11 +103,8 @@ describe('lmStudioProvider', () => {
 		});
 	});
 
-	it('streams native chat events, reasoning, MCP tool results, usage, and stores response ids', async () => {
-		process.env.LMSTUDIO_REASONING = 'on';
-		resetConfigForTests();
-		const fetchMock = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
-			void _init;
+	it('streams OpenAI-compatible chat chunks with LM Studio context usage metadata', async () => {
+		const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
 			const href = String(url);
 			if (href.endsWith('/api/v1/models')) {
 				return Response.json({
@@ -123,47 +118,33 @@ describe('lmStudioProvider', () => {
 					]
 				});
 			}
+			expect(href).toBe('http://127.0.0.1:1234/v1/chat/completions');
+			expect(JSON.parse(String(init?.body))).toMatchObject({
+				model: 'local-model',
+				messages: [{ role: 'user', content: 'hello' }],
+				tools: expect.arrayContaining([
+					expect.objectContaining({
+						type: 'function',
+						function: expect.objectContaining({ name: 'git_status' })
+					})
+				]),
+				tool_choice: 'auto',
+				stream: true,
+				stream_options: { include_usage: true }
+			});
 			return sseResponse([
-				'event: reasoning.start\n',
-				'data: {"type":"reasoning.start"}\n\n',
-				'event: reasoning.delta\n',
-				'data: {"type":"reasoning.delta","content":"thinking"}\n\n',
-				'event: reasoning.end\n',
-				'data: {"type":"reasoning.end"}\n\n',
-				'event: tool_call.success\n',
-				'data: {"type":"tool_call.success","tool":"browser_navigate","arguments":{"url":"https://lmstudio.ai"},"output":"ok"}\n\n',
-				'event: message.delta\n',
-				'data: {"type":"message.delta","content":"Hello"}\n\n',
-				'event: chat.end\n',
-				'data: {"type":"chat.end","result":{"response_id":"resp_abc","stats":{"input_tokens":42,"total_output_tokens":3,"reasoning_output_tokens":1}}}\n\n'
+				'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+				'data: {"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":3,"total_tokens":45}}\n\n',
+				'data: [DONE]\n\n'
 			]);
 		});
 		vi.stubGlobal('fetch', fetchMock);
-		const user = (await import('../src/lib/server/db/repos/users')).ensureLocalUser();
-		const convs = await import('../src/lib/server/db/repos/conversations');
-		convs.create(user.id, {
-			id: baseOpts.conversationId,
-			title: 'LM Studio test',
-			workdir: baseOpts.workingDirectory,
-			model: baseOpts.model,
-			provider: 'lm-studio'
-		});
-		const session = await lmStudioProvider.openSession({
-			...baseOpts,
-			userId: user.id,
-			onProviderSessionIdChange: (providerSessionId) => {
-				convs.setProviderSessionId(baseOpts.conversationId, user.id, providerSessionId);
-			}
-		});
+		const session = await lmStudioProvider.openSession(baseOpts);
 
 		const events = await collect(session.send('hello', new AbortController().signal));
 
 		expect(events.map((event) => event.type)).toEqual([
 			'message.start',
-			'message.reasoning',
-			'message.reasoning.end',
-			'tool.call',
-			'tool.result',
 			'message.delta',
 			'context.usage',
 			'message.end',
@@ -173,29 +154,15 @@ describe('lmStudioProvider', () => {
 			expect.objectContaining({ type: 'message.delta', text: 'Hello' })
 		);
 		expect(events).toContainEqual(
-			expect.objectContaining({ type: 'tool.call', tool: 'lm_studio:browser_navigate' })
-		);
-		expect(events).toContainEqual(
 			expect.objectContaining({ type: 'context.usage', currentTokens: 45, tokenLimit: 8192 })
 		);
-		expect(session.providerSessionId).toBe('resp_abc');
-		expect(convs.get(baseOpts.conversationId, user.id)?.providerSessionId).toBe('resp_abc');
-		const chatCall = fetchMock.mock.calls.find(([, init]) => init?.body);
-		expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({
-			model: 'local-model',
-			input: 'hello',
-			stream: true,
-			store: true,
-			temperature: 0.8,
-			reasoning: 'on'
-		});
-		expect(JSON.parse(String(chatCall?.[1]?.body))).not.toHaveProperty('context_length');
+		expect(session.providerSessionId).toBe(baseOpts.conversationId);
 	});
 
 	it('derives context usage token limit from model metadata when no context override is set', async () => {
 		const opts = { ...baseOpts, model: 'local-model-large' };
-		const fetchMock = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
-			void _init;
+		const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+			void init;
 			const href = String(url);
 			if (href.endsWith('/api/v1/models')) {
 				return Response.json({
@@ -211,10 +178,9 @@ describe('lmStudioProvider', () => {
 				});
 			}
 			return sseResponse([
-				'event: message.delta\n',
-				'data: {"type":"message.delta","content":"Hello"}\n\n',
-				'event: chat.end\n',
-				'data: {"type":"chat.end","result":{"response_id":"resp_ctx","stats":{"input_tokens":100,"total_output_tokens":25}}}\n\n'
+				'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+				'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":25}}\n\n',
+				'data: [DONE]\n\n'
 			]);
 		});
 		vi.stubGlobal('fetch', fetchMock);
@@ -225,95 +191,45 @@ describe('lmStudioProvider', () => {
 		expect(events).toContainEqual(
 			expect.objectContaining({ type: 'context.usage', currentTokens: 125, tokenLimit: 16384 })
 		);
-		expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).not.toHaveProperty(
-			'context_length'
-		);
+		expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+			stream_options: { include_usage: true }
+		});
 	});
 
-	it('continues server-backed chats with previous_response_id', async () => {
-		const fetchMock = vi.fn(async (..._args: [string | URL | Request, RequestInit?]) => {
-			void _args;
+	it('reseeds stateless chats from provided OpenAI-compatible initial messages', async () => {
+		const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+			void init;
+			const href = String(url);
+			if (href.endsWith('/api/v1/models')) {
+				return Response.json({ models: [] });
+			}
 			return sseResponse([
-				'event: message.delta\n',
-				'data: {"type":"message.delta","content":"continued"}\n\n',
-				'event: chat.end\n',
-				'data: {"type":"chat.end","result":{"response_id":"resp_next"}}\n\n'
+				'data: {"choices":[{"delta":{"content":"continued"}}]}\n\n',
+				'data: [DONE]\n\n'
 			]);
 		});
 		vi.stubGlobal('fetch', fetchMock);
 		const session = await lmStudioProvider.openSession({
 			...baseOpts,
-			providerSessionId: 'resp_prev'
+			providerSessionId: 'resp_prev',
+			initialMessages: [
+				{ role: 'user', content: 'remember alpha', status: 'complete' },
+				{ role: 'assistant', content: 'alpha remembered', status: 'complete' }
+			]
 		});
 
 		await collect(session.send('follow up', new AbortController().signal));
 
 		const chatCall = fetchMock.mock.calls.find(([, init]) => init?.body);
 		expect(JSON.parse(String(chatCall?.[1]?.body))).toMatchObject({
-			input: 'follow up',
-			previous_response_id: 'resp_prev'
+			messages: [
+				{ role: 'user', content: 'remember alpha' },
+				{ role: 'assistant', content: 'alpha remembered' },
+				{ role: 'user', content: 'follow up' }
+			]
 		});
-		expect(session.providerSessionId).toBe('resp_next');
-	});
-
-	it('fails the turn and keeps in-memory response id unchanged when persistence callback fails', async () => {
-		const fetchMock = vi.fn(async () =>
-			sseResponse([
-				'event: message.delta\n',
-				'data: {"type":"message.delta","content":"ok"}\n\n',
-				'event: chat.end\n',
-				'data: {"type":"chat.end","result":{"response_id":"resp_next"}}\n\n'
-			])
-		);
-		vi.stubGlobal('fetch', fetchMock);
-		const session = await lmStudioProvider.openSession({
-			...baseOpts,
-			providerSessionId: 'resp_prev',
-			onProviderSessionIdChange: async () => {
-				throw new Error('db unavailable');
-			}
-		});
-
-		const events = await collect(session.send('follow up', new AbortController().signal));
-
+		expect(JSON.parse(String(chatCall?.[1]?.body))).not.toHaveProperty('previous_response_id');
 		expect(session.providerSessionId).toBe('resp_prev');
-		expect(events).toContainEqual(
-			expect.objectContaining({
-				type: 'error',
-				code: 'send_failed',
-				message: 'db unavailable'
-			})
-		);
-	});
-
-	it('maps invalid native tool calls from metadata', async () => {
-		const fetchMock = vi.fn(async () =>
-			sseResponse([
-				'event: tool_call.failure\n',
-				'data: {"type":"tool_call.failure","reason":"Cannot find tool","metadata":{"type":"invalid_name","tool_name":"missing_tool","arguments":{"x":1}}}\n\n',
-				'event: chat.end\n',
-				'data: {"type":"chat.end","result":{"response_id":"resp_tool_failure"}}\n\n'
-			])
-		);
-		vi.stubGlobal('fetch', fetchMock);
-		const session = await lmStudioProvider.openSession(baseOpts);
-
-		const events = await collect(session.send('call missing tool', new AbortController().signal));
-
-		expect(events).toContainEqual(
-			expect.objectContaining({
-				type: 'tool.call',
-				tool: 'lm_studio:missing_tool',
-				args: { x: 1 }
-			})
-		);
-		expect(events).toContainEqual(
-			expect.objectContaining({
-				type: 'tool.result',
-				ok: false,
-				summary: 'Cannot find tool'
-			})
-		);
 	});
 
 	it('surfaces clear connection errors', async () => {
