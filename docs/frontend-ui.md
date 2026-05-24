@@ -8,7 +8,7 @@ Svelte 5, SvelteKit file-based routing. Mobile-first responsive layout.
 |------------------------------|--------------------------------------------------------|
 | `/`                          | Conversation list + "New chat" CTA.                    |
 | `/conversations/[id]`        | Chat view for a single conversation.                   |
-| `/settings`                  | User settings (default model, default workdir, etc.).  |
+| `/settings`                  | User settings, backend status, model defaults, default workdir, etc. |
 | `/login`                     | OAuth entry point.                                     |
 | `/auth/callback`             | OAuth callback target.                                 |
 

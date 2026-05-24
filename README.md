@@ -146,7 +146,9 @@ host-sandbox guarantee. See [docs/auth-and-security.md](docs/auth-and-security.m
    threat model.
 6. [docs/persistence.md](docs/persistence.md) — SQLite schema, conversation storage.
 7. [docs/deployment.md](docs/deployment.md) — Dockerfile, compose, Cloudflare Tunnel.
-8. [docs/roadmap.md](docs/roadmap.md) — Phases / MVP scope.
+8. [docs/openai-compatible-backends.md](docs/openai-compatible-backends.md) —
+   OpenAI-compatible backend setup, settings, and feature differences.
+9. [docs/roadmap.md](docs/roadmap.md) — Phases / MVP scope.
 
 ## TL;DR architecture
 

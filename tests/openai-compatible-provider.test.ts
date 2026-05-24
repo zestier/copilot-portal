@@ -95,12 +95,12 @@ describe('openAICompatibleProvider', () => {
 		process.env.OPENAI_COMPATIBLE_API_KEY = 'test-key';
 		resetConfigForTests();
 		const fetchMock = vi.fn(async () =>
-			Response.json({ data: [{ id: 'lmstudio-model', name: 'LM Studio Model' }] })
+			Response.json({ data: [{ id: 'local-chat-model', name: 'Local Chat Model' }] })
 		);
 		vi.stubGlobal('fetch', fetchMock);
 
 		await expect(openAICompatibleProvider.listModels('user-1')).resolves.toEqual([
-			{ id: 'lmstudio-model', name: 'LM Studio Model' }
+			{ id: 'local-chat-model', name: 'Local Chat Model' }
 		]);
 		expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:1234/v1/models', {
 			headers: {

@@ -6,7 +6,9 @@
 		type ProviderStatus,
 		type SettingsData
 	} from './settings-types';
-	import type { BackendProviderId, SessionMode } from '$lib/types';
+	import type { BackendProviderId, ProviderRuntimeFeatureStatus, SessionMode } from '$lib/types';
+
+	const CUSTOM_MODEL_OPTION = '__custom__';
 
 	const MODE_OPTIONS: { value: SessionMode; label: string; hint: string }[] = [
 		{
@@ -42,6 +44,8 @@
 	} = $props();
 
 	let selectedProvider = $state<BackendProviderId>('copilot');
+	let selectedModelChoice = $state('');
+	let customModel = $state('');
 	$effect(() => {
 		selectedProvider = settings.defaultProvider;
 	});
@@ -52,6 +56,40 @@
 	const runtimeModesSupported = $derived(
 		modeFeature.supported && modeFeature.behavior === 'supported'
 	);
+	const unavailableRuntimeFeatures = $derived(
+		Object.values(selectedProviderStatus.capabilities.features).filter(
+			(feature): feature is ProviderRuntimeFeatureStatus =>
+				!feature.supported || feature.behavior === 'no-op'
+		)
+	);
+
+	$effect(() => {
+		const savedModel = settings.defaultModel ?? '';
+		const modelIds = new Set(selectedProviderStatus.models.map((model) => model.id));
+		if (!savedModel || modelIds.has(savedModel)) {
+			selectedModelChoice = savedModel;
+			customModel = '';
+		} else {
+			selectedModelChoice = CUSTOM_MODEL_OPTION;
+			customModel = savedModel;
+		}
+	});
+
+	function selectedModelFormValue(): string {
+		return selectedModelChoice === CUSTOM_MODEL_OPTION ? customModel : selectedModelChoice;
+	}
+
+	function modelAvailability(provider: ProviderStatus): string {
+		if (!provider.capabilities.modelList) return 'Model discovery unsupported';
+		if (provider.models.length > 0) return `${provider.models.length} model(s) available`;
+		if (provider.error) return `Model discovery failed: ${provider.error}`;
+		return 'No models reported; enter a model id manually';
+	}
+
+	function featureTone(feature: ProviderRuntimeFeatureStatus): 'ok' | 'warn' | 'bad' {
+		if (feature.supported) return 'ok';
+		return feature.behavior === 'no-op' ? 'warn' : 'bad';
+	}
 </script>
 
 <div
@@ -65,24 +103,60 @@
 		<p class="muted small">Defaults for new conversations and your portal account.</p>
 	</div>
 
-	<section
-		class="copilot-status"
-		class:ok={selectedProviderStatus.auth.isAuthenticated}
-		class:bad={!selectedProviderStatus.auth.isAuthenticated}
-	>
-		<div class="row">
-			<strong>{selectedProviderStatus.displayName}:</strong>
-			<span>{authLabel(selectedProviderStatus.auth)}</span>
+	<section class="backend-status" aria-labelledby="backend-status-heading">
+		<div class="section-subheading">
+			<h3 id="backend-status-heading">Backend status</h3>
+			<p class="muted small">
+				Status is read from the configured provider endpoints. Save defaults below for newly created
+				conversations.
+			</p>
 		</div>
-		{#if selectedProviderStatus.auth.statusMessage && !selectedProviderStatus.auth.isAuthenticated}
-			<div class="muted small">{selectedProviderStatus.auth.statusMessage}</div>
-		{/if}
-		{#if selectedProvider === 'copilot' && !selectedProviderStatus.auth.isAuthenticated}
-			<div class="muted small">
-				Run <code>copilot auth login</code> on the host, or set a per-user token in the database, then
-				reload.
-			</div>
-		{/if}
+		<div class="provider-grid">
+			{#each providers as provider (provider.id)}
+				<article
+					class="provider-card"
+					class:selected={provider.id === selectedProvider}
+					class:ok={provider.auth.isAuthenticated}
+					class:bad={!provider.auth.isAuthenticated}
+				>
+					<div class="provider-card-header">
+						<strong>{provider.displayName}</strong>
+						<span class="status-pill" class:ok={provider.auth.isAuthenticated}>
+							{provider.auth.isAuthenticated ? 'Configured' : 'Needs setup'}
+						</span>
+					</div>
+					<dl>
+						<div>
+							<dt>Auth</dt>
+							<dd>{authLabel(provider.auth)}</dd>
+						</div>
+						<div>
+							<dt>Models</dt>
+							<dd>{modelAvailability(provider)}</dd>
+						</div>
+						{#if provider.auth.statusMessage}
+							<div>
+								<dt>Status</dt>
+								<dd>{provider.auth.statusMessage}</dd>
+							</div>
+						{/if}
+					</dl>
+					{#if provider.id === 'copilot' && !provider.auth.isAuthenticated}
+						<p class="muted small">
+							Run <code>copilot auth login</code> on the host, or set a per-user token in the database,
+							then reload.
+						</p>
+					{/if}
+					{#if provider.id === 'openai-compatible'}
+						<p class="muted small">
+							Configure <code>OPENAI_COMPATIBLE_BASE_URL</code> to a local or remote
+							OpenAI-compatible <code>/v1</code> endpoint. Add
+							<code>OPENAI_COMPATIBLE_API_KEY</code> only if the backend requires bearer auth.
+						</p>
+					{/if}
+				</article>
+			{/each}
+		</div>
 	</section>
 
 	<form method="POST" action="?/save" class="settings-form">
@@ -100,14 +174,26 @@
 		<label>
 			Default model
 			{#if selectedProviderStatus.models.length > 0}
-				<select name="defaultModel" value={settings.defaultModel ?? ''}>
+				<input type="hidden" name="defaultModel" value={selectedModelFormValue()} />
+				<select bind:value={selectedModelChoice}>
 					<option value="">(use server default)</option>
 					{#each selectedProviderStatus.models as m (m.id)}
 						<option value={m.id}>
 							{m.name} — {m.id} ({formatContextWindow(m.maxContextWindowTokens)})
 						</option>
 					{/each}
+					<option value={CUSTOM_MODEL_OPTION}>Enter a custom model id…</option>
 				</select>
+				{#if selectedModelChoice === CUSTOM_MODEL_OPTION}
+					<input
+						bind:value={customModel}
+						placeholder={selectedProvider === 'copilot' ? 'claude-sonnet-4.5' : 'model-id'}
+						aria-label="Custom default model id"
+					/>
+				{/if}
+				<span class="muted small">
+					Pick a discovered model or enter an exact model id accepted by the selected provider.
+				</span>
 			{:else}
 				<input
 					name="defaultModel"
@@ -121,6 +207,26 @@
 				</span>
 			{/if}
 		</label>
+		{#if unavailableRuntimeFeatures.length > 0}
+			<section class="feature-note" aria-labelledby="provider-feature-heading">
+				<div class="section-subheading">
+					<h3 id="provider-feature-heading">
+						{selectedProviderStatus.displayName} feature differences
+					</h3>
+					<p class="muted small">
+						These defaults still save in the portal, but provider runtime support varies.
+					</p>
+				</div>
+				<ul>
+					{#each unavailableRuntimeFeatures as feature (feature.label)}
+						<li data-tone={featureTone(feature)}>
+							<strong>{feature.label}</strong>
+							<span>{feature.description}</span>
+						</li>
+					{/each}
+				</ul>
+			</section>
+		{/if}
 		<label>
 			Default working directory
 			<input
@@ -194,6 +300,16 @@
 	.section-heading p {
 		margin: 0;
 	}
+	.section-subheading {
+		margin-bottom: 0.75rem;
+	}
+	.section-subheading h3 {
+		margin: 0 0 0.25rem;
+		font-size: 1rem;
+	}
+	.section-subheading p {
+		margin: 0;
+	}
 	form {
 		display: flex;
 		flex-direction: column;
@@ -226,22 +342,94 @@
 		display: block;
 		margin-bottom: 0;
 	}
-	.copilot-status {
+	.backend-status,
+	.feature-note {
 		border: 1px solid var(--border);
 		border-radius: 6px;
 		padding: 0.75rem 1rem;
 		margin-bottom: 1.5rem;
 	}
-	.copilot-status.ok {
-		border-color: var(--success);
+	.provider-grid {
+		display: grid;
+		gap: 0.75rem;
+		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 	}
-	.copilot-status.bad {
-		border-color: var(--danger);
+	.provider-card {
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		padding: 0.75rem;
+		background: color-mix(in srgb, var(--surface) 88%, transparent);
 	}
-	.copilot-status .row {
+	.provider-card.selected {
+		border-color: var(--accent);
+	}
+	.provider-card.ok {
+		box-shadow: inset 3px 0 0 var(--success);
+	}
+	.provider-card.bad {
+		box-shadow: inset 3px 0 0 var(--danger);
+	}
+	.provider-card-header {
 		display: flex;
+		justify-content: space-between;
 		gap: 0.5rem;
 		align-items: center;
+	}
+	.status-pill {
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		color: var(--text-muted);
+		font-size: 0.75em;
+		padding: 0.15rem 0.45rem;
+		white-space: nowrap;
+	}
+	.status-pill.ok {
+		border-color: var(--success);
+		color: var(--success);
+	}
+	dl {
+		display: grid;
+		gap: 0.35rem;
+		margin: 0.75rem 0;
+	}
+	dl > div {
+		display: grid;
+		gap: 0.15rem;
+	}
+	dt {
+		color: var(--text-muted);
+		font-size: 0.75em;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	dd {
+		margin: 0;
+		overflow-wrap: anywhere;
+	}
+	.feature-note {
+		margin-top: 0.25rem;
+	}
+	.feature-note ul {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		gap: 0.5rem;
+	}
+	.feature-note li {
+		border-left: 3px solid var(--border);
+		padding-left: 0.65rem;
+		display: grid;
+		gap: 0.15rem;
+	}
+	.feature-note li[data-tone='ok'] {
+		border-left-color: var(--success);
+	}
+	.feature-note li[data-tone='warn'] {
+		border-left-color: var(--warning, #d29922);
+	}
+	.feature-note li[data-tone='bad'] {
+		border-left-color: var(--danger);
 	}
 	.small {
 		font-size: 0.85em;

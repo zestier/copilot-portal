@@ -12,8 +12,8 @@ agent sessions.
 The turn runner and pool depend on the provider interfaces in
 `$lib/server/copilot/provider.ts`, not on Copilot-specific SDK objects. Copilot
 is registered as the default provider via `$lib/server/copilot/providers.ts`;
-future OpenAI-compatible backends should add a provider implementation behind
-that registry.
+OpenAI-compatible backends use the same registry behind the
+`openai-compatible` provider id.
 
 Provider capabilities are explicit so UI/server code can distinguish core
 requirements from Copilot-only enhancements:
@@ -21,7 +21,7 @@ requirements from Copilot-only enhancements:
 | Capability | Required? | Notes |
 | ---------- | --------- | ----- |
 | Auth status | Yes | `fetchAuthStatus(userId, authToken?)` returns provider-neutral auth state. |
-| Model list | Yes | `listModels(userId, authToken?)` returns provider-neutral model metadata. |
+| Model list | Yes | `listModels(userId, authToken?)` returns provider-neutral model metadata. Settings falls back to manual model-id entry when discovery returns no models. |
 | Session open | Yes | `openSession(opts)` opens a conversation-scoped backend session. |
 | Session resume | Optional | Copilot resumes by `conversationId`; OpenAI-compatible providers may open a fresh backend session and rely on the portal's SQLite transcript. |
 | Session dispose | Yes | Idle reaping and conversation deletion must release provider resources. |
@@ -40,8 +40,10 @@ Copilot-only features are modeled as optional provider capabilities:
 permission/user-input/elicitation/exit-plan/auto-mode-switch callbacks,
 infinite-session metadata, context-window usage and compaction events, file-edit
 events, reasoning events, and subagent lifecycle events. OpenAI-compatible
-providers can start with message/tool/error/done events and add richer
-`PortalEvent` variants as their native APIs support them.
+providers currently emit message/tool/error/done events and can add richer
+`PortalEvent` variants as their native APIs support them. See
+`docs/openai-compatible-backends.md` for operator setup and expected feature
+differences.
 
 ## Module: `$lib/server/copilot/copilot-provider.ts`
 
