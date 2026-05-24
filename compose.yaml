@@ -13,9 +13,9 @@ services:
   portal:
     # Default to building from the repo checkout. Once an image has been
     # pushed to a registry, replace `build:` with
-    # `image: ghcr.io/<owner>/copilot-portal:<tag>`.
+    # `image: ghcr.io/<owner>/zap:<tag>`.
     build: .
-    image: copilot-portal:local
+    image: zap:local
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0

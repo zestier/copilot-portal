@@ -17,27 +17,57 @@ interface Entry {
 // Stash on globalThis so Vite HMR re-imports of this module in dev don't
 // orphan the live SDK sessions in the old module's closure. See the
 // matching comment in turn-runner.ts.
-const SESSIONS_KEY = Symbol.for('copilot-portal.pool.sessions');
-const REAPER_KEY = Symbol.for('copilot-portal.pool.reaper');
+const SESSIONS_KEY = Symbol.for('zap.pool.sessions');
+const COMMAND_DECK_SESSIONS_KEY = Symbol.for('command-deck.pool.sessions');
+const AGENT_PORTAL_SESSIONS_KEY = Symbol.for('agent-portal.pool.sessions');
+const LEGACY_SESSIONS_KEY = Symbol.for('copilot-portal.pool.sessions');
+const REAPER_KEY = Symbol.for('zap.pool.reaper');
+const COMMAND_DECK_REAPER_KEY = Symbol.for('command-deck.pool.reaper');
+const AGENT_PORTAL_REAPER_KEY = Symbol.for('agent-portal.pool.reaper');
+const LEGACY_REAPER_KEY = Symbol.for('copilot-portal.pool.reaper');
 type SessionsMap = Map<string, Entry>;
 type InflightMap = Map<string, Promise<ProviderSession>>;
 type GlobalSlot = Record<symbol, unknown>;
 const sessions: SessionsMap =
 	((globalThis as unknown as GlobalSlot)[SESSIONS_KEY] as SessionsMap | undefined) ??
+	((globalThis as unknown as GlobalSlot)[COMMAND_DECK_SESSIONS_KEY] as SessionsMap | undefined) ??
+	((globalThis as unknown as GlobalSlot)[AGENT_PORTAL_SESSIONS_KEY] as SessionsMap | undefined) ??
+	((globalThis as unknown as GlobalSlot)[LEGACY_SESSIONS_KEY] as SessionsMap | undefined) ??
 	(((globalThis as unknown as GlobalSlot)[SESSIONS_KEY] = new Map<string, Entry>()) as SessionsMap);
 // In-flight `open()` promises, keyed by conversationId. Concurrent
 // acquire() calls for the same conversation share one open(), avoiding
 // the TOCTOU between `sessions.get` and `sessions.set` that would
 // otherwise leak a second SDK subprocess.
-const INFLIGHT_KEY = Symbol.for('copilot-portal.pool.inflight');
+const INFLIGHT_KEY = Symbol.for('zap.pool.inflight');
+const COMMAND_DECK_INFLIGHT_KEY = Symbol.for('command-deck.pool.inflight');
+const AGENT_PORTAL_INFLIGHT_KEY = Symbol.for('agent-portal.pool.inflight');
+const LEGACY_INFLIGHT_KEY = Symbol.for('copilot-portal.pool.inflight');
 const inflight: InflightMap =
 	((globalThis as unknown as GlobalSlot)[INFLIGHT_KEY] as InflightMap | undefined) ??
+	((globalThis as unknown as GlobalSlot)[COMMAND_DECK_INFLIGHT_KEY] as InflightMap | undefined) ??
+	((globalThis as unknown as GlobalSlot)[AGENT_PORTAL_INFLIGHT_KEY] as InflightMap | undefined) ??
+	((globalThis as unknown as GlobalSlot)[LEGACY_INFLIGHT_KEY] as InflightMap | undefined) ??
 	(((globalThis as unknown as GlobalSlot)[INFLIGHT_KEY] = new Map<
 		string,
 		Promise<ProviderSession>
 	>()) as InflightMap);
 function getReaperTimer(): NodeJS.Timeout | null {
-	return ((globalThis as unknown as GlobalSlot)[REAPER_KEY] as NodeJS.Timeout | null) ?? null;
+	return (
+		((globalThis as unknown as GlobalSlot)[REAPER_KEY] as NodeJS.Timeout | null | undefined) ??
+		((globalThis as unknown as GlobalSlot)[COMMAND_DECK_REAPER_KEY] as
+			| NodeJS.Timeout
+			| null
+			| undefined) ??
+		((globalThis as unknown as GlobalSlot)[AGENT_PORTAL_REAPER_KEY] as
+			| NodeJS.Timeout
+			| null
+			| undefined) ??
+		((globalThis as unknown as GlobalSlot)[LEGACY_REAPER_KEY] as
+			| NodeJS.Timeout
+			| null
+			| undefined) ??
+		null
+	);
 }
 function setReaperTimer(t: NodeJS.Timeout | null) {
 	(globalThis as unknown as GlobalSlot)[REAPER_KEY] = t;

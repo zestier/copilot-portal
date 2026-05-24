@@ -86,10 +86,18 @@ interface InternalTurn extends Turn {
 // client's resume-on-reload would get 204, and the UI would appear "stuck"
 // with no assistant response while the orphaned turn quietly persisted to
 // the DB minutes later. Same rationale as keeping the DB handle pinned.
-const TURNS_KEY = Symbol.for('copilot-portal.turns');
+const TURNS_KEY = Symbol.for('zap.turns');
+const COMMAND_DECK_TURNS_KEY = Symbol.for('command-deck.turns');
+const AGENT_PORTAL_TURNS_KEY = Symbol.for('agent-portal.turns');
+const LEGACY_TURNS_KEY = Symbol.for('copilot-portal.turns');
 type TurnRegistry = Map<string, InternalTurn>;
-const turns: TurnRegistry = ((globalThis as unknown as Record<symbol, TurnRegistry>)[TURNS_KEY] ??=
-	new Map<string, InternalTurn>());
+const turnGlobals = globalThis as unknown as Record<symbol, TurnRegistry | undefined>;
+const turns: TurnRegistry =
+	turnGlobals[TURNS_KEY] ??
+	turnGlobals[COMMAND_DECK_TURNS_KEY] ??
+	turnGlobals[AGENT_PORTAL_TURNS_KEY] ??
+	turnGlobals[LEGACY_TURNS_KEY] ??
+	(turnGlobals[TURNS_KEY] = new Map());
 
 // How long a finished turn lingers in the registry so that a slightly-late
 // subscriber (e.g., a page that reloaded just as the turn completed) can

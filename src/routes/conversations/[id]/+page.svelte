@@ -26,7 +26,7 @@
 </script>
 
 <svelte:head>
-	<title>{data.conversation.title} — Copilot Portal</title>
+	<title>{data.conversation.title} — Zestier's AI Portal</title>
 </svelte:head>
 
 <div class="conversation">

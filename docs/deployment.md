@@ -2,7 +2,7 @@
 
 The portal is distributed as a multi-arch container image
 (`linux/amd64` + `linux/arm64`) at
-`ghcr.io/<owner>/copilot-portal:<tag>`. It's a long-running web server
+`ghcr.io/<owner>/zap:<tag>`. It's a long-running web server
 that needs:
 
 - A persistent volume for its encrypted SQLite database (`/data`).
@@ -29,7 +29,7 @@ Three deployment topologies are supported:
 # compose.yaml is committed; just supply a .env file.
 services:
   portal:
-    image: ghcr.io/<owner>/copilot-portal:latest
+    image: ghcr.io/<owner>/zap:latest
     # ...
     volumes:
       - ./data:/data
@@ -310,13 +310,13 @@ the local DB isn't polluted. See [`AGENTS.md`](../AGENTS.md).
 ## Building the image locally
 
 ```bash
-docker build -t copilot-portal:dev .
+docker build -t zap:dev .
 ```
 
 For a multi-arch build matching the released image:
 
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t copilot-portal:dev .
+docker buildx build --platform linux/amd64,linux/arm64 -t zap:dev .
 ```
 
 Requires `docker buildx` with QEMU set up

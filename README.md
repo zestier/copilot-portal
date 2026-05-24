@@ -1,9 +1,10 @@
-# Copilot Portal
+# Zestier's AI Portal
 
-A self-hosted web portal for interacting with GitHub Copilot's agent runtime, built
-on top of the official [`github/copilot-sdk`](https://github.com/github/copilot-sdk).
-Intended to be run on a personal/home machine and exposed via a Cloudflare Tunnel
-(or similar) for remote access from a phone or laptop.
+Zestier's AI Portal (ZAP) is a self-hosted web portal for interacting with
+GitHub Copilot's agent runtime, built on top of the official
+[`github/copilot-sdk`](https://github.com/github/copilot-sdk). Intended to be run
+on a personal/home machine and exposed via a Cloudflare Tunnel (or similar) for
+remote access from a phone or laptop.
 
 > **Status:** Phases 0–3 of the roadmap are implemented (single-user
 > local chat, tools/permissions/diffs, OAuth + Cloudflare Tunnel

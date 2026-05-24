@@ -50,7 +50,7 @@
 	}
 </script>
 
-<svelte:head><title>Settings — Copilot Portal</title></svelte:head>
+<svelte:head><title>Settings — Zestier's AI Portal</title></svelte:head>
 
 <div class="wrap">
 	<header class="settings-header">

@@ -30,7 +30,7 @@
 
 <div class="home">
 	<EmptyState
-		title="Copilot Portal"
+		title="Zestier's AI Portal"
 		description="Start a new conversation, or pick one from the sidebar."
 		size="lg"
 	>

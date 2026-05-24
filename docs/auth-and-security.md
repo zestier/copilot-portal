@@ -16,7 +16,7 @@ accordingly: it is **never** safe to expose unauthenticated.
 
 ## Trust model
 
-Copilot Portal is a self-hosted control surface for a trusted operator, not a
+Zestier's AI Portal (ZAP) is a self-hosted control surface for a trusted operator, not a
 multi-tenant sandbox. Anyone who can use a conversation can ask an agent to read
 and edit the configured workdir, request shell commands, mutate git state, start
 long-running processes, and trigger whatever external side effects the host

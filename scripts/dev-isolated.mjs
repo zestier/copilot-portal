@@ -18,7 +18,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const dataDir = mkdtempSync(join(tmpdir(), 'copilot-portal-dev-'));
+const dataDir = mkdtempSync(join(tmpdir(), 'zap-dev-'));
 console.log(`[dev-isolated] DATA_DIR=${dataDir}`);
 console.log('[dev-isolated] AUTH_MODE=none (local-only)');
 

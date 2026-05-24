@@ -19,9 +19,9 @@ import { getDb } from './db';
 const SNAP_TIMEOUT_MS = 30_000;
 const SNAP_MAX_BYTES = 8 * 1024 * 1024;
 const SNAPSHOT_IDENTITY = {
-	GIT_AUTHOR_NAME: 'Copilot Portal',
+	GIT_AUTHOR_NAME: "Zestier's AI Portal",
 	GIT_AUTHOR_EMAIL: 'portal@localhost',
-	GIT_COMMITTER_NAME: 'Copilot Portal',
+	GIT_COMMITTER_NAME: "Zestier's AI Portal",
 	GIT_COMMITTER_EMAIL: 'portal@localhost',
 	GIT_CONFIG_GLOBAL: '/dev/null',
 	GIT_CONFIG_NOSYSTEM: '1',
@@ -300,7 +300,7 @@ export async function materializeFromCommit(
 	await withLock(dstWorkdir, async () => {
 		await runOk(['init', '-q', '-b', 'portal'], { cwd: dstWorkdir });
 		await runOk(['config', 'user.email', 'portal@localhost'], { cwd: dstWorkdir });
-		await runOk(['config', 'user.name', 'Copilot Portal'], { cwd: dstWorkdir });
+		await runOk(['config', 'user.name', "Zestier's AI Portal"], { cwd: dstWorkdir });
 		await runOk(['config', 'commit.gpgsign', 'false'], { cwd: dstWorkdir });
 		// Use `fetch` from a local path so we only transfer the snapshot
 		// commit and its tree, not the whole history graph. `--depth=1`

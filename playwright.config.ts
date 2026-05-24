@@ -92,7 +92,7 @@ export default defineConfig({
 			// browser's `http://...` Origin header. Pin it explicitly.
 			ORIGIN: `http://127.0.0.1:${PORT}`,
 			// Each conversation's workdir lives under $DATA_DIR/workspaces/<id>.
-			// dataDir lives inside the copilot-portal source tree, which is itself a
+			// dataDir lives inside the ZAP source tree, which is itself a
 			// git repo. Without this, git commands run inside conversation workdirs
 			// would walk up into the outer repo. Tell git to stop at dataDir so each
 			// test sees an isolated workspace.

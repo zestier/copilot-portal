@@ -46,7 +46,7 @@ a few small `.svelte.ts`/`.ts` modules under `src/lib/client/` are enough.
 ## Repository layout
 
 ```
-copilot-portal/
+zap/
 ├─ src/
 │  ├─ app.html
 │  ├─ app.d.ts
