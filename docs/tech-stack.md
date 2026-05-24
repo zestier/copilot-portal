@@ -168,6 +168,10 @@ invalid config.
 | `OPENAI_COMPATIBLE_API_KEY` | —                      | Optional bearer token for the generic OpenAI-compatible backend. |
 | `OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS` | `8`       | Maximum OpenAI-compatible tool-calling loops before the portal stops the turn. |
 | `OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES` | `20`  | Maximum complete portal messages replayed when a fresh OpenAI-compatible session restores context. |
+| `OPENAI_COMPATIBLE_TEMPERATURE` | — | Optional sampling temperature for OpenAI-compatible and LM Studio chat completions. Leave unset to use backend/model defaults. |
+| `OPENAI_COMPATIBLE_TOP_P` | — | Optional nucleus sampling value for OpenAI-compatible and LM Studio chat completions. Leave unset to use backend/model defaults. |
+| `OPENAI_COMPATIBLE_PRESENCE_PENALTY` | — | Optional topic repetition penalty for OpenAI-compatible and LM Studio chat completions. Leave unset to use backend/model defaults. |
+| `OPENAI_COMPATIBLE_FREQUENCY_PENALTY` | — | Optional token repetition penalty for OpenAI-compatible and LM Studio chat completions. Leave unset to use backend/model defaults. |
 | `LMSTUDIO_BASE_URL`       | `http://127.0.0.1:1234`  | Base URL for LM Studio's local server. The portal uses `/v1` for chat and `/api/v1` for model metadata. |
 | `LMSTUDIO_API_KEY`        | —                        | Optional LM Studio API token when server authentication is enabled. |
 | `IDLE_TIMEOUT_MIN`        | `15`                     | SDK session idle reap.               |

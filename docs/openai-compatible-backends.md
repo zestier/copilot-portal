@@ -34,6 +34,12 @@ OPENAI_COMPATIBLE_API_KEY=<token>
 OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS=8
 # Optional cap for persisted messages replayed into a fresh provider session:
 OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES=20
+# Optional sampling controls shared by OpenAI-compatible and LM Studio sessions.
+# Leave unset to let the backend/model defaults apply:
+# OPENAI_COMPATIBLE_TEMPERATURE=0.8
+# OPENAI_COMPATIBLE_TOP_P=0.95
+# OPENAI_COMPATIBLE_PRESENCE_PENALTY=0.1
+# OPENAI_COMPATIBLE_FREQUENCY_PENALTY=0.2
 ```
 
 You can also leave `DEFAULT_BACKEND_PROVIDER=copilot` and select
@@ -45,6 +51,11 @@ enter the exact model id manually.
 
 Existing conversations keep the provider and model selected when they were
 created. Change settings before starting a new conversation.
+
+Sampling values are not sent by default, so LM Studio and other backends can
+apply their own model-specific defaults. Set the `OPENAI_COMPATIBLE_*` sampling
+variables only when you want the portal to override those defaults; the same
+values are used by the dedicated LM Studio provider.
 
 If you are using LM Studio 0.4.0 or newer, prefer the dedicated **LM Studio**
 provider (`DEFAULT_BACKEND_PROVIDER=lm-studio`). It uses LM Studio's

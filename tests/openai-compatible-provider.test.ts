@@ -104,6 +104,10 @@ afterEach(() => {
 	delete process.env.OPENAI_COMPATIBLE_BASE_URL;
 	delete process.env.OPENAI_COMPATIBLE_API_KEY;
 	delete process.env.OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS;
+	delete process.env.OPENAI_COMPATIBLE_TEMPERATURE;
+	delete process.env.OPENAI_COMPATIBLE_TOP_P;
+	delete process.env.OPENAI_COMPATIBLE_PRESENCE_PENALTY;
+	delete process.env.OPENAI_COMPATIBLE_FREQUENCY_PENALTY;
 	resetConfigForTests();
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
@@ -176,6 +180,10 @@ describe('openAICompatibleProvider', () => {
 				tool_choice: 'auto',
 				stream: true
 			});
+			expect(JSON.parse(String(init?.body))).not.toHaveProperty('temperature');
+			expect(JSON.parse(String(init?.body))).not.toHaveProperty('top_p');
+			expect(JSON.parse(String(init?.body))).not.toHaveProperty('presence_penalty');
+			expect(JSON.parse(String(init?.body))).not.toHaveProperty('frequency_penalty');
 			return sseResponse([
 				'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
 				'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
@@ -200,6 +208,33 @@ describe('openAICompatibleProvider', () => {
 			'http://127.0.0.1:1234/v1/chat/completions',
 			expect.objectContaining({ method: 'POST' })
 		);
+	});
+
+	it('sends configured OpenAI-compatible sampling controls with chat requests', async () => {
+		process.env.OPENAI_COMPATIBLE_TEMPERATURE = '1.1';
+		process.env.OPENAI_COMPATIBLE_TOP_P = '0.9';
+		process.env.OPENAI_COMPATIBLE_PRESENCE_PENALTY = '0.4';
+		process.env.OPENAI_COMPATIBLE_FREQUENCY_PENALTY = '0.6';
+		resetConfigForTests();
+		const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+			void _url;
+			void _init;
+			return sseResponse([
+				'data: {"choices":[{"delta":{"content":"varied"}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const session = await openAICompatibleProvider.openSession(baseOpts);
+
+		await collect(session.send('hello', new AbortController().signal));
+
+		expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+			temperature: 1.1,
+			top_p: 0.9,
+			presence_penalty: 0.4,
+			frequency_penalty: 0.6
+		});
 	});
 
 	it('streams chat-only responses from an OpenAI-compatible fake server', async () => {

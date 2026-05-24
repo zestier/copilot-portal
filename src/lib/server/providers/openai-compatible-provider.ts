@@ -25,8 +25,16 @@ export interface OpenAICompatibleConfig {
 	apiKey: string | null;
 	maxToolIterations: number;
 	contextRestoreMessages: number;
+	sampling: OpenAICompatibleSamplingOptions;
 	contextTokenLimit?: number | null;
 	includeUsage?: boolean;
+}
+
+export interface OpenAICompatibleSamplingOptions {
+	temperature?: number;
+	top_p?: number;
+	presence_penalty?: number;
+	frequency_penalty?: number;
 }
 
 interface ChatChoiceDelta {
@@ -256,7 +264,28 @@ function providerConfig(): OpenAICompatibleConfig {
 		baseUrl: cfg.OPENAI_COMPATIBLE_BASE_URL ?? null,
 		apiKey: cfg.OPENAI_COMPATIBLE_API_KEY ?? null,
 		maxToolIterations: cfg.OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS,
-		contextRestoreMessages: cfg.OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES
+		contextRestoreMessages: cfg.OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES,
+		sampling: openAICompatibleSamplingOptions(cfg)
+	};
+}
+
+export function openAICompatibleSamplingOptions(cfg: {
+	OPENAI_COMPATIBLE_TEMPERATURE?: number;
+	OPENAI_COMPATIBLE_TOP_P?: number;
+	OPENAI_COMPATIBLE_PRESENCE_PENALTY?: number;
+	OPENAI_COMPATIBLE_FREQUENCY_PENALTY?: number;
+}): OpenAICompatibleSamplingOptions {
+	return {
+		...(cfg.OPENAI_COMPATIBLE_TEMPERATURE !== undefined
+			? { temperature: cfg.OPENAI_COMPATIBLE_TEMPERATURE }
+			: {}),
+		...(cfg.OPENAI_COMPATIBLE_TOP_P !== undefined ? { top_p: cfg.OPENAI_COMPATIBLE_TOP_P } : {}),
+		...(cfg.OPENAI_COMPATIBLE_PRESENCE_PENALTY !== undefined
+			? { presence_penalty: cfg.OPENAI_COMPATIBLE_PRESENCE_PENALTY }
+			: {}),
+		...(cfg.OPENAI_COMPATIBLE_FREQUENCY_PENALTY !== undefined
+			? { frequency_penalty: cfg.OPENAI_COMPATIBLE_FREQUENCY_PENALTY }
+			: {})
 	};
 }
 
@@ -409,6 +438,7 @@ export function openOpenAICompatibleSession(
 					tools: openAITools,
 					tool_choice: 'auto',
 					stream: true,
+					...cfg.sampling,
 					...(cfg.includeUsage ? { stream_options: { include_usage: true } } : {})
 				}),
 				signal: activeAbortController?.signal

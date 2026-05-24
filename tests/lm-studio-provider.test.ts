@@ -45,6 +45,10 @@ beforeEach(async () => {
 afterEach(() => {
 	delete process.env.LMSTUDIO_BASE_URL;
 	delete process.env.LMSTUDIO_API_KEY;
+	delete process.env.OPENAI_COMPATIBLE_TEMPERATURE;
+	delete process.env.OPENAI_COMPATIBLE_TOP_P;
+	delete process.env.OPENAI_COMPATIBLE_PRESENCE_PENALTY;
+	delete process.env.OPENAI_COMPATIBLE_FREQUENCY_PENALTY;
 	resetConfigForTests();
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
@@ -132,6 +136,10 @@ describe('lmStudioProvider', () => {
 				stream: true,
 				stream_options: { include_usage: true }
 			});
+			expect(JSON.parse(String(init?.body))).not.toHaveProperty('temperature');
+			expect(JSON.parse(String(init?.body))).not.toHaveProperty('top_p');
+			expect(JSON.parse(String(init?.body))).not.toHaveProperty('presence_penalty');
+			expect(JSON.parse(String(init?.body))).not.toHaveProperty('frequency_penalty');
 			return sseResponse([
 				'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
 				'data: {"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":3,"total_tokens":45}}\n\n',

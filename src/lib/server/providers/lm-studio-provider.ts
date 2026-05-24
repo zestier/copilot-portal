@@ -2,6 +2,7 @@ import { loadConfig } from '../config';
 import { log } from '../log';
 import { jsonRequestHeaders, parseJson } from './provider-utils';
 import {
+	openAICompatibleSamplingOptions,
 	openOpenAICompatibleSession,
 	type OpenAICompatibleConfig
 } from './openai-compatible-provider';
@@ -22,6 +23,7 @@ interface LMStudioConfig {
 	apiKey: string | null;
 	maxToolIterations: number;
 	contextRestoreMessages: number;
+	sampling: OpenAICompatibleConfig['sampling'];
 }
 
 interface LMStudioModel {
@@ -212,6 +214,7 @@ export const lmStudioProvider: ModelBackendProvider = {
 			apiKey: cfg.apiKey,
 			maxToolIterations: cfg.maxToolIterations,
 			contextRestoreMessages: cfg.contextRestoreMessages,
+			sampling: cfg.sampling,
 			contextTokenLimit: tokenLimit,
 			includeUsage: tokenLimit !== null
 		};
@@ -228,7 +231,8 @@ function providerConfig(): LMStudioConfig {
 		openAIBaseUrl: openAIEndpointBase(cfg.LMSTUDIO_BASE_URL),
 		apiKey: cfg.LMSTUDIO_API_KEY ?? null,
 		maxToolIterations: cfg.OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS,
-		contextRestoreMessages: cfg.OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES
+		contextRestoreMessages: cfg.OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES,
+		sampling: openAICompatibleSamplingOptions(cfg)
 	};
 }
 
