@@ -121,7 +121,7 @@ function permissionCapabilities(opts: {
 			forcePermissionPrompt: {
 				supported: true,
 				guidance:
-					'Always available. Retry the blocked request with forcePermissionPrompt and a concise reason when no allowed alternative works.'
+					'Use sparingly. Retry the blocked request with forcePermissionPrompt and a concise reason only after verifying no allowed alternative works.'
 			}
 		}
 	};

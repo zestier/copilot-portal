@@ -302,7 +302,7 @@ describe('bridge.open() session mode and permissions', () => {
 				allowed?: Array<{ summary: string }>;
 			}>;
 			escalation: {
-				forcePermissionPrompt: { supported: boolean };
+				forcePermissionPrompt: { supported: boolean; guidance: string };
 			};
 		};
 
@@ -310,7 +310,10 @@ describe('bridge.open() session mode and permissions', () => {
 			mode: 'best-effort',
 			bestEffort: true,
 			escalation: {
-				forcePermissionPrompt: { supported: true }
+				forcePermissionPrompt: {
+					supported: true,
+					guidance: expect.stringContaining('after verifying no allowed alternative works')
+				}
 			}
 		});
 		expect(response.capabilities).toEqual([
@@ -427,6 +430,11 @@ describe('bridge.open() session mode and permissions', () => {
 		);
 		expect(result).toEqual(
 			expect.objectContaining({
+				feedback: expect.stringContaining('after verifying no allowed alternative works')
+			})
+		);
+		expect(result).toEqual(
+			expect.objectContaining({
 				feedback: expect.stringContaining('permission_capabilities')
 			})
 		);
@@ -487,6 +495,7 @@ describe('bridge.open() session mode and permissions', () => {
 			expect(kindFeedback).toContain(c.expectedHint);
 			expect(kindFeedback).toContain('permission_capabilities');
 			expect(kindFeedback).toContain('forcePermissionPrompt');
+			expect(kindFeedback).toContain('after verifying no allowed alternative works');
 			expect(kindFeedback).not.toContain(c.forbiddenDetail);
 		}
 	});

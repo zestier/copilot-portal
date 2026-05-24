@@ -21,6 +21,7 @@ export const PORTAL_PRELUDE = [
 	'Use git_status/git_diff/git_log/git_show_commit/git_show_file instead of shell git.',
 	'Use ticket_add/ticket_list/ticket_update for durable workspace tickets and later-task stashes.',
 	'Use permission_capabilities to inspect allowed alternatives after permission rejections.',
-	'If truly blocked, retry shell git with non-empty `forcePermissionPrompt` explaining why.',
+	'Use `forcePermissionPrompt` sparingly: only after verifying no allowed alternative',
+	'can complete the task, and include a concise reason.',
 	'[/Portal context]'
 ].join('\n');
