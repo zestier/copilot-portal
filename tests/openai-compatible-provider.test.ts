@@ -1,3 +1,5 @@
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resetConfigForTests } from '../src/lib/server/config';
 import { openAICompatibleProvider } from '../src/lib/server/copilot/openai-compatible-provider';
@@ -27,6 +29,46 @@ function sseResponse(chunks: string[]): Response {
 		}
 	});
 	return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+}
+
+function writeSse(res: ServerResponse, chunks: string[]) {
+	res.writeHead(200, { 'content-type': 'text/event-stream' });
+	for (const chunk of chunks) res.write(chunk);
+	res.end();
+}
+
+async function readJson(req: IncomingMessage): Promise<unknown> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+	return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+async function startFakeStreamingServer(
+	handler: (body: unknown, req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+	const server = createServer(async (req, res) => {
+		try {
+			if (req.method !== 'POST' || req.url !== '/v1/chat/completions') {
+				res.writeHead(404).end();
+				return;
+			}
+			await handler(await readJson(req), req, res);
+		} catch (e) {
+			res
+				.writeHead(500, { 'content-type': 'application/json' })
+				.end(JSON.stringify({ error: { message: e instanceof Error ? e.message : String(e) } }));
+		}
+	});
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+	const { port } = server.address() as AddressInfo;
+	return {
+		baseUrl: `http://127.0.0.1:${port}/v1`,
+		close: async () => {
+			await new Promise<void>((resolve, reject) =>
+				server.close((err) => (err ? reject(err) : resolve()))
+			);
+		}
+	};
 }
 
 async function collect(iterable: AsyncIterable<PortalEvent>): Promise<PortalEvent[]> {
@@ -64,6 +106,7 @@ afterEach(() => {
 	delete process.env.OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS;
 	resetConfigForTests();
 	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
 });
 
 describe('openAICompatibleProvider', () => {
@@ -157,6 +200,54 @@ describe('openAICompatibleProvider', () => {
 			'http://127.0.0.1:1234/v1/chat/completions',
 			expect.objectContaining({ method: 'POST' })
 		);
+	});
+
+	it('streams chat-only responses from an OpenAI-compatible fake server', async () => {
+		const requests: unknown[] = [];
+		const server = await startFakeStreamingServer((body, req, res) => {
+			requests.push(body);
+			expect(req.headers.authorization).toBe('Bearer fake-key');
+			writeSse(res, [
+				'data: {"choices":[{"delta":{"content":"network "}}]}\n\n',
+				'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		process.env.OPENAI_COMPATIBLE_BASE_URL = server.baseUrl;
+		process.env.OPENAI_COMPATIBLE_API_KEY = 'fake-key';
+		resetConfigForTests();
+		try {
+			const session = await openAICompatibleProvider.openSession(baseOpts);
+
+			const events = await collect(session.send('hello network', new AbortController().signal));
+
+			expect(events.map((event) => event.type)).toEqual([
+				'message.start',
+				'message.delta',
+				'message.delta',
+				'message.end',
+				'done'
+			]);
+			expect(events.filter((event) => event.type === 'message.delta')).toEqual([
+				expect.objectContaining({ text: 'network ' }),
+				expect.objectContaining({ text: 'ok' })
+			]);
+			expect(requests).toHaveLength(1);
+			expect(requests[0]).toMatchObject({
+				model: 'local-model',
+				messages: [{ role: 'user', content: 'hello network' }],
+				tools: expect.arrayContaining([
+					expect.objectContaining({
+						type: 'function',
+						function: expect.objectContaining({ name: 'git_status' })
+					})
+				]),
+				tool_choice: 'auto',
+				stream: true
+			});
+		} finally {
+			await server.close();
+		}
 	});
 
 	it('handles SSE comments, non-data fields, multiline data, and array text parts', async () => {
@@ -315,6 +406,73 @@ describe('openAICompatibleProvider', () => {
 				expect.objectContaining({ role: 'tool', tool_call_id: 'call_git_status' })
 			])
 		});
+	});
+
+	it('executes approved tool calls against an OpenAI-compatible fake server', async () => {
+		const requests: unknown[] = [];
+		const server = await startFakeStreamingServer((body, _req, res) => {
+			requests.push(body);
+			if (requests.length === 1) {
+				writeSse(res, [
+					'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_git_status","type":"function","function":{"name":"git_status","arguments":"{}"}}]}}]}\n\n',
+					'data: [DONE]\n\n'
+				]);
+				return;
+			}
+			writeSse(res, [
+				'data: {"choices":[{"delta":{"content":"approved"}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		process.env.OPENAI_COMPATIBLE_BASE_URL = server.baseUrl;
+		resetConfigForTests();
+		try {
+			const opts = await persistedOpts({ policy: 'prompt' });
+			const settings = await import('../src/lib/server/db/repos/settings');
+			settings.addGrant({
+				userId: opts.userId,
+				conversationId: opts.conversationId,
+				tool: 'git_status',
+				permissionKind: 'custom-tool',
+				scope: { kind: 'any' },
+				decision: 'allow'
+			});
+			const session = await openAICompatibleProvider.openSession(opts);
+
+			const events = await collect(session.send('status please', new AbortController().signal));
+
+			expect(events.map((event) => event.type)).toEqual([
+				'message.start',
+				'tool.call',
+				'tool.result',
+				'message.delta',
+				'message.end',
+				'done'
+			]);
+			expect(events[2]).toMatchObject({
+				type: 'tool.result',
+				toolCallId: 'call_git_status',
+				ok: true
+			});
+			expect(events[3]).toMatchObject({ type: 'message.delta', text: 'approved' });
+			expect(requests).toHaveLength(2);
+			expect(requests[1]).toMatchObject({
+				messages: expect.arrayContaining([
+					expect.objectContaining({
+						role: 'assistant',
+						tool_calls: [
+							expect.objectContaining({
+								id: 'call_git_status',
+								function: expect.objectContaining({ name: 'git_status' })
+							})
+						]
+					}),
+					expect.objectContaining({ role: 'tool', tool_call_id: 'call_git_status' })
+				])
+			});
+		} finally {
+			await server.close();
+		}
 	});
 
 	it('enforces permission callbacks before running portal tools', async () => {
