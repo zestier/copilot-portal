@@ -38,6 +38,10 @@ interface PermissionRequestLike {
 	args?: unknown;
 }
 
+const FORCE_PERMISSION_PROMPT_MIN_LENGTH = 20;
+const INVALID_FORCE_PERMISSION_PROMPT_FEEDBACK =
+	'`forcePermissionPrompt` must be a reason string of at least 20 characters explaining why no allowed alternative works.';
+
 interface InteractiveAdapterOptions {
 	conversationId: string;
 	userId: string;
@@ -89,6 +93,12 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				});
 			}
 		};
+
+		const forcePermissionPrompt = parseForcePermissionPrompt(req);
+		if (forcePermissionPrompt.kind === 'invalid') {
+			audit('auto-deny');
+			return { kind: 'reject', feedback: forcePermissionPrompt.feedback } as const;
+		}
 
 		let shellSegments: ParsedSegment[] | null = null;
 		let shellAnalysis: import('$lib/types').ShellAnalysisView | undefined = undefined;
@@ -159,7 +169,10 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			return { kind: 'approve-once' } as const;
 		}
 		if (grant.outcome === 'deny') {
-			const escalationReason = grant.denyReason ? readForcePermissionPrompt(req) : null;
+			const escalationReason =
+				grant.denyReason && forcePermissionPrompt.kind === 'valid'
+					? forcePermissionPrompt.reason
+					: null;
 			if (escalationReason) {
 				const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
 					'permission',
@@ -363,24 +376,56 @@ function hashPermissionArgs(req: PermissionRequestLike): string | null {
 	return null;
 }
 
-function readForcePermissionPrompt(req: PermissionRequestLike): string | null {
-	const raw =
-		typeof req.forcePermissionPrompt === 'string'
-			? req.forcePermissionPrompt
-			: (readArgString(req.args, 'forcePermissionPrompt') ??
-				(typeof req.toolCallId === 'string'
-					? readArgString(messagesRepo.getToolCallArgs(req.toolCallId), 'forcePermissionPrompt')
-					: null));
-	const reason = raw?.trim();
-	if (!reason) return null;
-	if (reason.length < 20) return null;
-	return reason;
+function parseForcePermissionPrompt(
+	req: PermissionRequestLike
+): { kind: 'absent' } | { kind: 'invalid'; feedback: string } | { kind: 'valid'; reason: string } {
+	const values = forcePermissionPromptValues(req);
+	if (values.length === 0) return { kind: 'absent' };
+
+	let reason: string | null = null;
+	for (const value of values) {
+		if (typeof value !== 'string') {
+			return { kind: 'invalid', feedback: INVALID_FORCE_PERMISSION_PROMPT_FEEDBACK };
+		}
+		const trimmed = value.trim();
+		if (trimmed.length < FORCE_PERMISSION_PROMPT_MIN_LENGTH) {
+			return { kind: 'invalid', feedback: INVALID_FORCE_PERMISSION_PROMPT_FEEDBACK };
+		}
+		reason ??= trimmed;
+	}
+
+	return { kind: 'valid', reason: reason ?? '' };
 }
 
-function readArgString(args: unknown, key: string): string | null {
-	if (!args || typeof args !== 'object') return null;
-	const v = (args as Record<string, unknown>)[key];
-	return typeof v === 'string' && v.length > 0 ? v : null;
+function forcePermissionPromptValues(req: PermissionRequestLike): unknown[] {
+	const values: unknown[] = [];
+	if (hasOwn(req, 'forcePermissionPrompt')) values.push(req.forcePermissionPrompt);
+
+	const argValue = readArgValue(req.args, 'forcePermissionPrompt');
+	if (argValue.present) values.push(argValue.value);
+
+	if (typeof req.toolCallId === 'string') {
+		const persistedValue = readArgValue(
+			messagesRepo.getToolCallArgs(req.toolCallId),
+			'forcePermissionPrompt'
+		);
+		if (persistedValue.present) values.push(persistedValue.value);
+	}
+
+	return values;
+}
+
+function readArgValue(
+	args: unknown,
+	key: string
+): { present: false } | { present: true; value: unknown } {
+	if (!args || typeof args !== 'object') return { present: false };
+	if (!hasOwn(args, key)) return { present: false };
+	return { present: true, value: (args as Record<string, unknown>)[key] };
+}
+
+function hasOwn(obj: object, key: string): boolean {
+	return Object.prototype.hasOwnProperty.call(obj, key);
 }
 
 function bestEffortPermissionFeedback(view: { permissionKind: string }): string {

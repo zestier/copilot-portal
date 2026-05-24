@@ -672,6 +672,65 @@ describe('bridge.open() session mode and permissions', () => {
 		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
 	});
 
+	it('rejects invalid forcePermissionPrompt values with syntax feedback', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+
+		const cases = [
+			{
+				name: 'top-level boolean',
+				request: {
+					kind: 'shell',
+					toolName: 'shell',
+					fullCommandText: 'git status --short',
+					forcePermissionPrompt: true,
+					args: { command: 'git status --short' }
+				}
+			},
+			{
+				name: 'args object',
+				request: {
+					kind: 'shell',
+					toolName: 'shell',
+					fullCommandText: 'git status --short',
+					args: { command: 'git status --short', forcePermissionPrompt: { reason: 'try anyway' } }
+				}
+			},
+			{
+				name: 'blank string',
+				request: {
+					kind: 'shell',
+					toolName: 'shell',
+					fullCommandText: 'git status --short',
+					args: { command: 'git status --short', forcePermissionPrompt: '   ' }
+				}
+			},
+			{
+				name: 'too-short string',
+				request: {
+					kind: 'shell',
+					toolName: 'shell',
+					fullCommandText: 'git status --short',
+					args: { command: 'git status --short', forcePermissionPrompt: 'too short' }
+				}
+			}
+		];
+
+		for (const c of cases) {
+			const result = await onPermissionRequest(c.request);
+			expect(result, c.name).toEqual({
+				kind: 'reject',
+				feedback:
+					'`forcePermissionPrompt` must be a reason string of at least 20 characters explaining why no allowed alternative works.'
+			});
+		}
+	});
+
 	it('recognizes forcePermissionPrompt from persisted tool args via toolCallId', async () => {
 		const { open } = await importBridge();
 		const interactive = await import('../src/lib/server/runtime/interactive-requests');
