@@ -1,5 +1,5 @@
 import { copilotProvider } from '../copilot/copilot-provider';
-import { openAICompatibleProvider } from '../copilot/openai-compatible-provider';
+import { openAICompatibleProvider } from './openai-compatible-provider';
 import { loadConfig } from '../config';
 import { normalizeBackendProvider, type BackendProviderId } from '$lib/types';
 import type {

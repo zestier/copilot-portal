@@ -3,7 +3,10 @@ import type {
 	PortalEvent,
 	PermissionPolicy,
 	ProviderCapabilities,
-	SessionMode
+	SessionMode,
+	MessageStatus,
+	Role,
+	ToolCallRecord
 } from '$lib/types';
 
 export type { ProviderCapabilities } from '$lib/types';
@@ -51,7 +54,20 @@ export interface ProviderOpenOptions {
 	approveAllTools?: boolean;
 	/** Provider-specific bearer credential resolved by the route layer, if needed. */
 	providerAuthToken?: string;
+	/**
+	 * Persisted conversation prefix for providers without durable resume. The
+	 * runtime passes only messages before the current user prompt, so providers
+	 * can hydrate fresh sessions without seeing portal database ids.
+	 */
+	initialMessages?: ProviderConversationMessage[];
 	onEvent?: (e: PortalEvent) => void;
+}
+
+export interface ProviderConversationMessage {
+	role: Role;
+	content: string;
+	status: MessageStatus;
+	toolCalls?: ToolCallRecord[];
 }
 
 export interface ProviderSession {

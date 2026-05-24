@@ -5,16 +5,17 @@ import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 import { buildGitTools, type PortalTool } from '../tools/git';
 import { buildPermissionTools } from '../tools/permissions';
 import { buildTicketTools } from '../tools/tickets';
-import type { BackendProviderId, PortalEvent, SessionMode } from '$lib/types';
-import { AsyncQueue } from './async-queue';
-import { createInteractiveCallbacks } from './interactive-adapter';
+import type { BackendProviderId, PortalEvent, SessionMode, ToolCallRecord } from '$lib/types';
+import { AsyncQueue } from '../runtime/async-queue';
+import { createInteractiveCallbacks } from '../copilot/interactive-adapter';
 import type {
 	ModelBackendProvider,
 	ProviderAuthStatus,
+	ProviderConversationMessage,
 	ProviderModelInfo,
 	ProviderOpenOptions,
 	ProviderSession
-} from '../providers/provider';
+} from './provider';
 
 interface OpenAICompatibleConfig {
 	id: Extract<BackendProviderId, 'openai-compatible'>;
@@ -22,6 +23,7 @@ interface OpenAICompatibleConfig {
 	baseUrl: string | null;
 	apiKey: string | null;
 	maxToolIterations: number;
+	contextRestoreMessages: number;
 }
 
 interface ChatChoiceDelta {
@@ -64,6 +66,7 @@ interface OpenAIToolCallDelta {
 }
 
 type ChatMessage =
+	| { role: 'system'; content: string }
 	| { role: 'user'; content: string }
 	| { role: 'assistant'; content: string | null; tool_calls?: OpenAIToolCall[] }
 	| { role: 'tool'; tool_call_id: string; content: string };
@@ -243,7 +246,8 @@ function providerConfig(): OpenAICompatibleConfig {
 		displayName,
 		baseUrl: cfg.OPENAI_COMPATIBLE_BASE_URL ?? null,
 		apiKey: cfg.OPENAI_COMPATIBLE_API_KEY ?? null,
-		maxToolIterations: cfg.OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS
+		maxToolIterations: cfg.OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS,
+		contextRestoreMessages: cfg.OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES
 	};
 }
 
@@ -389,7 +393,7 @@ function openOpenAICompatibleSession(
 	let activeQueue: AsyncQueue<PortalEvent> | null = null;
 	let approveAllTools = opts.approveAllTools === true;
 	let currentMode: SessionMode = opts.mode ?? 'interactive';
-	const messages: ChatMessage[] = [];
+	const messages: ChatMessage[] = restoreInitialMessages(cfg, opts);
 
 	function emit(ev: PortalEvent) {
 		activeQueue?.push(ev);
@@ -634,6 +638,65 @@ function openOpenAICompatibleSession(
 			activeAbortController?.abort();
 		}
 	};
+}
+
+function restoreInitialMessages(
+	cfg: OpenAICompatibleConfig,
+	opts: ProviderOpenOptions
+): ChatMessage[] {
+	return (opts.initialMessages ?? [])
+		.slice(-cfg.contextRestoreMessages)
+		.flatMap(messageToChatMessages);
+}
+
+function messageToChatMessages(message: ProviderConversationMessage): ChatMessage[] {
+	const content = message.content.trim();
+	if (message.role === 'system') {
+		return content ? [{ role: 'system', content }] : [];
+	}
+	if (message.role === 'user') {
+		return content ? [{ role: 'user', content }] : [];
+	}
+
+	const toolCalls = reconstructToolCalls(message.toolCalls ?? []);
+	if (toolCalls.length > 0) {
+		return [
+			{
+				role: 'assistant',
+				content: content || null,
+				tool_calls: toolCalls.map(({ toolCall }) => toolCall)
+			},
+			...toolCalls.map(({ tool, toolCall }) => ({
+				role: 'tool' as const,
+				tool_call_id: toolCall.id,
+				content: restoredToolContent(tool)
+			}))
+		];
+	}
+	return content ? [{ role: 'assistant', content }] : [];
+}
+
+function reconstructToolCalls(
+	toolCalls: ToolCallRecord[]
+): Array<{ tool: ToolCallRecord; toolCall: OpenAIToolCall }> {
+	return toolCalls
+		.filter((tool) => tool.parentToolCallId === null && tool.resultJson !== null)
+		.map((tool) => ({
+			tool,
+			toolCall: {
+				id: tool.id,
+				type: 'function',
+				function: {
+					name: tool.tool,
+					arguments: tool.argsJson
+				}
+			}
+		}));
+}
+
+function restoredToolContent(tool: ToolCallRecord): string {
+	const result = tool.resultJson ?? '';
+	return tool.status === 'ok' ? result : JSON.stringify({ error: result });
 }
 
 async function yieldFromQueue<T>(

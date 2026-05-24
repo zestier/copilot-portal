@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resetConfigForTests } from '../src/lib/server/config';
 import * as settings from '../src/lib/server/db/repos/settings';
 import * as tokens from '../src/lib/server/db/repos/tokens';
-import { openAICompatibleProvider } from '../src/lib/server/copilot/openai-compatible-provider';
+import { openAICompatibleProvider } from '../src/lib/server/providers/openai-compatible-provider';
 import { providerAuthToken } from '../src/lib/server/providers/auth';
 import { loadProviderStatus } from '../src/lib/server/providers/status';
 import type { ProviderSession } from '../src/lib/server/providers/provider';

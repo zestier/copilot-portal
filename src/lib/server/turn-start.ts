@@ -3,11 +3,13 @@ import * as messages from '$lib/server/db/repos/messages';
 import * as settings from '$lib/server/db/repos/settings';
 import { loadConfig } from '$lib/server/config';
 import { startTurn } from '$lib/server/runtime/turn-runner';
+import { getProvider } from '$lib/server/providers';
 import { providerAuthToken } from '$lib/server/providers/auth';
 import { snapshot as takeSnapshot } from '$lib/server/snapshots';
 import { effectiveWorkdir } from '$lib/server/workdir';
 import { log } from '$lib/server/log';
 import type { Conversation, Message } from '$lib/types';
+import type { ProviderConversationMessage } from '$lib/server/providers/provider';
 
 export interface StartTurnFromUserMessageOptions {
 	includePriorMessages?: boolean;
@@ -22,6 +24,7 @@ export async function startTurnFromUserMessage(
 
 	const cfg = loadConfig();
 	const userSettings = settings.get(conv.userId) ?? settings.defaults();
+	const provider = getProvider(conv.provider);
 	const turn = await startTurn({
 		conversationId: conv.id,
 		prompt: opts.includePriorMessages
@@ -37,7 +40,11 @@ export async function startTurnFromUserMessage(
 			policy: userSettings.defaultPolicy,
 			mode: conv.mode,
 			approveAllTools: conv.approveAllTools,
-			providerAuthToken: providerAuthToken(conv.provider, conv.userId)
+			providerAuthToken: providerAuthToken(conv.provider, conv.userId),
+			initialMessages:
+				!opts.includePriorMessages && !provider.capabilities.session.resume
+					? buildProviderInitialMessages(conv.id, userMsg)
+					: undefined
 		},
 		beforeSend: async () => {
 			try {
@@ -78,4 +85,22 @@ export function buildPromptWithPriorMessages(conversationId: string, userMsg: Me
 		'',
 		userMsg.content
 	].join('\n');
+}
+
+export function buildProviderInitialMessages(
+	conversationId: string,
+	userMsg: Message
+): ProviderConversationMessage[] {
+	const transcript = messages.listByConversation(conversationId);
+	const targetIdx = transcript.findIndex((m) => m.id === userMsg.id);
+	if (targetIdx <= 0) return [];
+	return transcript
+		.slice(0, targetIdx)
+		.filter((m) => m.status === 'complete' && (m.content.trim() || (m.toolCalls?.length ?? 0) > 0))
+		.map((m) => ({
+			role: m.role,
+			content: m.content,
+			status: m.status,
+			toolCalls: m.toolCalls
+		}));
 }

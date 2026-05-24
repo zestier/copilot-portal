@@ -20,7 +20,7 @@ import { deriveTitle, isDefaultTitle } from '../title';
 import * as interactiveRequests from './interactive-requests';
 import { PORTAL_PRELUDE } from './portal-prelude';
 import { isStubMode } from './bridge-stub';
-import { AsyncQueue } from './async-queue';
+import { AsyncQueue } from '../runtime/async-queue';
 import { snapshot as takeSnapshot } from '../snapshots';
 import type { ProviderOpenOptions } from '../providers';
 import type { PortalEvent } from '$lib/types';

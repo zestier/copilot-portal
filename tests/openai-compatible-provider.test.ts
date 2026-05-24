@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resetConfigForTests } from '../src/lib/server/config';
-import { openAICompatibleProvider } from '../src/lib/server/copilot/openai-compatible-provider';
+import { openAICompatibleProvider } from '../src/lib/server/providers/openai-compatible-provider';
 import type { ProviderOpenOptions } from '../src/lib/server/providers/provider';
 import type { PortalEvent } from '../src/lib/types';
 import { setupLocalEnv } from './helpers/env';
@@ -248,6 +248,73 @@ describe('openAICompatibleProvider', () => {
 		} finally {
 			await server.close();
 		}
+	});
+
+	it('restores prior context when a normal follow-up opens a fresh session', async () => {
+		const opts = await persistedOpts();
+		const messageRepo = await import('../src/lib/server/db/repos/messages');
+		messageRepo.append(opts.conversationId, { role: 'user', content: 'remember alpha' });
+		messageRepo.append(opts.conversationId, { role: 'assistant', content: 'alpha remembered' });
+		const followUp = messageRepo.append(opts.conversationId, {
+			role: 'user',
+			content: 'what did I ask you to remember?'
+		});
+		const fetchMock = vi.fn(async (...args: [string | URL | Request, RequestInit?]) => {
+			void args;
+			return sseResponse([
+				'data: {"choices":[{"delta":{"content":"alpha"}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const session = await openAICompatibleProvider.openSession({
+			...opts,
+			initialMessages: [
+				{ role: 'user', content: 'remember alpha', status: 'complete' },
+				{ role: 'assistant', content: 'alpha remembered', status: 'complete' }
+			]
+		});
+
+		await collect(session.send(followUp.content, new AbortController().signal));
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+			messages: [
+				{ role: 'user', content: 'remember alpha' },
+				{ role: 'assistant', content: 'alpha remembered' },
+				{ role: 'user', content: 'what did I ask you to remember?' }
+			]
+		});
+	});
+
+	it('does not double-inject prior context on a live OpenAI-compatible session', async () => {
+		const fetchMock = vi.fn(async (...args: [string | URL | Request, RequestInit?]) => {
+			void args;
+			if (fetchMock.mock.calls.length === 1) {
+				return sseResponse([
+					'data: {"choices":[{"delta":{"content":"alpha remembered"}}]}\n\n',
+					'data: [DONE]\n\n'
+				]);
+			}
+			return sseResponse([
+				'data: {"choices":[{"delta":{"content":"alpha"}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const session = await openAICompatibleProvider.openSession(baseOpts);
+
+		await collect(session.send('remember alpha', new AbortController().signal));
+		await collect(session.send('what did I ask you to remember?', new AbortController().signal));
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+			messages: [
+				{ role: 'user', content: 'remember alpha' },
+				{ role: 'assistant', content: 'alpha remembered' },
+				{ role: 'user', content: 'what did I ask you to remember?' }
+			]
+		});
 	});
 
 	it('handles SSE comments, non-data fields, multiline data, and array text parts', async () => {

@@ -7,7 +7,7 @@
 
 import { CopilotClient } from '@github/copilot-sdk';
 import type { PortalEvent, SessionMode } from '$lib/types';
-import { AsyncQueue } from './async-queue';
+import { AsyncQueue } from '../runtime/async-queue';
 import { createInteractiveCallbacks } from './interactive-adapter';
 import { SdkEventAdapter, toRuntimeMode, type RuntimeSessionMode } from './sdk-events';
 import type {

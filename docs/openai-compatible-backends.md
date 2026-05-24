@@ -32,6 +32,8 @@ OPENAI_COMPATIBLE_BASE_URL=http://127.0.0.1:1234/v1
 OPENAI_COMPATIBLE_API_KEY=<token>
 # Optional cap for multi-step tool loops:
 OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS=8
+# Optional cap for persisted messages replayed into a fresh provider session:
+OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES=20
 ```
 
 You can also leave `DEFAULT_BACKEND_PROVIDER=copilot` and select
@@ -43,6 +45,12 @@ enter the exact model id manually.
 
 Existing conversations keep the provider and model selected when they were
 created. Change settings before starting a new conversation.
+
+When a live OpenAI-compatible provider session is unavailable, the portal
+restores continuity by replaying a bounded suffix of persisted complete messages
+before the new user turn. The replay is capped by
+`OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES` so small local models are not sent
+the entire conversation history blindly.
 
 ## Feature differences from Copilot
 

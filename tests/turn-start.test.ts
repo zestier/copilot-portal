@@ -41,4 +41,23 @@ describe('turn-start context prompts', () => {
 
 		expect(turnStart.buildPromptWithPriorMessages(conv.id, first)).toBe('first question');
 	});
+
+	it('builds provider initial history before the current user message', async () => {
+		const { users, convs, messages, turnStart } = await freshImports();
+		const u = users.ensureLocalUser();
+		const conv = convs.create(u.id, {
+			title: 'ctx',
+			workdir: '/tmp',
+			model: null,
+			provider: 'openai-compatible'
+		});
+		messages.append(conv.id, { role: 'user', content: 'first question' });
+		messages.append(conv.id, { role: 'assistant', content: 'first answer' });
+		const current = messages.append(conv.id, { role: 'user', content: 'current question' });
+
+		expect(turnStart.buildProviderInitialMessages(conv.id, current)).toMatchObject([
+			{ role: 'user', content: 'first question', status: 'complete' },
+			{ role: 'assistant', content: 'first answer', status: 'complete' }
+		]);
+	});
 });
