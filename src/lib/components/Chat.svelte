@@ -279,6 +279,7 @@
 			void refreshMessages();
 		}
 		pendingInteractive = [];
+		usage = null;
 		streaming = true;
 		attachStream(turnId);
 	}

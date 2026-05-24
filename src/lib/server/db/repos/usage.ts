@@ -72,3 +72,7 @@ export function upsert(conversationId: string, s: UsageSnapshot): void {
 			Date.now()
 		);
 }
+
+export function remove(conversationId: string): void {
+	getDb().prepare('DELETE FROM conversation_usage WHERE conversation_id = ?').run(conversationId);
+}

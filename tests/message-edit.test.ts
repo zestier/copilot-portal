@@ -5,9 +5,10 @@ async function freshImports() {
 	const users = await import('../src/lib/server/db/repos/users');
 	const convs = await import('../src/lib/server/db/repos/conversations');
 	const messages = await import('../src/lib/server/db/repos/messages');
+	const usage = await import('../src/lib/server/db/repos/usage');
 	const edit = await import('../src/lib/server/message-edit');
 	const db = await import('../src/lib/server/db');
-	return { users, convs, messages, edit, db };
+	return { users, convs, messages, usage, edit, db };
 }
 
 describe('message-edit.inlineEditMessage', () => {
@@ -16,7 +17,7 @@ describe('message-edit.inlineEditMessage', () => {
 	});
 
 	it('updates the selected user message and transactionally removes later dependent rows', async () => {
-		const { users, convs, messages, edit, db } = await freshImports();
+		const { users, convs, messages, usage, edit, db } = await freshImports();
 		const u = users.ensureLocalUser();
 		const conv = convs.create(u.id, { title: 'src', workdir: '/tmp', model: null });
 		const originalProviderSessionId = conv.providerSessionId;
@@ -46,6 +47,11 @@ describe('message-edit.inlineEditMessage', () => {
 			parentToolCallId: null
 		});
 		messages.append(conv.id, { role: 'user', content: 'later user' });
+		usage.upsert(conv.id, {
+			currentTokens: 9000,
+			tokenLimit: 128_000,
+			messagesLength: 3
+		});
 
 		const result = edit.inlineEditMessage({
 			userId: u.id,
@@ -59,6 +65,7 @@ describe('message-edit.inlineEditMessage', () => {
 		expect(messages.listByConversation(conv.id)).toMatchObject([
 			{ id: u1.id, role: 'user', content: 'edited' }
 		]);
+		expect(usage.get(conv.id)).toBeNull();
 
 		const database = db.getDb();
 		expect(database.prepare('SELECT count(*) AS n FROM tool_calls').get()).toMatchObject({ n: 0 });

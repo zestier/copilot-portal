@@ -1,5 +1,6 @@
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
+import * as usage from '$lib/server/db/repos/usage';
 import { getTurn } from '$lib/server/runtime/turn-runner';
 import { cancelConversation as cancelPendingInteractive } from '$lib/server/runtime/interactive-requests';
 import type { Conversation, Message } from '$lib/types';
@@ -60,6 +61,7 @@ export function inlineEditMessage(input: InlineEditInput): InlineEditResult {
 		input.newContent
 	);
 	if (!userMessage) throw new InlineEditRejected('message_not_found');
+	usage.remove(conv.id);
 	const providerSessionId = convs.rotateProviderSession(conv.id, input.userId);
 	if (!providerSessionId) throw new InlineEditRejected('conversation_not_found');
 
