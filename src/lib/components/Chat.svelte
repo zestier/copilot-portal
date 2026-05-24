@@ -537,8 +537,9 @@
 		const text = composer.trim();
 		if (!text || streaming) return;
 		composer = '';
+		const localMessageId = `local-${Date.now()}`;
 		messages.push({
-			id: `local-${Date.now()}`,
+			id: localMessageId,
 			conversationId: conversation.id,
 			role: 'user',
 			content: text,
@@ -570,7 +571,11 @@
 				applyEvent({ type: 'error', code: 'start_failed', message: msg });
 				return;
 			}
-			const { turnId } = (await r.json()) as { turnId: string };
+			const { turnId, userMessageId } = (await r.json()) as {
+				turnId: string;
+				userMessageId: string;
+			};
+			messages = messages.map((m) => (m.id === localMessageId ? { ...m, id: userMessageId } : m));
 			attachStream(turnId);
 		} catch (e) {
 			streaming = false;
