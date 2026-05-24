@@ -70,6 +70,7 @@ interface LMStudioStreamEvent {
 
 const providerId = 'lm-studio' satisfies Extract<BackendProviderId, 'lm-studio'>;
 const displayName = 'LM Studio';
+const DEFAULT_TEMPERATURE = 0.8;
 const MODEL_CONTEXT_CACHE_TTL_MS = 5 * 60_000;
 const modelContextCache = new Map<string, { at: number; contextLength: number }>();
 
@@ -432,7 +433,8 @@ async function runTurn(
 		model: opts.model,
 		input: prompt,
 		stream: true,
-		store: true
+		store: true,
+		temperature: DEFAULT_TEMPERATURE
 	};
 	const previousResponseId = state.getPreviousResponseId();
 	if (previousResponseId) body.previous_response_id = previousResponseId;

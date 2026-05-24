@@ -186,6 +186,7 @@ describe('lmStudioProvider', () => {
 			input: 'hello',
 			stream: true,
 			store: true,
+			temperature: 0.8,
 			reasoning: 'on'
 		});
 		expect(JSON.parse(String(chatCall?.[1]?.body))).not.toHaveProperty('context_length');
