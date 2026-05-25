@@ -26,7 +26,7 @@ import {
 } from '$lib/types';
 import { GrantInputSchema, permissionKindForTool } from '$lib/permissions/scope-schema';
 import { stableScopeKey } from '$lib/permissions/scope-codec';
-import { defaultSeedGrants, ensureSeedGrantsForUser } from '$lib/server/permissions/seed-grants';
+import { defaultSeedGrants, restoreSeedGrantsForUser } from '$lib/server/permissions/seed-grants';
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.userId) throw redirect(302, '/login');
 	const userId = locals.userId;
@@ -142,19 +142,18 @@ export const actions: Actions = {
 	},
 
 	/**
-	 * Re-install any default seed grants that aren't already present for
-	 * this user. Idempotent: seeds the user has manually deleted will
-	 * come back, seeds they already have are skipped. Lets a user
-	 * recover after "Revoke all grants", and lets existing users
-	 * back-fill any new seeds shipped after their account was created.
+	 * Replace identifiable default seed grants with the current default set.
+	 * This lets users recover after "Revoke all grants" and swap stale default
+	 * rows (for example old hard-deny nudges) for the current defaults without
+	 * rewriting unrelated user-created grants.
 	 */
 	restoreSeedGrants: async ({ locals }) => {
 		if (!locals.userId) {
 			return fail(401, { ok: false, error: 'Not authenticated', formId: 'restoreSeedGrants' });
 		}
-		const inserted = ensureSeedGrantsForUser(locals.userId);
-		log.info('settings.seed_grants_restored', { userId: locals.userId, inserted });
-		return { ok: true, inserted, formId: 'restoreSeedGrants' };
+		const result = restoreSeedGrantsForUser(locals.userId);
+		log.info('settings.seed_grants_restored', { userId: locals.userId, ...result });
+		return { ok: true, ...result, formId: 'restoreSeedGrants' };
 	},
 
 	/**
@@ -199,7 +198,8 @@ export const actions: Actions = {
 			scope: input.scope,
 			decision: input.decision,
 			expiresAt: input.expiresAt,
-			denyReason: input.denyReason
+			denyReason: input.denyReason,
+			source: 'settings'
 		});
 		log.info('settings.grant_created', {
 			userId: locals.userId,
@@ -317,11 +317,12 @@ function markSeedGrants(grants: settings.GrantSummary[]) {
 	return grants.map((grant) => ({
 		...grant,
 		isSeedGrant:
-			grant.conversationId === null &&
-			grant.scope !== null &&
-			seedKeys.has(
-				defaultSeedGrantKey(grant.tool, grant.permissionKind, grant.scope, grant.decision)
-			)
+			grant.source === 'seed' ||
+			(grant.conversationId === null &&
+				grant.scope !== null &&
+				seedKeys.has(
+					defaultSeedGrantKey(grant.tool, grant.permissionKind, grant.scope, grant.decision)
+				))
 	}));
 }
 

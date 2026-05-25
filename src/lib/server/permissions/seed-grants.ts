@@ -11,16 +11,14 @@
 // Two flavors of seed:
 //   1. `allow` (Approve in the UI) seeds make safe shell calls
 //      (read-only utilities, git read-only subcommands) pass without prompting.
-//   2. `deny` seeds with `denyReason` + `pipeline: 'forbid'` nudge the
-//      agent toward structured tools (view / grep / glob) for terminal
-//      reads like `cat foo`, while still allowing the same commands
-//      inside a pipeline (`cmd | grep ...`). The deny's `denyReason`
-//      is surfaced to the agent as `feedback` on the SDK reject, so
-//      the next call learns immediately without a user prompt.
+//   2. `prompt` seeds with feedback + `pipeline: 'forbid'` nudge the
+//      agent toward structured tools (view / grep / glob) for terminal reads
+//      like `cat foo`, while still allowing a human escalation path when the
+//      structured tools genuinely do not fit.
 
 import { FS_PERMISSIONS, type GrantScope, type ShellRule } from '$lib/permissions/scope-types';
 import { stableScopeKey } from '$lib/permissions/scope-codec';
-import { addGrant, listGrantsForUser } from '../db/repos/settings';
+import { addGrant, listGrantsForUser, revokeGrant } from '../db/repos/settings';
 
 interface SeedSpec {
 	tool: string;
@@ -88,52 +86,54 @@ function shellGrant(rule: ShellRule): SeedSpec {
 	return { tool: 'shell', permissionKind: 'shell', scope: { kind: 'shell', rule } };
 }
 
-function shellDeny(rule: ShellRule, reason: string): SeedSpec {
+function shellPrompt(rule: ShellRule, reason: string): SeedSpec {
 	return {
 		tool: 'shell',
 		permissionKind: 'shell',
 		scope: { kind: 'shell', rule },
-		decision: 'deny',
+		decision: 'prompt',
 		denyReason: reason
 	};
 }
 
 /**
- * Terminal-usage nudges: each entry adds a `pipeline: 'forbid'` deny
- * for `argv0`, paired with a `denyReason` pointing the agent at the
+ * Terminal-usage nudges: each entry adds a `pipeline: 'forbid'` prompt rule
+ * for `argv0`, paired with feedback pointing the agent at the
  * structured tool that does the job. Pipelined usage (`cmd | argv0
- * ...`) is NOT covered by the deny and falls through to the matching
+ * ...`) is NOT covered by the prompt rule and falls through to the matching
  * allow seed (or to the user's policy / prompt). The intent is to
  * teach via tool-failure feedback rather than via a static prelude.
  */
-const NUDGE_DENIES: { argv0: string; reason: string }[] = [
+const NUDGE_PROMPTS: { argv0: string; reason: string }[] = [
 	{
 		argv0: 'cat',
-		reason: 'Bare `cat` is denied. Use `view` for file reads. Piped `cat` is allowed.'
+		reason: 'Bare `cat` requires a prompt. Use `view` for file reads. Piped `cat` is allowed.'
 	},
 	{
 		argv0: 'head',
-		reason: 'Bare `head` is denied. Use `view` with `view_range`. Piped `head` is allowed.'
+		reason: 'Bare `head` requires a prompt. Use `view` with `view_range`. Piped `head` is allowed.'
 	},
 	{
 		argv0: 'tail',
-		reason: 'Bare `tail` is denied. Use `view` with `view_range`. Piped `tail` is allowed.'
+		reason: 'Bare `tail` requires a prompt. Use `view` with `view_range`. Piped `tail` is allowed.'
 	},
 	{
 		argv0: 'grep',
-		reason: 'Bare `grep` is denied. Use the structured `grep` tool. Piped `grep` is allowed.'
+		reason:
+			'Bare `grep` requires a prompt. Use the structured `grep` tool. Piped `grep` is allowed.'
 	},
 	{
 		argv0: 'rg',
-		reason: 'Bare `rg` is denied. Use the structured `grep` tool. Piped `rg` is allowed.'
+		reason: 'Bare `rg` requires a prompt. Use the structured `grep` tool. Piped `rg` is allowed.'
 	},
 	{
 		argv0: 'find',
-		reason: 'Bare `find` is denied. Use `glob` for file-pattern matching. Piped `find` is allowed.'
+		reason:
+			'Bare `find` requires a prompt. Use `glob` for file-pattern matching. Piped `find` is allowed.'
 	},
 	{
 		argv0: 'ls',
-		reason: 'Bare `ls` is denied. Use `glob` to enumerate files. Piped `ls` is allowed.'
+		reason: 'Bare `ls` requires a prompt. Use `glob` to enumerate files. Piped `ls` is allowed.'
 	}
 ];
 
@@ -169,10 +169,10 @@ export function defaultSeedGrants(): SeedSpec[] {
 	}
 
 	seeds.push(
-		shellDeny(
+		shellPrompt(
 			{ argv0: 'git' },
 			[
-				'Shell `git` is denied by default.',
+				'Shell `git` requires a prompt by default.',
 				'Use git_status/git_diff/git_log/git_show_commit/git_show_file.',
 				'Escalate sparingly with `forcePermissionPrompt` only if no Git tool fits.'
 			].join(' ')
@@ -203,14 +203,14 @@ export function defaultSeedGrants(): SeedSpec[] {
 		})
 	);
 
-	// Structured-tool nudges. Each deny is `pipeline: 'forbid'`, so it
+	// Structured-tool nudges. Each prompt is `pipeline: 'forbid'`, so it
 	// fires only when the command is the *only* command of its pipeline
 	// (i.e. its stdout is what the agent wanted to read). Paired with
 	// the allow seeds above, this means `cmd | grep foo` keeps working
-	// while bare `grep foo` is rejected with feedback explaining the
-	// structured replacement.
-	for (const { argv0, reason } of NUDGE_DENIES) {
-		seeds.push(shellDeny({ argv0, pipeline: 'forbid' }, reason));
+	// while bare `grep foo` requires a prompt with feedback explaining
+	// the structured replacement.
+	for (const { argv0, reason } of NUDGE_PROMPTS) {
+		seeds.push(shellPrompt({ argv0, pipeline: 'forbid' }, reason));
 	}
 
 	return seeds;
@@ -244,7 +244,8 @@ export function ensureSeedGrantsForUser(userId: string): number {
 			permissionKind: seed.permissionKind,
 			scope: seed.scope,
 			decision,
-			denyReason: seed.denyReason ?? null
+			denyReason: seed.denyReason ?? null,
+			source: 'seed'
 		});
 		haveKey.add(key);
 		inserted += 1;
@@ -252,6 +253,44 @@ export function ensureSeedGrantsForUser(userId: string): number {
 	return inserted;
 }
 
+/**
+ * Replace every identifiable user-global default seed grant with the current
+ * default set. This powers the Settings "Restore default seed grants" button:
+ * unlike login-time seeding, it intentionally removes stale default rows first
+ * so old seed shapes (for example deny nudges that are now prompt nudges) do not
+ * keep winning by matcher precedence.
+ */
+export function restoreSeedGrantsForUser(userId: string): { removed: number; inserted: number } {
+	const defaultKeys = restoreSeedKeys();
+	let removed = 0;
+	for (const grant of listGrantsForUser(userId)) {
+		if (grant.conversationId !== null) continue;
+		if (!grant.scope) continue;
+		if (grant.argsHash) continue;
+		if (grant.source !== 'seed') {
+			if (
+				!defaultKeys.has(seedKey(grant.tool, grant.permissionKind, grant.scope, grant.decision))
+			) {
+				continue;
+			}
+		}
+		if (revokeGrant(userId, grant.id)) removed += 1;
+	}
+	return { removed, inserted: ensureSeedGrantsForUser(userId) };
+}
+
 function seedKey(tool: string, kind: string | null, scope: GrantScope, decision: string): string {
 	return `${tool}\u0000${kind ?? ''}\u0000${decision}\u0000${stableScopeKey(scope)}`;
+}
+
+function restoreSeedKeys(): Set<string> {
+	const keys = new Set<string>();
+	for (const seed of defaultSeedGrants()) {
+		const decision = seed.decision ?? 'allow';
+		keys.add(seedKey(seed.tool, seed.permissionKind, seed.scope, decision));
+		if (decision === 'prompt') {
+			keys.add(seedKey(seed.tool, seed.permissionKind, seed.scope, 'deny'));
+		}
+	}
+	return keys;
 }

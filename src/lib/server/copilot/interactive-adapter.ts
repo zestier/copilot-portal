@@ -83,7 +83,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 		const hash = hashPermissionArgs(req);
 		const alwaysPrompt = opts.getPermissionBehavior(tool) === 'always-prompt';
 
-		const audit = (decision: 'auto-allow' | 'auto-deny') => {
+		const audit = (decision: 'auto-allow' | 'auto-deny' | 'auto-prompt-required') => {
 			try {
 				settingsRepo.recordDecision(opts.conversationId, tool, summary, decision);
 			} catch (e) {
@@ -197,21 +197,15 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			return { kind: 'approve-once' } as const;
 		}
 		if (grant.outcome === 'deny') {
-			if (grant.denyReason) {
-				const escalated = await maybePromptForEscalation(
-					'Escalation denied. Use structured tools or stop and explain what capability is missing.'
-				);
-				if (escalated) return escalated;
-			}
 			audit('auto-deny');
-			if (grant.denyReason) return { kind: 'reject', feedback: grant.denyReason } as const;
+			if (grant.feedback) return { kind: 'reject', feedback: grant.feedback } as const;
 			return { kind: 'reject' } as const;
 		}
 		let promptRequest: { canPersistDecision: boolean; bestEffortFeedback: string };
 		if (grant.outcome === 'prompt') {
 			promptRequest = {
 				canPersistDecision: false,
-				bestEffortFeedback: bestEffortPromptGrantFeedback({ permissionKind })
+				bestEffortFeedback: grant.feedback ?? bestEffortPromptGrantFeedback({ permissionKind })
 			};
 		} else {
 			if (opts.getApproveAll()) {
@@ -240,7 +234,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 		if (opts.getMode() === 'best-effort') {
 			const escalated = await maybePromptForEscalation();
 			if (escalated) return escalated;
-			audit('auto-deny');
+			audit('auto-prompt-required');
 			return {
 				kind: 'reject',
 				feedback: promptRequest.bestEffortFeedback

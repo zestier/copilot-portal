@@ -48,7 +48,7 @@
 	let kindFilter = $state('all');
 	let scopeFilter = $state<'all' | 'global' | 'conversation'>('all');
 	let expiryFilter = $state<'all' | 'never' | 'expiring' | 'expired'>('all');
-	let provenanceFilter = $state<'all' | 'seed' | 'user'>('all');
+	let provenanceFilter = $state<'all' | PermissionGrant['source']>('all');
 
 	let shellArgv0 = $state('');
 	let shellSubcommands = $state('');
@@ -379,7 +379,16 @@
 	}
 
 	function provenanceLabel(g: PermissionGrant): string {
-		return g.isSeedGrant ? 'Default seed' : 'User-created';
+		switch (g.source) {
+			case 'seed':
+				return 'Default seed';
+			case 'prompt':
+				return 'Prompt-created';
+			case 'settings':
+				return 'Settings-created';
+			case 'legacy':
+				return 'Legacy';
+		}
 	}
 
 	function decisionLabel(decision: GrantDecision): string {
@@ -418,8 +427,7 @@
 		if (kindFilter !== 'all' && (g.permissionKind ?? 'any kind') !== kindFilter) return false;
 		if (scopeFilter === 'global' && g.conversationId !== null) return false;
 		if (scopeFilter === 'conversation' && g.conversationId === null) return false;
-		if (provenanceFilter === 'seed' && !g.isSeedGrant) return false;
-		if (provenanceFilter === 'user' && g.isSeedGrant) return false;
+		if (provenanceFilter !== 'all' && g.source !== provenanceFilter) return false;
 		if (expiryFilter === 'never' && g.expiresAt !== null) return false;
 		if (expiryFilter === 'expiring' && !isExpiringSoon(g)) return false;
 		if (expiryFilter === 'expired' && !isExpired(g)) return false;
@@ -434,8 +442,7 @@
 			prompt: items.filter((g) => g.decision === 'prompt').length,
 			global: items.filter((g) => g.conversationId === null).length,
 			conversation: items.filter((g) => g.conversationId !== null).length,
-			seed: items.filter((g) => g.isSeedGrant).length,
-			user: items.filter((g) => !g.isSeedGrant).length,
+			seed: items.filter((g) => g.source === 'seed').length,
 			expiring: items.filter(isExpiringSoon).length,
 			expired: items.filter(isExpired).length
 		};
@@ -445,32 +452,32 @@
 		const deny = items.filter((g) => g.decision === 'deny');
 		const prompt = items.filter((g) => g.decision === 'prompt');
 		const userGlobal = items.filter(
-			(g) => g.decision === 'allow' && !g.isSeedGrant && g.conversationId === null
+			(g) => g.decision === 'allow' && g.source !== 'seed' && g.conversationId === null
 		);
 		const conversation = items.filter(
-			(g) => g.decision === 'allow' && !g.isSeedGrant && g.conversationId !== null
+			(g) => g.decision === 'allow' && g.source !== 'seed' && g.conversationId !== null
 		);
-		const defaults = items.filter((g) => g.decision === 'allow' && g.isSeedGrant);
+		const defaults = items.filter((g) => g.decision === 'allow' && g.source === 'seed');
 
 		return [
 			{
 				id: 'deny',
-				title: 'Deny rules and nudges',
-				description: 'Rules that actively reject requests and may return feedback to the agent.',
+				title: 'Hard deny rules',
+				description:
+					'Rules that absolutely reject matching requests. They never prompt and forcePermissionPrompt cannot override them.',
 				grants: deny
 			},
 			{
 				id: 'prompt',
-				title: 'Prompt rules',
+				title: 'Prompt-required rules',
 				description:
-					'Rules that force a human permission dialog, even when a broader approval or policy ' +
-					'would otherwise allow the request.',
+					'Rules that block automated approval but allow a human permission dialog or forcePermissionPrompt escalation.',
 				grants: prompt
 			},
 			{
 				id: 'user-global',
-				title: 'User-created global approvals',
-				description: 'Approve rules that apply across conversations.',
+				title: 'Non-seed global approvals',
+				description: 'Approve rules not marked as default seeds that apply across conversations.',
 				grants: userGlobal
 			},
 			{
@@ -622,9 +629,9 @@
 					<input type="hidden" name="denyReason" value="" />
 					{#if newGrantDecision === 'prompt'}
 						<p class="muted small">
-							Prompt grants force the normal permission dialog for matching requests. Persistent
-							choices are disabled for those dialogs; edit or remove the prompt grant here to change
-							that behavior.
+							Prompt grants block automated approval but allow a human permission dialog or
+							forcePermissionPrompt escalation. Persistent choices are disabled for those dialogs;
+							edit or remove the prompt grant here to change that behavior.
 						</p>
 					{/if}
 				{/if}
@@ -880,7 +887,7 @@
 				<button
 					class="btn small"
 					type="submit"
-					title="Re-install any default seed grants that are missing from your account (idempotent — won't touch existing rules)"
+					title="Replace identifiable default seed grants with the current default set; user-created non-default rules are left alone"
 				>
 					Restore default seed grants
 				</button>
@@ -911,10 +918,10 @@
 			<h3>No saved grants yet</h3>
 			<p class="muted small">
 				No saved grants. When you click "Allow always" or "Deny always" on a tool prompt, the
-				resulting approve or deny rule shows up here so you can revoke it later. You can also add
-				prompt rules here to force interactive approval for matching requests. The button above
-				re-installs the built-in defaults (file/dir reads, git read-only, structured-tool nudge
-				denies).
+				resulting approve or hard-deny rule shows up here so you can revoke it later. You can also
+				add prompt-required rules here to force interactive approval for matching requests. The
+				button above re-installs the built-in defaults (file/dir reads, git read-only, and
+				structured-tool prompt nudges).
 			</p>
 		</div>
 	{:else}
@@ -988,9 +995,11 @@
 				<label>
 					Source filter
 					<select bind:value={provenanceFilter}>
-						<option value="all">Default and user-created</option>
-						<option value="seed">Default seed matches</option>
-						<option value="user">User-created</option>
+						<option value="all">All sources</option>
+						<option value="seed">Default seed</option>
+						<option value="prompt">Prompt-created</option>
+						<option value="settings">Settings-created</option>
+						<option value="legacy">Legacy</option>
 					</select>
 				</label>
 			</div>
@@ -1014,7 +1023,7 @@
 				<span>{filteredStats.prompt} prompt</span>
 				<span>{filteredStats.global} global</span>
 				<span>{filteredStats.conversation} conversation-scoped</span>
-				<span>{filteredStats.seed} default seed matches</span>
+				<span>{filteredStats.seed} default seed</span>
 			</div>
 
 			{#each grantSections as section (section.id)}
@@ -1034,7 +1043,9 @@
 										<span class="decision-tag {g.decision}">{decisionLabel(g.decision)}</span>
 										<code class="tool">{g.tool}</code>
 										<span class="kind">{g.permissionKind ?? 'any kind'}</span>
-										<span class="source-tag" class:seed={g.isSeedGrant}>{provenanceLabel(g)}</span>
+										<span class="source-tag" class:seed={g.source === 'seed'}
+											>{provenanceLabel(g)}</span
+										>
 										<span
 											class="expiry-tag"
 											class:warn={isExpiringSoon(g)}
@@ -1047,7 +1058,7 @@
 										<span>Granted {formatTime(g.grantedAt)}</span>
 										<span>Expires {formatExpiry(g.expiresAt)}</span>
 									</div>
-									{#if g.decision === 'deny' && g.denyReason}
+									{#if g.denyReason}
 										<p class="deny-reason-row muted small">Feedback: {g.denyReason}</p>
 									{/if}
 								</div>

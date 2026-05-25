@@ -275,12 +275,11 @@ function guidanceFor(permissionKind: string, status: CapabilityStatus): string {
 	if (status === 'partially_allowed') {
 		return `${permissionKind} has a mix of approve, prompt, or deny rules; use approved alternatives and avoid denied shapes.`;
 	}
-	if (status === 'denied') {
-		return `${permissionKind} is currently denied by policy or grants; use escalation if no other kind works.`;
-	}
+	if (status === 'denied')
+		return `${permissionKind} is hard-denied by policy or grants; forcePermissionPrompt cannot override hard denies.`;
 	return (
 		`${permissionKind} requests not covered by listed grants will prompt. ` +
-		'In best-effort mode, prompt-worthy requests auto-reject.'
+		'In best-effort mode, prompt-worthy requests auto-reject unless retried with forcePermissionPrompt.'
 	);
 }
 

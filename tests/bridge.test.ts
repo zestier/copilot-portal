@@ -506,7 +506,7 @@ describe('bridge.open() session mode and permissions', () => {
 		const { open } = await importBridge();
 		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
 		const user = ensureLocalUser();
-		await open({ ...baseOpts, userId: user.id });
+		await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
 
 		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
 			req: unknown
@@ -674,6 +674,120 @@ describe('bridge.open() session mode and permissions', () => {
 		});
 		ac.abort();
 		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('does not let forcePermissionPrompt escalate hard deny grants', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const user = ensureLocalUser();
+		settings.addGrant({
+			userId: user.id,
+			conversationId: null,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scope: { kind: 'shell', rule: { argv0: 'rm' } },
+			decision: 'deny',
+			denyReason: 'Hard deny: rm is forbidden in shell.'
+		});
+		await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+
+		const result = await onPermissionRequest({
+			kind: 'shell',
+			toolName: 'shell',
+			fullCommandText: 'rm -rf build',
+			args: {
+				command: 'rm -rf build',
+				forcePermissionPrompt:
+					'There is no structured deletion tool available, and the user explicitly requested cleanup.'
+			}
+		});
+
+		expect(result).toEqual({ kind: 'reject', feedback: 'Hard deny: rm is forbidden in shell.' });
+	});
+
+	it('lets forcePermissionPrompt escalate prompt-required grants', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/runtime/interactive-requests');
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const user = ensureLocalUser();
+		settings.addGrant({
+			userId: user.id,
+			conversationId: null,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scope: { kind: 'shell', rule: { argv0: 'node' } },
+			decision: 'prompt',
+			denyReason: 'Node shell commands require human approval.'
+		});
+		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const reason =
+			'The repository has no package script for this exact diagnostic, so a one-off node command is required.';
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'shell',
+				toolName: 'shell',
+				fullCommandText: 'node scripts/diagnose.js',
+				args: {
+					command: 'node scripts/diagnose.js',
+					forcePermissionPrompt: reason
+				}
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'shell',
+				permissionKind: 'shell',
+				canPersistDecision: false,
+				escalationReason: reason
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('auto-allows matching approve grants without prompting', async () => {
+		const { open } = await importBridge();
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const settings = await import('../src/lib/server/db/repos/settings');
+		const user = ensureLocalUser();
+		settings.addGrant({
+			userId: user.id,
+			conversationId: null,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scope: { kind: 'shell', rule: { argv0: 'node' } },
+			decision: 'allow'
+		});
+		await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+
+		const result = await onPermissionRequest({
+			kind: 'shell',
+			toolName: 'shell',
+			fullCommandText: 'node --version',
+			args: { command: 'node --version' }
+		});
+
+		expect(result).toEqual({ kind: 'approve-once' });
 	});
 
 	it('recognizes top-level forcePermissionPrompt for escalation', async () => {

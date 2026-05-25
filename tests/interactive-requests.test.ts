@@ -330,6 +330,7 @@ describe('interactive request registry', () => {
 			settings.matchGrantDetailed(userId, conversationId, 'shell', 'shell', 'rm -rf /')
 		).toEqual({
 			outcome: 'deny',
+			feedback: 'Use structured file tools instead.',
 			denyReason: 'Use structured file tools instead.'
 		});
 	});
@@ -463,10 +464,10 @@ describe('interactive request registry', () => {
 		});
 
 		// Each grant matches independently on its own argv0. Note that the
-		// default seed grants include `pipeline: 'forbid'` deny nudges for
+		// default seed grants include `pipeline: 'forbid'` prompt nudges for
 		// bare `rg` (steering toward the structured `grep` tool); to verify
 		// the user's rg allow actually persisted we exercise it in pipeline
-		// position, where the deny nudge intentionally doesn't fire.
+		// position, where the prompt nudge intentionally doesn't fire.
 		const nodeParsed = parseShellCommand('node --version');
 		const rgParsed = parseShellCommand('node --version | rg v');
 		const unrelated = parseShellCommand('curl https://example.com');

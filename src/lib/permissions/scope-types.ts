@@ -70,7 +70,7 @@ export interface ShellRule {
 	/**
 	 * Whether this segment must / must not be part of a shell pipeline
 	 * (i.e. connected to a neighboring command by `|`). Omitted = no
-	 * constraint. Used by the seed deny grants for commands like `cat`
+	 * constraint. Used by the seed prompt grants for commands like `cat`
 	 * / `grep` whose stdout is the human-visible output when run bare,
 	 * but which are legitimate inside `cmd | grep ...`.
 	 *   must    — this segment must be in a pipeline

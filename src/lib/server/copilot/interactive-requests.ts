@@ -199,7 +199,8 @@ export function resolve(requestId: string, userId: string, response: Interactive
 								scopePattern: scope?.pattern ?? null,
 								scope: scope?.scope ?? null,
 								decision: 'allow',
-								expiresAt
+								expiresAt,
+								source: 'prompt'
 							});
 						}
 					}
@@ -215,7 +216,8 @@ export function resolve(requestId: string, userId: string, response: Interactive
 							scope: scope?.scope ?? null,
 							decision: 'deny',
 							denyReason,
-							expiresAt
+							expiresAt,
+							source: 'prompt'
 						});
 					}
 				}

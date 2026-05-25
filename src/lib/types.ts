@@ -610,18 +610,20 @@ export interface ConversationUsage {
 // dialog. The `auto-*` values are server-only audit records.
 export type InteractivePermissionDecision = 'allow-once' | 'allow-always' | 'deny' | 'deny-always';
 
-// `auto-allow` / `auto-deny` are recorded by the server when the user's
-// default policy (or a stored grant) settled the request without a
-// dialog. They never appear in `InteractiveResponse` — the dialog only
-// ever surfaces the four interactive decisions — but they show up in the
-// settings page audit so the user can see what got approved silently.
+// `auto-*` decisions are recorded by the server when the user's default policy
+// or stored grants settled the request without a dialog. They never appear in
+// `InteractiveResponse` — the dialog only ever surfaces the four interactive
+// decisions — but they show up in the settings page audit so the user can see
+// what got approved silently, hard-denied, or rejected because a prompt was
+// required in best-effort mode.
 export type PermissionDecision =
 	| 'allow-once'
 	| 'allow-always'
 	| 'deny'
 	| 'deny-always'
 	| 'auto-allow'
-	| 'auto-deny';
+	| 'auto-deny'
+	| 'auto-prompt-required';
 
 // --- File browser / git response shapes (shared by client & server) ---
 

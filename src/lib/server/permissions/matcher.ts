@@ -22,9 +22,9 @@ export type MatchOutcome = 'allow' | 'deny' | 'prompt' | 'none';
 
 export interface DetailedMatchOutcome {
 	outcome: MatchOutcome;
-	/** When `outcome === 'deny'`, the matched grant's `denyReason`
-	 * (if any). Otherwise null. Used by the bridge to populate
-	 * `feedback` on the SDK's `{kind:'reject'}` response. */
+	/** Agent-facing feedback from the matched deny or prompt-required grant. */
+	feedback: string | null;
+	/** @deprecated use `feedback`. */
 	denyReason: string | null;
 }
 
@@ -77,8 +77,8 @@ export interface MatchQuery {
  * Decide allow / deny / prompt / none against an in-memory list of candidate
  * grants. Precedence:
  *
- *   1. Exact-invocation short-lived `allow` grants override other grants.
- *   2. Any matching `deny` grant wins.
+ *   1. Any matching `deny` grant wins as a hard block.
+ *   2. Exact-invocation short-lived `allow` grants override prompt/allow grants.
  *   3. Otherwise any matching `prompt` grant forces a human prompt.
  *   4. Otherwise any matching `allow` grant wins.
  *   5. Otherwise `none` — caller falls back to policy.
@@ -101,29 +101,61 @@ export function matchGrants(rows: GrantRow[], q: MatchQuery): MatchOutcome {
 }
 
 /**
- * Like `matchGrants`, but additionally returns the matched deny grant's
- * `denyReason` (when one fired). For `allow` / `prompt` / `none` outcomes, the
- * reason is always null. When multiple deny grants would match, the
- * first one with a non-null reason wins (deny precedence is unchanged
- * — we just pick a reason to surface).
+ * Like `matchGrants`, but additionally returns agent-facing feedback from
+ * the matched hard-deny or prompt-required grant. When multiple grants of the
+ * winning category match, the first one with non-null feedback wins.
  */
 export function matchGrantsDetailed(rows: GrantRow[], q: MatchQuery): DetailedMatchOutcome {
+	const hardDeny = matchHardDeny(rows, q);
+	if (hardDeny) return hardDeny;
 	const exactArgsAllow = matchExactArgsAllow(rows, q);
-	if (exactArgsAllow) return { outcome: 'allow', denyReason: null };
+	if (exactArgsAllow) return withFeedback('allow', null);
 	if (q.permissionKind === 'shell' && q.shellSegments && q.shellSegments.length > 0) {
 		return matchShellSegments(rows, q, q.shellSegments);
 	}
 	let sawAllow = false;
 	let sawPrompt = false;
+	let promptFeedback: string | null = null;
 	for (const r of rows) {
 		if (!grantApplies(r, q)) continue;
 		if (!rowScopeMatches(r, q)) continue;
-		if (r.decision === 'deny') return { outcome: 'deny', denyReason: r.denyReason };
-		if (r.decision === 'prompt') sawPrompt = true;
-		else sawAllow = true;
+		if (r.decision === 'deny') return withFeedback('deny', r.denyReason);
+		if (r.decision === 'prompt') {
+			sawPrompt = true;
+			promptFeedback ??= r.denyReason;
+		} else {
+			sawAllow = true;
+		}
 	}
-	if (sawPrompt) return { outcome: 'prompt', denyReason: null };
-	return { outcome: sawAllow ? 'allow' : 'none', denyReason: null };
+	if (sawPrompt) return withFeedback('prompt', promptFeedback);
+	return withFeedback(sawAllow ? 'allow' : 'none', null);
+}
+
+function matchHardDeny(rows: GrantRow[], q: MatchQuery): DetailedMatchOutcome | null {
+	if (q.permissionKind === 'shell' && q.shellSegments && q.shellSegments.length > 0) {
+		for (let i = 0; i < q.shellSegments.length; i++) {
+			const seg = q.shellSegments[i];
+			const ctx = {
+				workspaceRoot: q.workspaceRoot ?? null,
+				sessionWorkspaceRoot: q.sessionWorkspaceRoot ?? null,
+				inPipeline: segmentInPipeline(q.shellSegments, i)
+			};
+			for (const r of rows) {
+				if (r.decision !== 'deny') continue;
+				if (!grantApplies(r, q)) continue;
+				if (!rowMatchesShellSegment(r, seg, q, ctx)) continue;
+				return withFeedback('deny', r.denyReason);
+			}
+		}
+		return null;
+	}
+	for (const r of rows) {
+		if (r.decision !== 'deny') continue;
+		if (!grantApplies(r, q)) continue;
+		if (!rowScopeMatches(r, q)) continue;
+		return withFeedback('deny', r.denyReason);
+	}
+	return null;
 }
 
 function matchExactArgsAllow(rows: GrantRow[], q: MatchQuery): boolean {
@@ -145,6 +177,7 @@ function matchShellSegments(
 ): DetailedMatchOutcome {
 	let allAllowed = true;
 	let sawPrompt = false;
+	let promptFeedback: string | null = null;
 	for (let i = 0; i < segments.length; i++) {
 		const seg = segments[i];
 		const inPipeline = segmentInPipeline(segments, i);
@@ -157,14 +190,22 @@ function matchShellSegments(
 		for (const r of rows) {
 			if (!grantApplies(r, q)) continue;
 			if (!rowMatchesShellSegment(r, seg, q, ctx)) continue;
-			if (r.decision === 'deny') return { outcome: 'deny', denyReason: r.denyReason };
-			if (r.decision === 'prompt') sawPrompt = true;
-			else segAllow = true;
+			if (r.decision === 'deny') return withFeedback('deny', r.denyReason);
+			if (r.decision === 'prompt') {
+				sawPrompt = true;
+				promptFeedback ??= r.denyReason;
+			} else {
+				segAllow = true;
+			}
 		}
 		if (!segAllow) allAllowed = false;
 	}
-	if (sawPrompt) return { outcome: 'prompt', denyReason: null };
-	return { outcome: allAllowed ? 'allow' : 'none', denyReason: null };
+	if (sawPrompt) return withFeedback('prompt', promptFeedback);
+	return withFeedback(allAllowed ? 'allow' : 'none', null);
+}
+
+function withFeedback(outcome: MatchOutcome, feedback: string | null): DetailedMatchOutcome {
+	return { outcome, feedback, denyReason: feedback };
 }
 
 /**

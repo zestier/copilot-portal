@@ -99,9 +99,8 @@ describe('matchGrants precedence', () => {
 		).toBe('deny');
 	});
 
-	it('exact-args short-lived allow grants override broader denies', () => {
+	it('exact-args short-lived allow grants override broader prompt-required grants', () => {
 		const rows = [
-			grant({ decision: 'deny', scopePattern: 'cat *' }),
 			grant({ decision: 'prompt', scopePattern: 'cat *' }),
 			grant({
 				decision: 'allow',
@@ -125,6 +124,27 @@ describe('matchGrants precedence', () => {
 				permissionKind: 'shell',
 				scopeKey: 'cat package.json',
 				argsHash: 'other-hash',
+				now: NOW
+			})
+		).toBe('prompt');
+	});
+
+	it('hard deny grants beat exact-args allow grants', () => {
+		const rows = [
+			grant({ decision: 'deny', scopePattern: 'cat *' }),
+			grant({
+				decision: 'allow',
+				scopePattern: null,
+				argsHash: 'rerun-hash',
+				expiresAt: NOW + 60_000
+			})
+		];
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'cat package.json',
+				argsHash: 'rerun-hash',
 				now: NOW
 			})
 		).toBe('deny');
@@ -292,6 +312,27 @@ describe('matchGrants — shell segments (per-segment OR across grants)', () => 
 				now: NOW
 			})
 		).toBe('prompt');
+	});
+
+	it('prompt outcome carries prompt feedback without becoming a hard deny', () => {
+		const rows = [
+			shellGrant('git'),
+			{
+				...shellGrant('git', 'prompt'),
+				denyReason: 'Use structured Git tools unless no structured tool fits.'
+			}
+		];
+		const out = matchGrantsDetailed(rows, {
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopeKey: 'git commit -m x',
+			shellSegments: parse('git commit -m x'),
+			now: NOW
+		});
+		expect(out).toMatchObject({
+			outcome: 'prompt',
+			feedback: 'Use structured Git tools unless no structured tool fits.'
+		});
 	});
 
 	it('wildcard "any" grant covers every segment', () => {

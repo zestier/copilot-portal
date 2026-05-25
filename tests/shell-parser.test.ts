@@ -270,7 +270,7 @@ describe('detectShellMisuse — cat/head/tail write redirects', () => {
 
 	it('does NOT flag cat with input redirect or heredoc-only', () => {
 		// `cat < foo` and `cat << EOF` are silly but not file-writing.
-		// They get caught (or not) by the regular nudge-deny seed.
+		// They get caught (or not) by the regular prompt-nudge seed.
 		expect(detectShellMisuse('cat < input.txt')).toBeNull();
 		expect(detectShellMisuse("cat << 'EOF'\nhi\nEOF")).toBeNull();
 	});

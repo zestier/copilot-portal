@@ -164,7 +164,7 @@ export const GrantInputSchema = z
 		/**
 		 * Optional human-readable feedback surfaced to the agent when this
 		 * grant denies a request. Only meaningful when `decision === 'deny'`.
-		 * Used by the seed deny grants for `cat`/`grep`/etc. to teach the
+		 * Used by hard-deny grants to teach the
 		 * agent which structured tool to use instead.
 		 */
 		denyReason: z
