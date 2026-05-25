@@ -99,6 +99,8 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			audit('auto-deny');
 			return { kind: 'reject', feedback: forcePermissionPrompt.feedback } as const;
 		}
+		const forceEscalationReason =
+			forcePermissionPrompt.kind === 'valid' ? forcePermissionPrompt.reason : null;
 
 		let shellSegments: ParsedSegment[] | null = null;
 		let shellAnalysis: import('$lib/types').ShellAnalysisView | undefined = undefined;
@@ -122,6 +124,32 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				shellAnalysis = { kind: 'unsafe', reason: parsed.reason };
 			}
 		}
+
+		const maybePromptForEscalation = async (
+			fallbackFeedback = 'Escalation denied. Use an allowed alternative or stop and explain what capability is missing.'
+		) => {
+			if (!forceEscalationReason) return null;
+			const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
+				'permission',
+				{
+					kind: 'permission',
+					tool,
+					permissionKind,
+					summary,
+					args: req.args ?? null,
+					userPolicy: opts.policy,
+					canPersistDecision: false,
+					escalationReason: forceEscalationReason,
+					shellAnalysis
+				}
+			);
+			if (response.decision === 'deny' || response.decision === 'deny-always') {
+				audit('auto-deny');
+				return rejectWithFeedback(response, fallbackFeedback);
+			}
+			audit('auto-allow');
+			return { kind: 'approve-once' } as const;
+		};
 
 		if (alwaysPrompt) {
 			const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
@@ -169,89 +197,53 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			return { kind: 'approve-once' } as const;
 		}
 		if (grant.outcome === 'deny') {
-			const escalationReason =
-				grant.denyReason && forcePermissionPrompt.kind === 'valid'
-					? forcePermissionPrompt.reason
-					: null;
-			if (escalationReason) {
-				const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
-					'permission',
-					{
-						kind: 'permission',
-						tool,
-						permissionKind,
-						summary,
-						args: req.args ?? null,
-						userPolicy: opts.policy,
-						canPersistDecision: false,
-						escalationReason,
-						shellAnalysis
-					}
+			if (grant.denyReason) {
+				const escalated = await maybePromptForEscalation(
+					'Escalation denied. Use structured tools or stop and explain what capability is missing.'
 				);
-				if (response.decision === 'deny' || response.decision === 'deny-always') {
-					audit('auto-deny');
-					return rejectWithFeedback(
-						response,
-						'Escalation denied. Use structured tools or stop and explain what capability is missing.'
-					);
-				}
-				audit('auto-allow');
-				return { kind: 'approve-once' } as const;
+				if (escalated) return escalated;
 			}
 			audit('auto-deny');
 			if (grant.denyReason) return { kind: 'reject', feedback: grant.denyReason } as const;
 			return { kind: 'reject' } as const;
 		}
+		let promptRequest: { canPersistDecision: boolean; bestEffortFeedback: string };
 		if (grant.outcome === 'prompt') {
-			if (opts.getMode() === 'best-effort') {
+			promptRequest = {
+				canPersistDecision: false,
+				bestEffortFeedback: bestEffortPromptGrantFeedback({ permissionKind })
+			};
+		} else {
+			if (opts.getApproveAll()) {
+				audit('auto-allow');
+				return { kind: 'approve-once' } as const;
+			}
+
+			const decision = decideByPolicy(opts.policy, 'permission', permissionKind, {
+				scopeKey,
+				workspaceRoot: opts.workingDirectory
+			});
+			if (decision === 'approved') {
+				audit('auto-allow');
+				return { kind: 'approve-once' } as const;
+			}
+			if (decision === 'denied') {
 				audit('auto-deny');
-				return {
-					kind: 'reject',
-					feedback: bestEffortPromptGrantFeedback({ permissionKind })
-				} as const;
+				return { kind: 'reject' } as const;
 			}
-			const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
-				'permission',
-				{
-					kind: 'permission',
-					tool,
-					permissionKind,
-					summary,
-					args: req.args ?? null,
-					userPolicy: opts.policy,
-					canPersistDecision: false,
-					shellAnalysis
-				}
-			);
-			if (response.decision === 'deny' || response.decision === 'deny-always') {
-				return rejectWithFeedback(response);
-			}
-			return { kind: 'approve-once' } as const;
+			promptRequest = {
+				canPersistDecision: true,
+				bestEffortFeedback: bestEffortPermissionFeedback({ permissionKind })
+			};
 		}
 
-		if (opts.getApproveAll()) {
-			audit('auto-allow');
-			return { kind: 'approve-once' } as const;
-		}
-
-		const decision = decideByPolicy(opts.policy, 'permission', permissionKind, {
-			scopeKey,
-			workspaceRoot: opts.workingDirectory
-		});
-		if (decision === 'approved') {
-			audit('auto-allow');
-			return { kind: 'approve-once' } as const;
-		}
-		if (decision === 'denied') {
-			audit('auto-deny');
-			return { kind: 'reject' } as const;
-		}
 		if (opts.getMode() === 'best-effort') {
+			const escalated = await maybePromptForEscalation();
+			if (escalated) return escalated;
 			audit('auto-deny');
-			const feedback = bestEffortPermissionFeedback({ permissionKind });
 			return {
 				kind: 'reject',
-				feedback
+				feedback: promptRequest.bestEffortFeedback
 			} as const;
 		}
 
@@ -264,7 +256,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				summary,
 				args: req.args ?? null,
 				userPolicy: opts.policy,
-				canPersistDecision: true,
+				canPersistDecision: promptRequest.canPersistDecision,
 				shellAnalysis
 			}
 		);
@@ -469,7 +461,10 @@ function bestEffortAlternativeHint(permissionKind: string): string {
 		case 'edit':
 			return 'Try a structured workspace edit/create workflow or another already-allowed path first.';
 		case 'url':
-			return 'Try a local source or another non-network approach first.';
+			return (
+				'Try a local source or another non-network approach first. ' +
+				'If the answer depends on external documentation, current API behavior, or other version-specific online information, retry with `forcePermissionPrompt` instead of guessing.'
+			);
 		default:
 			return 'Try another approach that stays within the current permission set first.';
 	}

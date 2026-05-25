@@ -477,6 +477,7 @@ describe('bridge.open() session mode and permissions', () => {
 				},
 				expectedKind: 'url',
 				expectedHint: 'local source or another non-network approach',
+				expectedExtraHint: 'retry with `forcePermissionPrompt` instead of guessing',
 				forbiddenDetail: 'https://example.com/private-token'
 			}
 		];
@@ -493,6 +494,7 @@ describe('bridge.open() session mode and permissions', () => {
 			);
 			const kindFeedback = (kindResult as { feedback: string }).feedback;
 			expect(kindFeedback).toContain(c.expectedHint);
+			if ('expectedExtraHint' in c) expect(kindFeedback).toContain(c.expectedExtraHint);
 			expect(kindFeedback).toContain('permission_capabilities');
 			expect(kindFeedback).toContain('forcePermissionPrompt');
 			expect(kindFeedback).toContain('after verifying no allowed alternative works');
@@ -623,6 +625,49 @@ describe('bridge.open() session mode and permissions', () => {
 				kind: 'permission',
 				tool: 'shell',
 				permissionKind: 'shell',
+				canPersistDecision: false,
+				escalationReason: reason
+			}
+		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('raises a one-time prompt for URL escalation in best-effort mode', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/runtime/interactive-requests');
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+		const reason =
+			'External documentation is required to verify current API behavior; no local source can confirm it.';
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'url',
+				toolName: 'web_fetch',
+				url: 'https://example.com/docs',
+				args: {
+					url: 'https://example.com/docs',
+					forcePermissionPrompt: reason
+				}
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'web_fetch',
+				permissionKind: 'url',
 				canPersistDecision: false,
 				escalationReason: reason
 			}
