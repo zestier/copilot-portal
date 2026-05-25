@@ -7,7 +7,6 @@
 
 import type { ShellRule, PositionalsRule, ShellOptionSpec } from '../../../permissions/scope-types';
 import {
-	defaultPreSubcommandOptionsForArgv0,
 	looksLikeShellOptionToken,
 	matchShellOptionToken,
 	resolveSubcommandIndex
@@ -80,7 +79,7 @@ export function shellRuleMatchesSegment(
 
 	const ignored = new Set<number>([0]);
 	const preRules = rule.preSubcommandOptions;
-	const preAllow = preRules?.allow ?? defaultPreSubcommandOptionsForArgv0(rule.argv0);
+	const preAllow = preRules?.allow ?? [];
 	let bodyStartIndex = 1;
 	if (rule.subcommands && rule.subcommands.length > 0) {
 		const leading = resolveSubcommandIndex(argv, preAllow);
@@ -105,7 +104,9 @@ export function shellRuleMatchesSegment(
 			if (!looksLikeShellOptionToken(tok) || tok === '--') break;
 			if (preRules?.deny) {
 				for (const denied of preRules.deny) {
-					if (tok === denied || tok.startsWith(denied + '=')) return false;
+					if (tok === denied || tok.startsWith(denied + '=')) {
+						return false;
+					}
 				}
 			}
 			const matched = matchShellOptionToken(tok, argv[i + 1], preAllow);
@@ -139,7 +140,9 @@ export function shellRuleMatchesSegment(
 		if (looksLikeShellOptionToken(tok)) {
 			if (rule.options?.deny) {
 				for (const denied of rule.options.deny) {
-					if (tok === denied || tok.startsWith(denied + '=')) return false;
+					if (tok === denied || tok.startsWith(denied + '=')) {
+						return false;
+					}
 				}
 			}
 			if (rule.options?.allow) {

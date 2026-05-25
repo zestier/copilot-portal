@@ -463,11 +463,8 @@ describe('interactive request registry', () => {
 			]
 		});
 
-		// Each grant matches independently on its own argv0. Note that the
-		// default seed grants include `pipeline: 'forbid'` prompt nudges for
-		// bare `rg` (steering toward the structured `grep` tool); to verify
-		// the user's rg allow actually persisted we exercise it in pipeline
-		// position, where the prompt nudge intentionally doesn't fire.
+		// Each grant matches independently on its own argv0; exercise the
+		// `rg` grant in a pipeline to verify per-segment matching.
 		const nodeParsed = parseShellCommand('node --version');
 		const rgParsed = parseShellCommand('node --version | rg v');
 		const unrelated = parseShellCommand('curl https://example.com');
@@ -569,7 +566,7 @@ describe('interactive permission adapter feedback', () => {
 		await expect(permission).resolves.toEqual({ kind: 'reject' });
 	});
 
-	it('matching prompt grants force a non-persistent dialog before policy auto-approval', async () => {
+	it('matching allow grants override prompt grants before policy auto-approval', async () => {
 		settings.addGrant({
 			userId,
 			conversationId: null,
@@ -594,24 +591,11 @@ describe('interactive permission adapter feedback', () => {
 			args: { url: 'https://example.com/' }
 		});
 		await Promise.resolve();
-		const request = events.find((ev) => ev.type === 'interactive.request');
-		if (request?.type !== 'interactive.request') throw new Error('expected interactive request');
-		expect(request.request).toMatchObject({
-			kind: 'permission',
-			tool: 'url_fetcher',
-			permissionKind: 'url',
-			canPersistDecision: false
-		});
-
-		resolve(request.request.requestId, userId, {
-			kind: 'permission',
-			decision: 'allow-once'
-		});
-
+		expect(events.some((ev) => ev.type === 'interactive.request')).toBe(false);
 		await expect(permission).resolves.toEqual({ kind: 'approve-once' });
 		expect(settings.listRecentDecisionsForUser(userId, 5)[0]).toMatchObject({
 			tool: 'url_fetcher',
-			decision: 'allow-once'
+			decision: 'auto-allow'
 		});
 	});
 

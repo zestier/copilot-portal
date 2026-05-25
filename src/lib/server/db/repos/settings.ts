@@ -91,8 +91,8 @@ export function save(userId: string, s: UserSettings) {
 // Schema is `permission_grants(user_id, conversation_id, tool,
 // permission_kind, scope_pattern, decision, expires_at, granted_at)`
 // after migration 009. `conversation_id` NULL means a user-global grant.
-// All the matching precedence (deny beats prompt beats allow, expiry,
-// wildcards) lives in the pure matcher module so it's testable without a DB.
+// Matching precedence (force-allow, deny, allow, prompt, expiry, wildcards)
+// lives in the pure matcher module so it's testable without a DB.
 
 import {
 	matchGrantsDetailed,
@@ -137,7 +137,14 @@ function dbRowToGrant(r: GrantDbRow): GrantRow {
 }
 
 function normalizeGrantDecision(decision: string): GrantDecision {
-	if (decision === 'allow' || decision === 'deny' || decision === 'prompt') return decision;
+	if (
+		decision === 'allow' ||
+		decision === 'force-allow' ||
+		decision === 'deny' ||
+		decision === 'prompt'
+	) {
+		return decision;
+	}
 	return 'deny';
 }
 
@@ -155,7 +162,8 @@ function loadCandidateGrants(userId: string, conversationId: string, tool: strin
 			 FROM permission_grants
 			 WHERE user_id = ?
 			   AND (conversation_id = ? OR conversation_id IS NULL)
-			   AND (tool = ? OR tool = '*')`
+			   AND (tool = ? OR tool = '*')
+			 ORDER BY granted_at ASC, rowid ASC`
 		)
 		.all(userId, conversationId, tool) as GrantDbRow[];
 	return rows.map(dbRowToGrant);

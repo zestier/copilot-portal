@@ -121,12 +121,14 @@ describe('db migrations + repos', () => {
 		// Each user only sees their own grants. Filter out the structured
 		// seed grants that ensureLocalUser / upsertGithub install — this
 		// test exercises the legacy `addGrant` path, not the seeded set.
-		const mine = settings.listGrantsForUser(u.id).filter((g) => g.scope === null);
+		const mine = settings
+			.listGrantsForUser(u.id)
+			.filter((g) => g.scope === null && g.source !== 'seed');
 		expect(mine.map((g) => g.tool).sort()).toEqual(['read', 'shell']);
 		expect(
 			settings
 				.listGrantsForUser(other.id)
-				.filter((g) => g.scope === null)
+				.filter((g) => g.scope === null && g.source !== 'seed')
 				.map((g) => g.tool)
 		).toEqual(['shell']);
 
@@ -141,15 +143,19 @@ describe('db migrations + repos', () => {
 		expect(
 			settings
 				.listGrantsForUser(u.id)
-				.filter((g) => g.scope === null)
+				.filter((g) => g.scope === null && g.source !== 'seed')
 				.map((g) => g.tool)
 		).toEqual(['shell']);
 
 		// Revoke is scoped to the owner — another user can't delete my row.
-		const target = settings.listGrantsForUser(u.id).filter((g) => g.scope === null)[0];
+		const target = settings
+			.listGrantsForUser(u.id)
+			.filter((g) => g.scope === null && g.source !== 'seed')[0];
 		expect(settings.revokeGrant(other.id, target.id)).toBe(false);
 		expect(settings.revokeGrant(u.id, target.id)).toBe(true);
-		expect(settings.listGrantsForUser(u.id).filter((g) => g.scope === null)).toEqual([]);
+		expect(
+			settings.listGrantsForUser(u.id).filter((g) => g.scope === null && g.source !== 'seed')
+		).toEqual([]);
 		// Idempotent.
 		expect(settings.revokeGrant(u.id, target.id)).toBe(false);
 	});

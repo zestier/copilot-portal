@@ -79,7 +79,7 @@ describe('tool-call rerun endpoint', () => {
 			conversationId: conv.id,
 			permissionKind: null,
 			argsHash: argsHash({ command: 'echo approved' }),
-			decision: 'allow',
+			decision: 'force-allow',
 			expiresAt: expect.any(Number)
 		});
 		expect(startTurnMock).toHaveBeenCalledWith(
@@ -127,7 +127,7 @@ describe('tool-call rerun endpoint', () => {
 			conversationId: conv.id,
 			permissionKind: null,
 			argsHash: argsHash(args),
-			decision: 'allow',
+			decision: 'force-allow',
 			expiresAt: expect.any(Number)
 		});
 		expect(startTurnMock).toHaveBeenCalledWith(

@@ -19,7 +19,7 @@ type CapabilityStatus = 'allowed' | 'denied' | 'prompt_required' | 'partially_al
 
 interface CapabilityRule {
 	kind: 'tool' | 'filesystem' | 'shell' | 'url' | 'legacy' | 'exact-invocation' | 'policy';
-	decision: 'allow' | 'deny' | 'prompt';
+	decision: 'allow' | 'force-allow' | 'deny' | 'prompt';
 	scope: 'all-conversations' | 'current-conversation';
 	summary: string;
 }
@@ -134,7 +134,9 @@ function capabilityForKind(
 	policy: PermissionPolicy
 ): Capability {
 	const relevant = grants.filter((g) => grantCoversPermissionKind(g, permissionKind));
-	const allowed = relevant.filter((g) => g.decision === 'allow').map(grantToRule);
+	const allowed = relevant
+		.filter((g) => g.decision === 'allow' || g.decision === 'force-allow')
+		.map(grantToRule);
 	const denied = relevant.filter((g) => g.decision === 'deny').map(grantToRule);
 	const promptRequired = relevant.filter((g) => g.decision === 'prompt').map(grantToRule);
 	const policyRule = policyRuleFor(permissionKind, policy);
@@ -213,7 +215,10 @@ function grantSummary(g: settings.GrantSummary): string {
 	return `${decisionVerb(g)} ${g.tool} for ${scopeSummary(g.scope)}.`;
 }
 
-function decisionVerb(g: settings.GrantSummary): 'Approve' | 'Deny' | 'Prompt for' {
+function decisionVerb(
+	g: settings.GrantSummary
+): 'Approve' | 'Force approve' | 'Deny' | 'Prompt for' {
+	if (g.decision === 'force-allow') return 'Force approve';
 	if (g.decision === 'deny') return 'Deny';
 	if (g.decision === 'prompt') return 'Prompt for';
 	return 'Approve';

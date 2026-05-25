@@ -35,10 +35,8 @@ export interface ShellRule {
 	argv0: string;
 	/**
 	 * If set, matches only when the invocation's resolved subcommand is in
-	 * this list. When `preSubcommandOptions.allow` is omitted, known global
-	 * options for supported command families (currently `git`) are skipped
-	 * heuristically first, so `git --no-pager status` still resolves to
-	 * subcommand `status`.
+	 * this list. Leading options before the subcommand are skipped only when
+	 * `preSubcommandOptions.allow` explicitly includes matching option specs.
 	 */
 	subcommands?: string[];
 	/**

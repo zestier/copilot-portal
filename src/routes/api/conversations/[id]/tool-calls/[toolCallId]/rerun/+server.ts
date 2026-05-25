@@ -58,7 +58,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		scopePattern: null,
 		scope: null,
 		argsHash: hash,
-		decision: 'allow',
+		decision: 'force-allow',
 		expiresAt
 	});
 	settings.recordDecision(

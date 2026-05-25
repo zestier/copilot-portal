@@ -47,9 +47,23 @@ describe('shell predicate — subcommands', () => {
 		expect(match(rule, 'git diff HEAD')).toBe(true);
 	});
 
-	it('skips supported git global options before matching the subcommand', () => {
-		expect(match(rule, 'git --no-pager status')).toBe(true);
-		expect(match(rule, 'git -c color.ui=always status')).toBe(true);
+	it('does not skip leading options before matching the subcommand by default', () => {
+		expect(match(rule, 'git --no-pager status')).toBe(false);
+		expect(match(rule, 'git -c color.ui=always status')).toBe(false);
+	});
+
+	it('skips explicitly allowed leading options before matching the subcommand', () => {
+		const explicit: ShellRule = {
+			...rule,
+			preSubcommandOptions: {
+				allow: [
+					{ name: '--no-pager', kind: 'flag' },
+					{ name: '-c', kind: 'option', value: { kind: 'any' } }
+				]
+			}
+		};
+		expect(match(explicit, 'git --no-pager status')).toBe(true);
+		expect(match(explicit, 'git -c color.ui=always status')).toBe(true);
 	});
 
 	it('rejects unsupported pre-subcommand prefixes or missing subcommands', () => {

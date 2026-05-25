@@ -28,7 +28,7 @@
 	type FsRootKind = FsRuleRoot;
 	type FsBehaviorKind = 'any' | FsRuleBehaviorWithValue;
 	type UrlRuleKind = 'exact' | 'host' | 'host-suffix';
-	type GrantDecision = 'allow' | 'deny' | 'prompt';
+	type GrantDecision = 'allow' | 'force-allow' | 'deny' | 'prompt';
 
 	let newGrantTool = $state<GrantTool>('shell');
 	let newGrantDecision = $state<GrantDecision>('allow');
@@ -395,6 +395,8 @@
 		switch (decision) {
 			case 'allow':
 				return 'Approve';
+			case 'force-allow':
+				return 'Force approve';
 			case 'deny':
 				return 'Deny';
 			case 'prompt':
@@ -437,7 +439,7 @@
 	function getGrantStats(items: PermissionGrant[]) {
 		return {
 			total: items.length,
-			allow: items.filter((g) => g.decision === 'allow').length,
+			allow: items.filter((g) => g.decision === 'allow' || g.decision === 'force-allow').length,
 			deny: items.filter((g) => g.decision === 'deny').length,
 			prompt: items.filter((g) => g.decision === 'prompt').length,
 			global: items.filter((g) => g.conversationId === null).length,
@@ -452,12 +454,20 @@
 		const deny = items.filter((g) => g.decision === 'deny');
 		const prompt = items.filter((g) => g.decision === 'prompt');
 		const userGlobal = items.filter(
-			(g) => g.decision === 'allow' && g.source !== 'seed' && g.conversationId === null
+			(g) =>
+				(g.decision === 'allow' || g.decision === 'force-allow') &&
+				g.source !== 'seed' &&
+				g.conversationId === null
 		);
 		const conversation = items.filter(
-			(g) => g.decision === 'allow' && g.source !== 'seed' && g.conversationId !== null
+			(g) =>
+				(g.decision === 'allow' || g.decision === 'force-allow') &&
+				g.source !== 'seed' &&
+				g.conversationId !== null
 		);
-		const defaults = items.filter((g) => g.decision === 'allow' && g.source === 'seed');
+		const defaults = items.filter(
+			(g) => (g.decision === 'allow' || g.decision === 'force-allow') && g.source === 'seed'
+		);
 
 		return [
 			{
@@ -920,8 +930,8 @@
 				No saved grants. When you click "Allow always" or "Deny always" on a tool prompt, the
 				resulting approve or hard-deny rule shows up here so you can revoke it later. You can also
 				add prompt-required rules here to force interactive approval for matching requests. The
-				button above re-installs the built-in defaults (file/dir reads, git read-only, and
-				structured-tool prompt nudges).
+				button above re-installs the built-in defaults (file/dir reads, structured tools, and safety
+				rules).
 			</p>
 		</div>
 	{:else}
@@ -1375,7 +1385,8 @@
 		border-radius: var(--radius-sm);
 		border: 1px solid var(--border);
 	}
-	.decision-tag.allow {
+	.decision-tag.allow,
+	.decision-tag.force-allow {
 		color: var(--success);
 		border-color: var(--success);
 	}

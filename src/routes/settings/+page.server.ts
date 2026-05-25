@@ -144,7 +144,7 @@ export const actions: Actions = {
 	/**
 	 * Replace identifiable default seed grants with the current default set.
 	 * This lets users recover after "Revoke all grants" and swap stale default
-	 * rows (for example old hard-deny nudges) for the current defaults without
+	 * rows (for example old hard-deny prompt seeds) for the current defaults without
 	 * rewriting unrelated user-created grants.
 	 */
 	restoreSeedGrants: async ({ locals }) => {
@@ -310,7 +310,13 @@ function parseGrantFormData(data: FormData, formId: string): ParseGrantResult {
 function markSeedGrants(grants: settings.GrantSummary[]) {
 	const seedKeys = new Set(
 		defaultSeedGrants().map((seed) =>
-			defaultSeedGrantKey(seed.tool, seed.permissionKind, seed.scope, seed.decision ?? 'allow')
+			defaultSeedGrantKey(
+				seed.tool,
+				seed.permissionKind,
+				seed.scope ?? null,
+				seed.scopePattern ?? null,
+				seed.decision ?? 'allow'
+			)
 		)
 	);
 
@@ -319,9 +325,14 @@ function markSeedGrants(grants: settings.GrantSummary[]) {
 		isSeedGrant:
 			grant.source === 'seed' ||
 			(grant.conversationId === null &&
-				grant.scope !== null &&
 				seedKeys.has(
-					defaultSeedGrantKey(grant.tool, grant.permissionKind, grant.scope, grant.decision)
+					defaultSeedGrantKey(
+						grant.tool,
+						grant.permissionKind,
+						grant.scope,
+						grant.scopePattern,
+						grant.decision
+					)
 				))
 	}));
 }
@@ -329,8 +340,9 @@ function markSeedGrants(grants: settings.GrantSummary[]) {
 function defaultSeedGrantKey(
 	tool: string,
 	permissionKind: string | null,
-	scope: import('$lib/permissions/scope-types').GrantScope,
+	scope: import('$lib/permissions/scope-types').GrantScope | null,
+	scopePattern: string | null,
 	decision: string
 ) {
-	return `${tool}\u0000${permissionKind ?? ''}\u0000${decision}\u0000${stableScopeKey(scope)}`;
+	return `${tool}\u0000${permissionKind ?? ''}\u0000${decision}\u0000${scope ? stableScopeKey(scope) : `pattern:${scopePattern ?? ''}`}`;
 }
