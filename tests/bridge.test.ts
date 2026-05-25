@@ -502,7 +502,7 @@ describe('bridge.open() session mode and permissions', () => {
 		}
 	});
 
-	it('auto-rejects shell git commands with structured-tool feedback', async () => {
+	it('auto-rejects shell git commands with concise structured-tool feedback', async () => {
 		const { open } = await importBridge();
 		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
 		const user = ensureLocalUser();
@@ -521,12 +521,7 @@ describe('bridge.open() session mode and permissions', () => {
 		expect(result).toEqual(
 			expect.objectContaining({
 				kind: 'reject',
-				feedback: expect.stringContaining('git_status')
-			})
-		);
-		expect(result).toEqual(
-			expect.objectContaining({
-				feedback: expect.stringContaining('forcePermissionPrompt')
+				feedback: 'Shell `git` requires a prompt. Use a structured Git tool instead.'
 			})
 		);
 	});
