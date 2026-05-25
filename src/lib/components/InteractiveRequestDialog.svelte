@@ -10,10 +10,7 @@
 	} from '$lib/types';
 	import { FS_PERMISSIONS, type GrantScope } from '$lib/permissions/scope-types';
 	import { deriveScopeKey } from '$lib/permissions/scope-key';
-	import {
-		defaultPreSubcommandOptionsForArgv0,
-		resolveSubcommandIndex
-	} from '$lib/permissions/shell-argv';
+	import { resolveSubcommandIndex } from '$lib/permissions/shell-argv';
 
 	let {
 		request,
@@ -262,11 +259,10 @@
 	// from the segments and let the user check several at once. Each
 	// checked option becomes its own grant row on "Allow always".
 	//
-	// Subcommand heuristic: for known command families like `git`, resolve
-	// the subcommand after supported global flags / options; otherwise fall
-	// back to argv[1]. If the resolved token looks like a bare identifier
-	// (matches /^[A-Za-z0-9][A-Za-z0-9_.:+-]*$/), we offer a
-	// "Any `cmd sub`" option in addition to the broad "Any `cmd`".
+	// Subcommand heuristic: resolve the subcommand after explicitly allowed
+	// leading options. The prompt picker emits no option allow list, so commands
+	// with leading options usually only get the broader argv0 scope here; users
+	// can author option-aware grants from Settings.
 
 	interface ShellScopeOption {
 		id: string;
@@ -333,10 +329,7 @@
 					}
 				});
 			}
-			const subIndex = resolveSubcommandIndex(
-				seg.argv,
-				defaultPreSubcommandOptionsForArgv0(argv0)
-			).subcommandIndex;
+			const subIndex = resolveSubcommandIndex(seg.argv, []).subcommandIndex;
 			const sub = subIndex === null ? undefined : seg.argv[subIndex];
 			if (
 				typeof sub === 'string' &&
