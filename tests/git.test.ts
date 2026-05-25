@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import * as git from '../src/lib/server/git';
+import { buildGitTools } from '../src/lib/server/tools/git';
 
 let repo: string;
 let firstSha = '';
@@ -124,6 +125,36 @@ describe('log', () => {
 		expect(entries.length).toBeGreaterThanOrEqual(1);
 		expect(entries[0].subject).toBe('initial');
 		expect(entries[0].sha).toMatch(/^[0-9a-f]{40}$/);
+		expect(entries[0].sha).toBe(entries[0].sha.trim());
+	});
+
+	it('filters history by workspace path', async () => {
+		const tmp = mkdtempSync(join(tmpdir(), 'gitwrap-log-path-'));
+		try {
+			const run = (args: string[]) => execFileSync('git', args, { cwd: tmp, stdio: 'pipe' });
+			run(['init', '-q', '-b', 'main']);
+			run(['config', 'user.email', 't@example.com']);
+			run(['config', 'user.name', 'T']);
+			run(['config', 'commit.gpgsign', 'false']);
+			mkdirSync(join(tmp, 'sub'));
+			writeFileSync(join(tmp, 'sub', 'b.txt'), 'one\n');
+			run(['add', '.']);
+			run(['commit', '-q', '-m', 'add b']);
+			writeFileSync(join(tmp, 'a.txt'), 'two\n');
+			run(['add', '.']);
+			run(['commit', '-q', '-m', 'add a']);
+
+			const entries = await git.log(tmp, { limit: 5, path: 'sub/b.txt' });
+			expect(entries.map((e) => e.subject)).toEqual(['add b']);
+			expect(entries[0].sha).toBe(entries[0].sha.trim());
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('rejects invalid refs and path escapes', async () => {
+		await expect(git.log(repo, { ref: '--all' })).rejects.toThrow('invalid ref');
+		await expect(git.log(repo, { path: '../escape' })).rejects.toThrow('invalid path');
 	});
 });
 
@@ -141,6 +172,20 @@ describe('diff', () => {
 	it('rejects path escape', async () => {
 		await expect(git.diff(repo, { kind: 'worktree-vs-head' }, '../escape')).rejects.toThrow();
 	});
+
+	it('returns structured stat and path-filtered name outputs', async () => {
+		const stat = await git.diffStat(repo, { kind: 'worktree-vs-head' });
+		expect(stat.total).toEqual({ filesChanged: 1, added: 1, removed: 0 });
+		expect(stat.files[0]).toMatchObject({ path: 'a.txt', added: 1, removed: 0 });
+
+		await expect(git.nameOnly(repo, { kind: 'worktree-vs-head' }, 'sub/b.txt')).resolves.toEqual(
+			[]
+		);
+		await expect(git.nameOnly(repo, { kind: 'worktree-vs-head' })).resolves.toEqual(['a.txt']);
+		await expect(git.nameStatus(repo, { kind: 'worktree-vs-head' })).resolves.toEqual([
+			{ statusCode: 'M', status: 'modified', path: 'a.txt', origPath: null }
+		]);
+	});
 });
 
 describe('showCommit / showFile', () => {
@@ -157,6 +202,11 @@ describe('showCommit / showFile', () => {
 	});
 	it('rejects invalid sha', async () => {
 		await expect(git.showCommit(repo, 'not-a-sha!!')).rejects.toThrow();
+	});
+	it('optionally includes a commit patch', async () => {
+		const c = await git.showCommit(repo, firstSha, { includePatch: true });
+		expect(c.patch).toContain('diff --git');
+		expect(c.patch).toContain('a.txt');
 	});
 });
 
@@ -216,5 +266,24 @@ describe('numstat', () => {
 		} finally {
 			rmSync(tmp, { recursive: true, force: true });
 		}
+	});
+});
+
+describe('structured git tools', () => {
+	it('returns JSON for non-patch git_diff outputs', async () => {
+		const tool = buildGitTools(repo).find((t) => t.name === 'git_diff');
+		expect(tool).toBeDefined();
+
+		const out = await tool!.handler({ output: 'name-status' });
+		expect(JSON.parse(out)).toEqual({
+			files: [{ statusCode: 'M', status: 'modified', path: 'a.txt', origPath: null }]
+		});
+	});
+
+	it('rejects unknown structured git tool properties', async () => {
+		const tool = buildGitTools(repo).find((t) => t.name === 'git_log');
+		expect(tool).toBeDefined();
+
+		await expect(tool!.handler({ limit: 1, flags: ['--all'] })).rejects.toThrow('Unrecognized key');
 	});
 });

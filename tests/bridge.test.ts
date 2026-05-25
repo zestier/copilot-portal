@@ -521,7 +521,8 @@ describe('bridge.open() session mode and permissions', () => {
 		expect(result).toEqual(
 			expect.objectContaining({
 				kind: 'reject',
-				feedback: 'Shell `git` requires a prompt. Use a structured Git tool instead.'
+				feedback:
+					'Shell `git` requires a prompt. Use `permission_capabilities` to find allowed alternatives, then use an available structured Git tool instead.'
 			})
 		);
 	});

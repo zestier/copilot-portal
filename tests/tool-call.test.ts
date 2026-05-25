@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { parseGitToolResult } from '../src/lib/client/git-tool-result';
 import { summarizeToolCall } from '../src/lib/client/tool-summary';
 import { decodeToolResult, shouldRenderToolResultAsMarkdown } from '../src/lib/client/tool-result';
 import { getBackgroundAgentId, getSubagentDisplayState } from '../src/lib/client/subagent-display';
@@ -67,6 +68,74 @@ describe('summarizeToolCall', () => {
 
 	it('falls back to first string arg for unknown tools', () => {
 		expect(summarizeToolCall('unknown_tool', JSON.stringify({ x: 'hello' }))).toBe('hello');
+	});
+
+	it('summarizes structured git tool options', () => {
+		expect(
+			summarizeToolCall(
+				'git_diff',
+				JSON.stringify({ output: 'name-status', target: 'worktree-vs-head', path: 'src/a.ts' })
+			)
+		).toBe('name-status · worktree-vs-head · src/a.ts');
+		expect(summarizeToolCall('git_log', JSON.stringify({ path: 'src/a.ts' }))).toBe('src/a.ts');
+		expect(
+			summarizeToolCall('git_show_commit', JSON.stringify({ sha: 'abc1234', includePatch: true }))
+		).toBe('abc1234 · patch');
+	});
+});
+
+describe('parseGitToolResult', () => {
+	it('parses structured git_diff name-status output', () => {
+		expect(
+			parseGitToolResult(
+				'git_diff',
+				JSON.stringify({ output: 'name-status' }),
+				JSON.stringify({
+					files: [{ statusCode: 'M', status: 'modified', path: 'src/a.ts', origPath: null }]
+				})
+			)
+		).toEqual({
+			kind: 'diff-name-status',
+			files: [{ statusCode: 'M', status: 'modified', path: 'src/a.ts', origPath: null }]
+		});
+	});
+
+	it('parses git_log and git_show_commit output', () => {
+		expect(
+			parseGitToolResult(
+				'git_log',
+				'{}',
+				JSON.stringify({
+					commits: [
+						{
+							sha: 'abc123',
+							shortSha: 'abc123',
+							author: 'A',
+							email: 'a@example.com',
+							timestamp: 1,
+							subject: 'subject'
+						}
+					]
+				})
+			)
+		).toMatchObject({ kind: 'log', commits: [{ shortSha: 'abc123' }] });
+		expect(
+			parseGitToolResult(
+				'git_show_commit',
+				'{}',
+				JSON.stringify({
+					sha: 'abc123',
+					shortSha: 'abc123',
+					author: 'A',
+					email: 'a@example.com',
+					timestamp: 1,
+					subject: 'subject',
+					body: '',
+					parents: [],
+					files: []
+				})
+			)
+		).toMatchObject({ kind: 'commit', commit: { shortSha: 'abc123' } });
 	});
 });
 

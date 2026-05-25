@@ -92,6 +92,22 @@ export function summarizeToolCall(tool: string, argsJson: string): string | null
 		case 'web_fetch':
 		case 'fetch':
 			return str(args.url);
+		case 'git_diff': {
+			const output = str(args.output) ?? 'patch';
+			const target = str(args.target) ?? 'worktree-vs-head';
+			const path = str(args.path);
+			return [output, target, path].filter(Boolean).join(' · ');
+		}
+		case 'git_log': {
+			const ref = str(args.ref);
+			const path = str(args.path);
+			if (ref && path) return `${ref} · ${path}`;
+			return path ?? ref ?? null;
+		}
+		case 'git_show_commit': {
+			const sha = str(args.sha);
+			return args.includePatch === true && sha ? `${sha} · patch` : sha;
+		}
 		case 'skill':
 			return str(args.skill);
 		case 'sql':

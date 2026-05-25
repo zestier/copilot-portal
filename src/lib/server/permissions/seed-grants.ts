@@ -171,7 +171,7 @@ export function defaultSeedGrants(): SeedSpec[] {
 	seeds.push(
 		shellPrompt(
 			{ argv0: 'git' },
-			'Shell `git` requires a prompt. Use a structured Git tool instead.'
+			'Shell `git` requires a prompt. Use `permission_capabilities` to find allowed alternatives, then use an available structured Git tool instead.'
 		)
 	);
 
