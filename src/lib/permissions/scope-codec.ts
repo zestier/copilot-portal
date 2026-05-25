@@ -9,6 +9,7 @@ import {
 	type GrantScope,
 	type ShellScope,
 	type ShellRule,
+	type ShellCommandStep,
 	type ShellOptionRules,
 	type ShellOptionSpec,
 	type ShellOptionValueRule,
@@ -58,43 +59,10 @@ function validate(v: unknown): GrantScope | null {
 function validateShell(v: Record<string, unknown>): ShellScope | null {
 	const rule = isObject(v.rule) ? (v.rule as Record<string, unknown>) : null;
 	if (!rule) return null;
-	const argv0 = rule.argv0;
-	if (typeof argv0 !== 'string' || argv0.length === 0) return null;
-	if (argv0.includes('/') || argv0.startsWith('.')) return null;
 
-	const out: ShellRule = { argv0 };
-
-	if (rule.subcommands !== undefined) {
-		if (!Array.isArray(rule.subcommands)) return null;
-		const subs: string[] = [];
-		for (const s of rule.subcommands) {
-			if (typeof s !== 'string' || s.length === 0) return null;
-			subs.push(s);
-		}
-		out.subcommands = subs;
-	}
-
-	if (rule.preSubcommandOptions !== undefined) {
-		const parsed = validateShellOptionRules(rule.preSubcommandOptions);
-		if (!parsed) return null;
-		out.preSubcommandOptions = parsed;
-	}
-
-	if (rule.options !== undefined) {
-		const parsed = validateShellOptionRules(rule.options);
-		if (!parsed) return null;
-		out.options = parsed;
-	}
-
-	if (rule.flags !== undefined) {
-		if (out.preSubcommandOptions || out.options) return null;
-		const legacy = validateLegacyFlags(rule.flags);
-		if (!legacy) return null;
-		out.options = legacy;
-		if (out.subcommands && out.subcommands.length > 0) {
-			out.preSubcommandOptions = legacy;
-		}
-	}
+	const command = validateShellCommandPath(rule.command);
+	if (!command) return null;
+	const out: ShellRule = { command };
 
 	if (rule.positionals !== undefined) {
 		const p = validatePositionals(rule.positionals);
@@ -108,6 +76,26 @@ function validateShell(v: Record<string, unknown>): ShellScope | null {
 	}
 
 	return { kind: 'shell', rule: out };
+}
+
+function validateShellCommandPath(v: unknown): ShellCommandStep[] | null {
+	if (!Array.isArray(v) || v.length === 0) return null;
+	const command: ShellCommandStep[] = [];
+	for (let i = 0; i < v.length; i++) {
+		const step = isObject(v[i]) ? (v[i] as Record<string, unknown>) : null;
+		if (!step) return null;
+		const token = step.token;
+		if (typeof token !== 'string' || token.length === 0) return null;
+		if (i === 0 && (token.includes('/') || token.startsWith('.'))) return null;
+		const out: ShellCommandStep = { token };
+		if (step.options !== undefined) {
+			const options = validateShellOptionRules(step.options);
+			if (!options) return null;
+			out.options = options;
+		}
+		command.push(out);
+	}
+	return command;
 }
 
 function validateShellOptionRules(v: unknown): ShellOptionRules | null {
@@ -151,24 +139,6 @@ function validateShellOptionValue(v: unknown): ShellOptionValueRule | null {
 		return { kind } as ShellOptionValueRule;
 	}
 	return null;
-}
-
-function validateLegacyFlags(v: unknown): ShellOptionRules | null {
-	if (!isObject(v)) return null;
-	const raw = v as Record<string, unknown>;
-	const out: ShellOptionRules = {};
-	if (raw.allow !== undefined) {
-		const list = asFlagNameList(raw.allow);
-		if (list === null) return null;
-		out.allow = list.map((name) => ({ name, kind: 'flag' }));
-	}
-	if (raw.deny !== undefined) {
-		const list = asFlagNameList(raw.deny);
-		if (list === null) return null;
-		out.deny = list;
-	}
-	if (out.allow === undefined && out.deny === undefined) return null;
-	return out;
 }
 
 function validatePositionals(v: unknown): PositionalsRule | null {

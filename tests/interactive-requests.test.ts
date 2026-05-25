@@ -453,12 +453,18 @@ describe('interactive request registry', () => {
 			decision: 'allow-always',
 			scope: {
 				permissionKind: 'shell',
-				scope: { kind: 'shell', rule: { argv0: 'node', positionals: { kind: 'any' } } }
+				scope: {
+					kind: 'shell',
+					rule: { command: [{ token: 'node' }], positionals: { kind: 'any' } }
+				}
 			},
 			additionalScopes: [
 				{
 					permissionKind: 'shell',
-					scope: { kind: 'shell', rule: { argv0: 'rg', positionals: { kind: 'any' } } }
+					scope: {
+						kind: 'shell',
+						rule: { command: [{ token: 'rg' }], positionals: { kind: 'any' } }
+					}
 				}
 			]
 		});

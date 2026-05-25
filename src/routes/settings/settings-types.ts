@@ -117,10 +117,8 @@ function describeFsPathRule(rule: Extract<GrantScope, { kind: 'fs' }>['rule']): 
 }
 
 function describeShellRule(rule: Extract<GrantScope, { kind: 'shell' }>['rule']): string {
-	const parts = [`argv0=${rule.argv0}`];
-	if (rule.subcommands && rule.subcommands.length > 0) {
-		parts.push(`subcommands=${rule.subcommands.join('|')}`);
-	}
+	const command = rule.command.map((step) => step.token).join(' ');
+	const parts = [`command=${command}`];
 	if (rule.positionals) {
 		parts.push(`positionals=${rule.positionals.kind}`);
 	}

@@ -5,12 +5,14 @@
 // the parser couldn't fully understand. This module focuses on the
 // structural question: does this rule cover this argv?
 
-import type { ShellRule, PositionalsRule, ShellOptionSpec } from '../../../permissions/scope-types';
-import {
-	looksLikeShellOptionToken,
-	matchShellOptionToken,
-	resolveSubcommandIndex
-} from '../../../permissions/shell-argv';
+import type {
+	ShellRule,
+	PositionalsRule,
+	ShellOptionSpec,
+	ShellCommandStep,
+	ShellOptionRules
+} from '../../../permissions/scope-types';
+import { looksLikeShellOptionToken, matchShellOptionToken } from '../../../permissions/shell-argv';
 import type { ParsedSegment } from '../shell-parser';
 import { isPathInWorkspace } from '../workspace';
 
@@ -69,7 +71,8 @@ export function shellRuleMatchesSegment(
 ): boolean {
 	const argv = seg.argv;
 	if (argv.length === 0) return false;
-	if (argv[0] !== rule.argv0) return false;
+	const path = rule.command;
+	if (path.length === 0) return false;
 
 	if (rule.pipeline) {
 		const inPipeline = ctx.inPipeline === true;
@@ -77,54 +80,39 @@ export function shellRuleMatchesSegment(
 		if (rule.pipeline === 'forbid' && inPipeline) return false;
 	}
 
+	return commandPathMatches(path, argv, rule.positionals, ctx);
+}
+
+function commandPathMatches(
+	path: ShellCommandStep[],
+	argv: string[],
+	positionalsRule: PositionalsRule | undefined,
+	ctx: ShellMatchContext
+): boolean {
+	if (path.length === 0 || argv[0] !== path[0].token) return false;
+
 	const ignored = new Set<number>([0]);
-	const preRules = rule.preSubcommandOptions;
-	const preAllow = preRules?.allow ?? [];
 	let bodyStartIndex = 1;
-	if (rule.subcommands && rule.subcommands.length > 0) {
-		const leading = resolveSubcommandIndex(argv, preAllow);
-		const subcommandIndex = leading.subcommandIndex;
-		if (subcommandIndex === null) return false;
-		for (const opt of leading.matchedOptions) {
-			if (!optionSpecMatchesValue(opt.spec, opt.value, ctx)) return false;
-			ignored.add(opt.index);
-			if (opt.valueIndex !== undefined) ignored.add(opt.valueIndex);
-		}
-		if (preRules?.deny && hasDeniedOption(argv.slice(1, subcommandIndex), preRules.deny)) {
-			return false;
-		}
-		const sub = argv[subcommandIndex];
-		if (typeof sub !== 'string' || !rule.subcommands.includes(sub)) return false;
-		ignored.add(subcommandIndex);
-		bodyStartIndex = subcommandIndex + 1;
-	} else if (preAllow.length > 0 || preRules?.deny) {
-		let i = 1;
-		for (; i < argv.length; ) {
-			const tok = argv[i];
-			if (!looksLikeShellOptionToken(tok) || tok === '--') break;
-			if (preRules?.deny) {
-				for (const denied of preRules.deny) {
-					if (tok === denied || tok.startsWith(denied + '=')) {
-						return false;
-					}
-				}
-			}
-			const matched = matchShellOptionToken(tok, argv[i + 1], preAllow);
-			if (!matched) break;
-			if (!optionSpecMatchesValue(matched.spec, matched.value, ctx)) return false;
-			ignored.add(i);
-			if (matched.consumedNextToken) {
-				ignored.add(i + 1);
-				i += 2;
-			} else {
-				i += 1;
-			}
-		}
-		bodyStartIndex = i;
+
+	for (let stepIndex = 0; stepIndex < path.length - 1; stepIndex++) {
+		const current = path[stepIndex];
+		const next = path[stepIndex + 1];
+		const matched = consumeStepOptionsUntilToken(
+			argv,
+			bodyStartIndex,
+			current.options,
+			next.token,
+			ctx
+		);
+		if (!matched) return false;
+		ignored.add(matched.tokenIndex);
+		for (const optionIndex of matched.ignoredOptionIndexes) ignored.add(optionIndex);
+		bodyStartIndex = matched.tokenIndex + 1;
 	}
 
 	const positionals: string[] = [];
 	let afterDoubleDash = false;
+	const finalOptions = path[path.length - 1].options;
 	for (let i = bodyStartIndex; i < argv.length; i++) {
 		if (ignored.has(i)) continue;
 		const tok = argv[i];
@@ -138,15 +126,9 @@ export function shellRuleMatchesSegment(
 			continue;
 		}
 		if (looksLikeShellOptionToken(tok)) {
-			if (rule.options?.deny) {
-				for (const denied of rule.options.deny) {
-					if (tok === denied || tok.startsWith(denied + '=')) {
-						return false;
-					}
-				}
-			}
-			if (rule.options?.allow) {
-				const matched = matchShellOptionToken(tok, argv[i + 1], rule.options.allow);
+			if (matchesDeniedOption(tok, finalOptions?.deny)) return false;
+			if (finalOptions?.allow) {
+				const matched = matchShellOptionToken(tok, argv[i + 1], finalOptions.allow);
 				if (!matched) return false;
 				if (!optionSpecMatchesValue(matched.spec, matched.value, ctx)) return false;
 				if (matched.spec.kind === 'flag' && matched.spec.name === '--') {
@@ -160,9 +142,7 @@ export function shellRuleMatchesSegment(
 		positionals.push(tok);
 	}
 
-	if (!positionalsMatch(rule.positionals, positionals, ctx)) return false;
-
-	return true;
+	return positionalsMatch(positionalsRule, positionals, ctx);
 }
 
 function optionSpecMatchesValue(
@@ -180,12 +160,38 @@ function optionSpecMatchesValue(
 	}
 }
 
-function hasDeniedOption(tokens: string[], denied: readonly string[]): boolean {
-	for (const tok of tokens) {
-		if (!looksLikeShellOptionToken(tok)) continue;
-		for (const name of denied) {
-			if (tok === name || tok.startsWith(name + '=')) return true;
+function consumeStepOptionsUntilToken(
+	argv: string[],
+	startIndex: number,
+	options: ShellOptionRules | undefined,
+	nextToken: string,
+	ctx: ShellMatchContext
+): { tokenIndex: number; ignoredOptionIndexes: number[] } | null {
+	const ignoredOptionIndexes: number[] = [];
+	for (let i = startIndex; i < argv.length; ) {
+		const tok = argv[i];
+		if (tok === nextToken) return { tokenIndex: i, ignoredOptionIndexes };
+		if (tok === '--' || !looksLikeShellOptionToken(tok)) return null;
+		if (matchesDeniedOption(tok, options?.deny)) return null;
+		if (!options?.allow) return null;
+		const matched = matchShellOptionToken(tok, argv[i + 1], options.allow);
+		if (!matched) return null;
+		if (!optionSpecMatchesValue(matched.spec, matched.value, ctx)) return null;
+		ignoredOptionIndexes.push(i);
+		if (matched.consumedNextToken) {
+			ignoredOptionIndexes.push(i + 1);
+			i += 2;
+		} else {
+			i += 1;
 		}
+	}
+	return null;
+}
+
+function matchesDeniedOption(tok: string, denied: readonly string[] | undefined): boolean {
+	if (!denied) return false;
+	for (const name of denied) {
+		if (tok === name || tok.startsWith(name + '=')) return true;
 	}
 	return false;
 }

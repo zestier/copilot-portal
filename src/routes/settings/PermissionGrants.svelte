@@ -12,6 +12,8 @@
 		FS_RULE_ROOTS,
 		type FsRuleBehaviorWithValue,
 		type FsRuleRoot,
+		type ShellCommandStep,
+		type ShellOptionRules,
 		type ShellOptionSpec
 	} from '$lib/permissions/scope-types';
 
@@ -54,10 +56,8 @@
 	let shellSubcommands = $state('');
 	let shellPositionals = $state<ShellPositionalsKind>('unset');
 	let shellPipeline = $state<ShellPipelineKind>('unset');
-	let shellPreOptionsAllow = $state('');
-	let shellPreOptionsDeny = $state('');
-	let shellOptionsAllow = $state('');
-	let shellOptionsDeny = $state('');
+	let shellStepOptions = $state<ShellStepOptionInput[]>([{ allow: '', deny: '' }]);
+	let originalShellCommand = $state<ShellCommandStep[] | null>(null);
 
 	let fsRoot = $state<FsRootKind>('workspace');
 	let fsBehavior = $state<FsBehaviorKind>('any');
@@ -108,6 +108,13 @@
 			.join(', ');
 	}
 
+	function commandTailToText(command: ShellCommandStep[] | undefined): string {
+		return (command ?? [])
+			.slice(1)
+			.map((step) => step.token)
+			.join(' ');
+	}
+
 	function fsRootLabel(root: FsRootKind): string {
 		switch (root) {
 			case 'workspace':
@@ -133,31 +140,57 @@
 	}
 
 	type BuildResult = { json: string; error: null } | { json: null; error: string };
+	type ShellStepOptionInput = { allow: string; deny: string };
+
+	const shellCommandTokens = $derived([
+		shellArgv0.trim(),
+		...shellSubcommands
+			.split(/\s+/)
+			.map((t) => t.trim())
+			.filter(Boolean)
+	]);
+
+	$effect(() => {
+		const next = shellCommandTokens.map((token, i) => {
+			const existing = shellStepOptions[i];
+			if (existing) return existing;
+			const original = originalShellCommand?.[i];
+			if (original?.token === token) {
+				return {
+					allow: shellOptionSpecsToCsv(original.options?.allow ?? []),
+					deny: (original.options?.deny ?? []).join(', ')
+				};
+			}
+			return { allow: '', deny: '' };
+		});
+		const changed =
+			next.length !== shellStepOptions.length ||
+			next.some((entry, i) => entry !== shellStepOptions[i]);
+		if (changed) shellStepOptions = next.length > 0 ? next : [{ allow: '', deny: '' }];
+	});
+
+	function updateShellStepOption(index: number, field: keyof ShellStepOptionInput, value: string) {
+		shellStepOptions = shellStepOptions.map((entry, i) =>
+			i === index ? { ...entry, [field]: value } : entry
+		);
+	}
 
 	function buildScopeJson(): BuildResult {
 		try {
 			if (newGrantTool === 'shell') {
 				if (!shellArgv0.trim()) return { json: null, error: 'argv0 is required' };
-				const rule: Record<string, unknown> = { argv0: shellArgv0.trim() };
-				const subs = csvToList(shellSubcommands);
-				if (subs.length > 0) rule.subcommands = subs;
+				const command: ShellCommandStep[] = shellCommandTokens.map((token) => ({ token }));
+				const rule: Record<string, unknown> = { command };
 				if (shellPositionals !== 'unset') rule.positionals = { kind: shellPositionals };
 				if (shellPipeline !== 'unset') rule.pipeline = shellPipeline;
-				const preAllow = parseShellOptionSpecs(shellPreOptionsAllow);
-				const preDeny = csvToList(shellPreOptionsDeny);
-				if (preAllow.length > 0 || preDeny.length > 0) {
-					const options: Record<string, unknown> = {};
-					if (preAllow.length > 0) options.allow = preAllow;
-					if (preDeny.length > 0) options.deny = preDeny;
-					rule.preSubcommandOptions = options;
-				}
-				const allow = parseShellOptionSpecs(shellOptionsAllow);
-				const deny = csvToList(shellOptionsDeny);
-				if (allow.length > 0 || deny.length > 0) {
-					const options: Record<string, unknown> = {};
+				for (let i = 0; i < command.length; i++) {
+					const allow = parseShellOptionSpecs(shellStepOptions[i]?.allow ?? '');
+					const deny = csvToList(shellStepOptions[i]?.deny ?? '');
+					if (allow.length === 0 && deny.length === 0) continue;
+					const options: ShellOptionRules = {};
 					if (allow.length > 0) options.allow = allow;
 					if (deny.length > 0) options.deny = deny;
-					rule.options = options;
+					command[i].options = options;
 				}
 				return { json: JSON.stringify({ kind: 'shell', rule }), error: null };
 			}
@@ -205,10 +238,7 @@
 			void shellSubcommands;
 			void shellPositionals;
 			void shellPipeline;
-			void shellPreOptionsAllow;
-			void shellPreOptionsDeny;
-			void shellOptionsAllow;
-			void shellOptionsDeny;
+			void shellStepOptions;
 			void fsRoot;
 			void fsBehavior;
 			void fsValue;
@@ -257,10 +287,8 @@
 		shellSubcommands = '';
 		shellPositionals = 'unset';
 		shellPipeline = 'unset';
-		shellPreOptionsAllow = '';
-		shellPreOptionsDeny = '';
-		shellOptionsAllow = '';
-		shellOptionsDeny = '';
+		shellStepOptions = [{ allow: '', deny: '' }];
+		originalShellCommand = null;
 		fsRoot = 'workspace';
 		fsBehavior = 'any';
 		fsValue = '';
@@ -301,14 +329,15 @@
 		const sc = g.scope;
 		if (sc) {
 			if (sc.kind === 'shell') {
-				shellArgv0 = sc.rule.argv0;
-				shellSubcommands = (sc.rule.subcommands ?? []).join(', ');
+				originalShellCommand = sc.rule.command;
+				shellArgv0 = sc.rule.command[0]?.token ?? '';
+				shellSubcommands = commandTailToText(sc.rule.command);
 				shellPositionals = sc.rule.positionals?.kind ?? 'unset';
 				shellPipeline = sc.rule.pipeline ?? 'unset';
-				shellPreOptionsAllow = shellOptionSpecsToCsv(sc.rule.preSubcommandOptions?.allow ?? []);
-				shellPreOptionsDeny = (sc.rule.preSubcommandOptions?.deny ?? []).join(', ');
-				shellOptionsAllow = shellOptionSpecsToCsv(sc.rule.options?.allow ?? []);
-				shellOptionsDeny = (sc.rule.options?.deny ?? []).join(', ');
+				shellStepOptions = sc.rule.command.map((step) => ({
+					allow: shellOptionSpecsToCsv(step.options?.allow ?? []),
+					deny: (step.options?.deny ?? []).join(', ')
+				}));
 			} else if (sc.kind === 'url') {
 				urlRuleKind = sc.rule.kind;
 				if (sc.rule.kind === 'exact') urlExact = sc.rule.url;
@@ -661,17 +690,17 @@
 							<span class="muted small">No slashes, no leading dot — just the program name.</span>
 						</label>
 						<label>
-							Subcommands (optional, comma-separated)
+							Subcommand path (optional, space-separated)
 							<input
 								type="text"
 								bind:value={shellSubcommands}
-								placeholder="status, log, diff"
+								placeholder="remote set-url"
 								spellcheck="false"
 								autocomplete="off"
 							/>
 							<span class="muted small"
-								>If set, the resolved subcommand must be one of these. Leading option specs below
-								control which options are consumed before subcommand matching.</span
+								>Each token extends the command path. Options can be configured for every command
+								step below.</span
 							>
 						</label>
 						<label>
@@ -707,62 +736,50 @@
 								lets `cmd | grep ...` keep working while rejecting bare `grep`.</span
 							>
 						</label>
-						<label>
-							Leading option allow list (optional, comma-separated)
-							<input
-								type="text"
-								bind:value={shellPreOptionsAllow}
-								placeholder="--no-pager, -C=any, --git-dir=workspace-path"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small"
-								>Shared option-spec syntax: bare names are boolean flags; `name=any` and
-								`name=workspace-path` consume a value (either `name value` or `name=value`).</span
-							>
-						</label>
-						<label>
-							Leading option deny list (optional, comma-separated)
-							<input
-								type="text"
-								bind:value={shellPreOptionsDeny}
-								placeholder="--git-dir, -C"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small"
-								>Name-based deny list for options before the subcommand. Useful for blocking repo
-								escape hatches like `git -C` or `git --git-dir`.</span
-							>
-						</label>
-						<label>
-							Post-subcommand option allow list (optional, comma-separated)
-							<input
-								type="text"
-								bind:value={shellOptionsAllow}
-								placeholder="-n, --color=any, --"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small"
-								>If set, every option-shaped token after the subcommand must match one of these
-								specs. Consumed option values are not treated as positionals.</span
-							>
-						</label>
-						<label>
-							Post-subcommand option deny list (optional, comma-separated)
-							<input
-								type="text"
-								bind:value={shellOptionsDeny}
-								placeholder="--format, --upload-pack"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small"
-								>Name-based deny list for options after the subcommand. Positionals are governed by
-								the row above.</span
-							>
-						</label>
+						<div class="step-options">
+							<p class="muted small">
+								Option-spec syntax: bare names are boolean flags; `name=any` and
+								`name=workspace-path` consume a value (`name value` or `name=value`). Options on a
+								non-final step are consumed before matching the next command token; options on the
+								final step may be interleaved with positionals.
+							</p>
+							{#each shellCommandTokens as token, i}
+								<fieldset class="step-option-fields">
+									<legend>
+										Options after `{token || '(argv0)'}`
+										{#if i === 0}
+											<span class="muted">(base command)</span>
+										{:else if i === shellCommandTokens.length - 1}
+											<span class="muted">(final step)</span>
+										{:else}
+											<span class="muted">(intermediate step)</span>
+										{/if}
+									</legend>
+									<label>
+										Allow list (optional, comma-separated)
+										<input
+											type="text"
+											value={shellStepOptions[i]?.allow ?? ''}
+											oninput={(e) => updateShellStepOption(i, 'allow', e.currentTarget.value)}
+											placeholder={i === 0 ? '--no-pager, -C=any' : '-v, --format=any'}
+											spellcheck="false"
+											autocomplete="off"
+										/>
+									</label>
+									<label>
+										Deny list (optional, comma-separated)
+										<input
+											type="text"
+											value={shellStepOptions[i]?.deny ?? ''}
+											oninput={(e) => updateShellStepOption(i, 'deny', e.currentTarget.value)}
+											placeholder={i === 0 ? '--git-dir, -C' : '--upload-pack'}
+											spellcheck="false"
+											autocomplete="off"
+										/>
+									</label>
+								</fieldset>
+							{/each}
+						</div>
 					</fieldset>
 				{:else if newGrantTool === 'url'}
 					<fieldset class="scope-fields">
@@ -1265,6 +1282,22 @@
 		padding: 0 0.25rem;
 		font-size: 0.85em;
 		color: var(--muted, #888);
+	}
+	.step-options {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	.step-option-fields {
+		border: 1px dashed var(--border);
+		border-radius: 6px;
+		padding: 0.5rem 0.75rem;
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+		gap: 0.75rem;
+	}
+	.step-option-fields legend {
+		grid-column: 1 / -1;
 	}
 	.scope-preview pre {
 		background: var(--code-bg, #1118);

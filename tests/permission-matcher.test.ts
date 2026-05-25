@@ -252,7 +252,7 @@ describe('matchGrants — shell segments (per-segment OR across grants)', () => 
 			tool: 'shell',
 			permissionKind: 'shell',
 			decision,
-			scope: { kind: 'shell', rule: { argv0 } }
+			scope: { kind: 'shell', rule: { command: [{ token: argv0 }] } }
 		});
 	}
 
@@ -423,20 +423,20 @@ describe('matchGrants — pipeline lever and denyReason', () => {
 	const allowAnyGrep = grant({
 		tool: 'shell',
 		permissionKind: 'shell',
-		scope: { kind: 'shell', rule: { argv0: 'grep', positionals: { kind: 'any' } } },
+		scope: { kind: 'shell', rule: { command: [{ token: 'grep' }], positionals: { kind: 'any' } } },
 		decision: 'allow'
 	});
 	const denyBareGrep = grant({
 		tool: 'shell',
 		permissionKind: 'shell',
-		scope: { kind: 'shell', rule: { argv0: 'grep', pipeline: 'forbid' } },
+		scope: { kind: 'shell', rule: { command: [{ token: 'grep' }], pipeline: 'forbid' } },
 		decision: 'deny',
 		denyReason: 'Use the structured `grep` tool instead of the shell binary.'
 	});
 	const allowCat = grant({
 		tool: 'shell',
 		permissionKind: 'shell',
-		scope: { kind: 'shell', rule: { argv0: 'cat', positionals: { kind: 'any' } } },
+		scope: { kind: 'shell', rule: { command: [{ token: 'cat' }], positionals: { kind: 'any' } } },
 		decision: 'allow'
 	});
 
@@ -466,7 +466,7 @@ describe('matchGrants — pipeline lever and denyReason', () => {
 		const denyNoReason = grant({
 			tool: 'shell',
 			permissionKind: 'shell',
-			scope: { kind: 'shell', rule: { argv0: 'rm' } },
+			scope: { kind: 'shell', rule: { command: [{ token: 'rm' }] } },
 			decision: 'deny'
 		});
 		const out = matchGrantsDetailed([denyNoReason], shellQuery('rm -rf /'));
@@ -516,7 +516,7 @@ describe('matchGrants — git pre-subcommand globals', () => {
 			permissionKind: 'shell',
 			scope: {
 				kind: 'shell',
-				rule: { argv0: 'git', subcommands: ['status'], positionals: { kind: 'any' } }
+				rule: { command: [{ token: 'git' }, { token: 'status' }], positionals: { kind: 'any' } }
 			},
 			decision: 'deny',
 			denyReason: 'Use git_status.'
@@ -524,7 +524,7 @@ describe('matchGrants — git pre-subcommand globals', () => {
 		const allowGit = grant({
 			tool: 'shell',
 			permissionKind: 'shell',
-			scope: { kind: 'shell', rule: { argv0: 'git', positionals: { kind: 'any' } } },
+			scope: { kind: 'shell', rule: { command: [{ token: 'git' }], positionals: { kind: 'any' } } },
 			decision: 'force-allow',
 			argsHash: 'exact'
 		});

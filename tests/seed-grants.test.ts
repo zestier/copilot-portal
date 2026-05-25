@@ -38,7 +38,7 @@ describe('seed grants — installation', () => {
 				(g) =>
 					g.tool === 'shell' &&
 					g.permissionKind === 'shell' &&
-					((g.scope?.kind === 'shell' && g.scope.rule.argv0 === 'git') ||
+					((g.scope?.kind === 'shell' && g.scope.rule.command?.[0]?.token === 'git') ||
 						g.scopePattern?.startsWith('git '))
 			)
 		).toBe(true);
@@ -61,7 +61,7 @@ describe('seed grants — installation', () => {
 			conversationId: null,
 			tool: 'shell',
 			permissionKind: 'shell',
-			scope: { kind: 'shell', rule: { argv0: 'cat', pipeline: 'forbid' } },
+			scope: { kind: 'shell', rule: { command: [{ token: 'cat' }], pipeline: 'forbid' } },
 			decision: 'deny',
 			denyReason: 'Bare `cat` is denied. Use `view` for file reads. Piped `cat` is allowed.'
 		});
@@ -76,7 +76,7 @@ describe('seed grants — installation', () => {
 				.filter((g) => g.decision === 'deny')
 				.every(
 					(g) =>
-						(g.scope?.kind === 'shell' && g.scope.rule.argv0 === 'git') ||
+						(g.scope?.kind === 'shell' && g.scope.rule.command?.[0]?.token === 'git') ||
 						g.scopePattern?.startsWith('git ')
 				)
 		).toBe(true);
@@ -96,7 +96,7 @@ describe('seed grants — installation', () => {
 			conversationId: null,
 			tool: 'shell',
 			permissionKind: 'shell',
-			scope: { kind: 'shell', rule: { argv0: 'rm' } },
+			scope: { kind: 'shell', rule: { command: [{ token: 'rm' }] } },
 			decision: 'deny',
 			denyReason: 'rm stays blocked'
 		});

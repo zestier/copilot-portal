@@ -61,11 +61,18 @@ const ShellOptionRulesSchema = z
 		message: 'option rules must specify at least one of allow/deny'
 	});
 
+const ShellCommandStepSchema = z.object({
+	token: ArgvToken,
+	options: ShellOptionRulesSchema.optional()
+});
+
 const ShellRuleSchema = z.object({
-	argv0: Argv0Schema,
-	subcommands: z.array(ArgvToken).min(1).optional(),
-	preSubcommandOptions: ShellOptionRulesSchema.optional(),
-	options: ShellOptionRulesSchema.optional(),
+	command: z
+		.array(ShellCommandStepSchema)
+		.min(1)
+		.refine((steps) => Argv0Schema.safeParse(steps[0]?.token).success, {
+			message: 'first command token must be a bare command name'
+		}),
 	positionals: PositionalsSchema.optional(),
 	pipeline: z.enum(['must', 'forbid']).optional()
 });

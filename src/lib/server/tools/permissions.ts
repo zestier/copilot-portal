@@ -238,8 +238,8 @@ function scopeSummary(scope: GrantScope): string {
 }
 
 function shellRuleSummary(rule: Extract<GrantScope, { kind: 'shell' }>['rule']): string {
-	const parts = [`shell command \`${rule.argv0}\``];
-	if (rule.subcommands?.length) parts.push(`subcommands: ${rule.subcommands.join(', ')}`);
+	const command = rule.command.map((step) => step.token).join(' ');
+	const parts = [`shell command \`${command}\``];
 	if (rule.positionals) parts.push(`positionals: ${rule.positionals.kind}`);
 	if (rule.pipeline) parts.push(`pipeline: ${rule.pipeline}`);
 	return parts.join('; ');

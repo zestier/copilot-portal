@@ -325,7 +325,7 @@
 					summary: `any \`${argv0}\` invocation`,
 					scope: {
 						kind: 'shell',
-						rule: { argv0, positionals: { kind: 'any' } }
+						rule: { command: [{ token: argv0 }], positionals: { kind: 'any' } }
 					}
 				});
 			}
@@ -344,7 +344,10 @@
 					summary: `any \`${argv0} ${sub}\` invocation`,
 					scope: {
 						kind: 'shell',
-						rule: { argv0, subcommands: [sub], positionals: { kind: 'any' } }
+						rule: {
+							command: [{ token: argv0 }, { token: sub }],
+							positionals: { kind: 'any' }
+						}
 					}
 				});
 			}

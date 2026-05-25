@@ -32,20 +32,26 @@ const FsRuleSchema = z
 	.strict();
 
 // Structured ShellScope wire shape mirrors `ShellScope` in
-// $lib/permissions/scope-types. The shell picker only emits the
-// argv0-anchored shapes (with optional subcommands and a coarse
-// positionals rule); richer option rules come from
+// $lib/permissions/scope-types. The shell picker emits command-path
+// shapes with coarse positional rules; richer option rules come from
 // Settings / seeds, not dialog responses. The shape is re-validated by
 // the codec on the way to the DB.
-const ShellRuleSchema = z.object({
-	argv0: z
+const ShellCommandStepSchema = z.object({
+	token: z
 		.string()
 		.min(1)
 		.max(128)
-		.refine((s) => !s.includes('/') && !s.startsWith('.'), {
-			message: 'argv0 must be a bare command name'
+		.refine((s) => !s.includes('\0'), { message: 'command tokens must not contain NUL' })
+});
+
+const ShellRuleSchema = z.object({
+	command: z
+		.array(ShellCommandStepSchema)
+		.min(1)
+		.max(32)
+		.refine((steps) => !steps[0]?.token.includes('/') && !steps[0]?.token.startsWith('.'), {
+			message: 'first command token must be a bare command name'
 		}),
-	subcommands: z.array(z.string().min(1).max(128)).max(32).optional(),
 	positionals: z
 		.object({
 			kind: z.enum(['none', 'any', 'workspace-paths'])

@@ -173,7 +173,7 @@ describe('db migrations + repos', () => {
 			conversationId: null,
 			tool: 'shell',
 			permissionKind: 'shell',
-			scope: { kind: 'shell', rule: { argv0: 'ls' } },
+			scope: { kind: 'shell', rule: { command: [{ token: 'ls' }] } },
 			decision: 'allow'
 		});
 		const grant = settings.listGrantsForUser(u.id).find((g) => g.tool === 'shell')!;
@@ -184,7 +184,7 @@ describe('db migrations + repos', () => {
 			settings.updateGrant(other.id, grant.id, {
 				tool: 'shell',
 				permissionKind: 'shell',
-				scope: { kind: 'shell', rule: { argv0: 'cat' } },
+				scope: { kind: 'shell', rule: { command: [{ token: 'cat' }] } },
 				decision: 'deny'
 			})
 		).toBe(false);
@@ -194,14 +194,14 @@ describe('db migrations + repos', () => {
 			settings.updateGrant(u.id, grant.id, {
 				tool: 'shell',
 				permissionKind: 'shell',
-				scope: { kind: 'shell', rule: { argv0: 'cat' } },
+				scope: { kind: 'shell', rule: { command: [{ token: 'cat' }] } },
 				decision: 'deny',
 				expiresAt: Date.now() + 60_000
 			})
 		).toBe(true);
 		const after = settings.listGrantsForUser(u.id).find((g) => g.id === grant.id)!;
 		expect(after.decision).toBe('deny');
-		expect(after.scope).toEqual({ kind: 'shell', rule: { argv0: 'cat' } });
+		expect(after.scope).toEqual({ kind: 'shell', rule: { command: [{ token: 'cat' }] } });
 		expect(after.expiresAt).not.toBeNull();
 		expect(after.grantedAt).toBe(grantedAt);
 
@@ -210,7 +210,7 @@ describe('db migrations + repos', () => {
 			settings.updateGrant(u.id, 999_999, {
 				tool: 'shell',
 				permissionKind: 'shell',
-				scope: { kind: 'shell', rule: { argv0: 'x' } },
+				scope: { kind: 'shell', rule: { command: [{ token: 'x' }] } },
 				decision: 'allow'
 			})
 		).toBe(false);
@@ -263,6 +263,21 @@ describe('db migrations + repos', () => {
 		const listed = settings.listGrantsForUser(u.id).filter((g) => g.scope === null);
 		expect(listed.find((g) => g.scopePattern === 'npm *')?.decision).toBe('prompt');
 		expect(listed.find((g) => g.scopePattern === 'bogus *')?.decision).toBe('deny');
+	});
+
+	it('fails closed for malformed structured grant scopes instead of falling back to wildcard', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, { title: 'malformed grant', workdir: '/tmp', model: null });
+		getDb()
+			.prepare(
+				`INSERT INTO permission_grants(
+					user_id, conversation_id, tool, permission_kind, scope_pattern, scope_json, decision, granted_at
+				) VALUES (?, NULL, 'shell', 'shell', NULL, ?, 'allow', ?)`
+			)
+			.run(u.id, '{"kind":"shell","rule":{"argv0":"node"}}', Date.now());
+
+		expect(settings.matchGrant(u.id, c.id, 'shell', 'shell', 'node --version')).toBe('none');
+		expect(settings.matchGrant(u.id, c.id, 'shell', 'shell', 'anything')).toBe('none');
 	});
 
 	it('archives and unarchives conversations and filters list accordingly', () => {

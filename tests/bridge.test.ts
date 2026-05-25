@@ -681,7 +681,7 @@ describe('bridge.open() session mode and permissions', () => {
 			conversationId: null,
 			tool: 'shell',
 			permissionKind: 'shell',
-			scope: { kind: 'shell', rule: { argv0: 'rm' } },
+			scope: { kind: 'shell', rule: { command: [{ token: 'rm' }] } },
 			decision: 'deny',
 			denyReason: 'Hard deny: rm is forbidden in shell.'
 		});
@@ -715,7 +715,7 @@ describe('bridge.open() session mode and permissions', () => {
 			conversationId: null,
 			tool: 'shell',
 			permissionKind: 'shell',
-			scope: { kind: 'shell', rule: { argv0: 'node' } },
+			scope: { kind: 'shell', rule: { command: [{ token: 'node' }] } },
 			decision: 'prompt',
 			denyReason: 'Node shell commands require human approval.'
 		});
@@ -767,7 +767,7 @@ describe('bridge.open() session mode and permissions', () => {
 			conversationId: null,
 			tool: 'shell',
 			permissionKind: 'shell',
-			scope: { kind: 'shell', rule: { argv0: 'node' } },
+			scope: { kind: 'shell', rule: { command: [{ token: 'node' }] } },
 			decision: 'allow'
 		});
 		await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });

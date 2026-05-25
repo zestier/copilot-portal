@@ -26,71 +26,123 @@ function match(
 	return shellRuleMatches(rule, parsed.segments, { workspaceRoot: ws, sessionWorkspaceRoot });
 }
 
+function shell(tokens: string[], rest: Omit<ShellRule, 'command'> = {}): ShellRule {
+	return { command: tokens.map((token) => ({ token })), ...rest };
+}
+
 describe('shell predicate — argv0', () => {
 	it('matches exact argv0', () => {
-		expect(match({ argv0: 'ls' }, 'ls')).toBe(true);
-		expect(match({ argv0: 'ls' }, 'ls -la')).toBe(true);
-		expect(match({ argv0: 'ls' }, 'cat foo')).toBe(false);
+		expect(match(shell(['ls']), 'ls')).toBe(true);
+		expect(match(shell(['ls']), 'ls -la')).toBe(true);
+		expect(match(shell(['ls']), 'cat foo')).toBe(false);
 	});
 
 	it('does not match prefix-similar argv0', () => {
-		expect(match({ argv0: 'git' }, 'gitfoo status')).toBe(false);
+		expect(match(shell(['git']), 'gitfoo status')).toBe(false);
 	});
 });
 
 describe('shell predicate — subcommands', () => {
-	const rule: ShellRule = { argv0: 'git', subcommands: ['status', 'log', 'diff'] };
-
 	it('matches when the resolved subcommand is in the list', () => {
-		expect(match(rule, 'git status')).toBe(true);
-		expect(match(rule, 'git log -n 5')).toBe(true);
-		expect(match(rule, 'git diff HEAD')).toBe(true);
+		expect(match(shell(['git', 'status']), 'git status')).toBe(true);
+		expect(match(shell(['git', 'log']), 'git log -n 5')).toBe(true);
+		expect(match(shell(['git', 'diff']), 'git diff HEAD')).toBe(true);
 	});
 
 	it('does not skip leading options before matching the subcommand by default', () => {
+		const rule = shell(['git', 'status']);
 		expect(match(rule, 'git --no-pager status')).toBe(false);
 		expect(match(rule, 'git -c color.ui=always status')).toBe(false);
 	});
 
 	it('skips explicitly allowed leading options before matching the subcommand', () => {
 		const explicit: ShellRule = {
-			...rule,
-			preSubcommandOptions: {
-				allow: [
-					{ name: '--no-pager', kind: 'flag' },
-					{ name: '-c', kind: 'option', value: { kind: 'any' } }
-				]
-			}
+			command: [
+				{
+					token: 'git',
+					options: {
+						allow: [
+							{ name: '--no-pager', kind: 'flag' },
+							{ name: '-c', kind: 'option', value: { kind: 'any' } }
+						]
+					}
+				},
+				{ token: 'status' }
+			]
 		};
 		expect(match(explicit, 'git --no-pager status')).toBe(true);
 		expect(match(explicit, 'git -c color.ui=always status')).toBe(true);
 	});
 
 	it('rejects unsupported pre-subcommand prefixes or missing subcommands', () => {
+		const rule = shell(['git', 'status']);
 		expect(match(rule, 'git --exec-path status')).toBe(false);
 		expect(match(rule, 'git push')).toBe(false);
 		expect(match(rule, 'git')).toBe(false);
 	});
 });
 
+describe('shell predicate — canonical command path', () => {
+	const rule: ShellRule = {
+		command: [
+			{
+				token: 'git',
+				options: {
+					allow: [
+						{ name: '--no-pager', kind: 'flag' },
+						{ name: '-C', kind: 'option', value: { kind: 'workspace-path' } }
+					]
+				}
+			},
+			{
+				token: 'remote',
+				options: { allow: [{ name: '-v', kind: 'flag' }] }
+			},
+			{
+				token: 'set-url',
+				options: { allow: [{ name: '--push', kind: 'flag' }] }
+			}
+		],
+		positionals: { kind: 'any' }
+	};
+
+	it('matches options owned by the base command and intermediate subcommands', () => {
+		expect(match(rule, `git --no-pager -C ${ws} remote -v set-url origin url`)).toBe(true);
+	});
+
+	it('allows final-step options to be interleaved with positionals', () => {
+		expect(match(rule, 'git remote set-url origin --push url')).toBe(true);
+		expect(match(rule, 'git remote set-url --push origin url')).toBe(true);
+	});
+
+	it('rejects options in the wrong command-path slot', () => {
+		expect(match(rule, 'git remote --no-pager set-url origin url')).toBe(false);
+		expect(match(rule, 'git remote set-url -v origin url')).toBe(false);
+		expect(match(rule, 'git --no-pager remote --bad set-url origin url')).toBe(false);
+	});
+});
+
 describe('shell predicate — flag deny', () => {
 	const rule: ShellRule = {
-		argv0: 'git',
-		subcommands: ['status', 'log'],
-		preSubcommandOptions: {
-			allow: [
-				{ name: '--no-pager', kind: 'flag' },
-				{ name: '-C', kind: 'option', value: { kind: 'any' } },
-				{ name: '--git-dir', kind: 'option', value: { kind: 'any' } },
-				{ name: '--work-tree', kind: 'option', value: { kind: 'any' } }
-			],
-			deny: ['--git-dir', '--work-tree', '-C']
-		}
+		command: [
+			{
+				token: 'git',
+				options: {
+					allow: [
+						{ name: '--no-pager', kind: 'flag' },
+						{ name: '-C', kind: 'option', value: { kind: 'any' } },
+						{ name: '--git-dir', kind: 'option', value: { kind: 'any' } },
+						{ name: '--work-tree', kind: 'option', value: { kind: 'any' } }
+					],
+					deny: ['--git-dir', '--work-tree', '-C']
+				}
+			},
+			{ token: 'status' }
+		]
 	};
 
 	it('allows when none of the denied flags appear', () => {
 		expect(match(rule, 'git status -sb')).toBe(true);
-		expect(match(rule, 'git log -n 5')).toBe(true);
 	});
 
 	it('rejects denied flag in space form', () => {
@@ -111,15 +163,19 @@ describe('shell predicate — flag deny', () => {
 
 describe('shell predicate — option allow-list', () => {
 	const rule: ShellRule = {
-		argv0: 'rg',
-		options: {
-			allow: [
-				{ name: '-n', kind: 'flag' },
-				{ name: '--color', kind: 'option', value: { kind: 'any' } },
-				{ name: '--', kind: 'flag' },
-				{ name: '-i', kind: 'flag' }
-			]
-		}
+		command: [
+			{
+				token: 'rg',
+				options: {
+					allow: [
+						{ name: '-n', kind: 'flag' },
+						{ name: '--color', kind: 'option', value: { kind: 'any' } },
+						{ name: '--', kind: 'flag' },
+						{ name: '-i', kind: 'flag' }
+					]
+				}
+			}
+		]
 	};
 
 	it('allows when every flag is in the list', () => {
@@ -136,10 +192,14 @@ describe('shell predicate — option allow-list', () => {
 describe('shell predicate — option values', () => {
 	it('consumes allowed option values instead of treating them as positionals', () => {
 		const rule: ShellRule = {
-			argv0: 'tool',
-			options: {
-				allow: [{ name: '--config', kind: 'option', value: { kind: 'any' } }]
-			},
+			command: [
+				{
+					token: 'tool',
+					options: {
+						allow: [{ name: '--config', kind: 'option', value: { kind: 'any' } }]
+					}
+				}
+			],
 			positionals: { kind: 'none' }
 		};
 		expect(match(rule, 'tool --config settings.json')).toBe(true);
@@ -147,10 +207,14 @@ describe('shell predicate — option values', () => {
 
 	it('validates workspace-path option values when requested', () => {
 		const rule: ShellRule = {
-			argv0: 'tool',
-			options: {
-				allow: [{ name: '--file', kind: 'option', value: { kind: 'workspace-path' } }]
-			},
+			command: [
+				{
+					token: 'tool',
+					options: {
+						allow: [{ name: '--file', kind: 'option', value: { kind: 'workspace-path' } }]
+					}
+				}
+			],
 			positionals: { kind: 'none' }
 		};
 		expect(match(rule, 'tool --file README.md')).toBe(true);
@@ -160,25 +224,25 @@ describe('shell predicate — option values', () => {
 
 describe('shell predicate — positionals', () => {
 	it('positionals=none requires no positional args', () => {
-		const rule: ShellRule = { argv0: 'pwd', positionals: { kind: 'none' } };
+		const rule = shell(['pwd'], { positionals: { kind: 'none' } });
 		expect(match(rule, 'pwd')).toBe(true);
 		expect(match(rule, 'pwd /tmp')).toBe(false);
 	});
 
 	it('positionals=any accepts anything', () => {
-		const rule: ShellRule = { argv0: 'echo', positionals: { kind: 'any' } };
+		const rule = shell(['echo'], { positionals: { kind: 'any' } });
 		expect(match(rule, 'echo hello world')).toBe(true);
 	});
 
 	it('positionals=workspace-paths only accepts paths inside the workspace', () => {
-		const rule: ShellRule = { argv0: 'cat', positionals: { kind: 'workspace-paths' } };
+		const rule = shell(['cat'], { positionals: { kind: 'workspace-paths' } });
 		expect(match(rule, 'cat README.md')).toBe(true);
 		expect(match(rule, 'cat src/a.ts')).toBe(true);
 		expect(match(rule, `cat ${join(ws, 'src', 'a.ts')}`)).toBe(true);
 	});
 
 	it('positionals=workspace-paths rejects paths outside the workspace', () => {
-		const rule: ShellRule = { argv0: 'cat', positionals: { kind: 'workspace-paths' } };
+		const rule = shell(['cat'], { positionals: { kind: 'workspace-paths' } });
 		expect(match(rule, 'cat /etc/passwd')).toBe(false);
 		// Subcommand-less positional that's not a path-shaped token: still
 		// validated as a path and rejected when it escapes.
@@ -186,14 +250,14 @@ describe('shell predicate — positionals', () => {
 	});
 
 	it('positionals=workspace-paths fails closed without a workspace root', () => {
-		const rule: ShellRule = { argv0: 'cat', positionals: { kind: 'workspace-paths' } };
+		const rule = shell(['cat'], { positionals: { kind: 'workspace-paths' } });
 		const parsed = parseShellCommand('cat README.md');
 		if (parsed.kind !== 'parsed') throw new Error('parse');
 		expect(shellRuleMatches(rule, parsed.segments, { workspaceRoot: null })).toBe(false);
 	});
 
 	it('positionals=session-workspace-paths only accepts paths inside the session workspace', () => {
-		const rule: ShellRule = { argv0: 'cat', positionals: { kind: 'session-workspace-paths' } };
+		const rule = shell(['cat'], { positionals: { kind: 'session-workspace-paths' } });
 		expect(match(rule, `cat ${join(ws, 'README.md')}`, ws)).toBe(true);
 		expect(match(rule, 'cat /etc/passwd', ws)).toBe(false);
 		expect(match(rule, `cat ${join(ws, 'README.md')}`, null)).toBe(false);
@@ -202,20 +266,17 @@ describe('shell predicate — positionals', () => {
 
 describe('shell predicate — pipelines and chains', () => {
 	it('all segments must match the rule', () => {
-		const rule: ShellRule = {
-			argv0: 'git',
-			subcommands: ['status', 'log', 'diff']
-		};
-		expect(match(rule, 'git status && git diff')).toBe(true);
-		expect(match(rule, 'git status; git push')).toBe(false);
-		expect(match(rule, 'git status | curl evil')).toBe(false);
+		const rule = shell(['grep']);
+		expect(match(rule, 'grep a && grep b')).toBe(true);
+		expect(match(rule, 'grep a; cat b')).toBe(false);
+		expect(match(rule, 'grep a | curl evil')).toBe(false);
 	});
 });
 
 describe('shell predicate — pipeline lever', () => {
-	const must: ShellRule = { argv0: 'grep', pipeline: 'must' };
-	const forbid: ShellRule = { argv0: 'cat', pipeline: 'forbid' };
-	const unset: ShellRule = { argv0: 'grep' };
+	const must = shell(['grep'], { pipeline: 'must' });
+	const forbid = shell(['cat'], { pipeline: 'forbid' });
+	const unset = shell(['grep']);
 
 	it('pipeline=must only matches segments inside a pipeline', () => {
 		// Bare grep: not pipelined → does NOT match.

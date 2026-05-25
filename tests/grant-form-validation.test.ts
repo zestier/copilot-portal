@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { GrantInputSchema, permissionKindForTool } from '../src/lib/permissions/scope-schema';
 
 const future = Date.now() + 60_000;
+const shell = (token: string, rest: Record<string, unknown> = {}) => ({
+	command: [{ token }],
+	...rest
+});
 
 describe('GrantInputSchema — valid shapes', () => {
 	it('shell with workspace-paths positionals', () => {
@@ -10,12 +14,12 @@ describe('GrantInputSchema — valid shapes', () => {
 			decision: 'allow',
 			scope: {
 				kind: 'shell',
-				rule: { argv0: 'cd', positionals: { kind: 'workspace-paths' } }
+				rule: shell('cd', { positionals: { kind: 'workspace-paths' } })
 			}
 		});
 		expect(parsed.scope.kind).toBe('shell');
 		if (parsed.scope.kind === 'shell') {
-			expect(parsed.scope.rule.argv0).toBe('cd');
+			expect(parsed.scope.rule.command?.[0]?.token).toBe('cd');
 		}
 		expect(parsed.expiresAt).toBeNull();
 	});
@@ -26,7 +30,7 @@ describe('GrantInputSchema — valid shapes', () => {
 			decision: 'allow',
 			scope: {
 				kind: 'shell',
-				rule: { argv0: 'cat', positionals: { kind: 'session-workspace-paths' } }
+				rule: shell('cat', { positionals: { kind: 'session-workspace-paths' } })
 			}
 		});
 		expect(parsed.scope.kind).toBe('shell');
@@ -39,16 +43,22 @@ describe('GrantInputSchema — valid shapes', () => {
 			scope: {
 				kind: 'shell',
 				rule: {
-					argv0: 'git',
-					subcommands: ['status', 'log'],
-					preSubcommandOptions: {
-						allow: [{ name: '-C', kind: 'option', value: { kind: 'any' } }],
-						deny: ['--git-dir']
-					},
-					options: {
-						allow: [{ name: '--oneline', kind: 'flag' }],
-						deny: ['--format']
-					}
+					command: [
+						{
+							token: 'git',
+							options: {
+								allow: [{ name: '-C', kind: 'option', value: { kind: 'any' } }],
+								deny: ['--git-dir']
+							}
+						},
+						{
+							token: 'log',
+							options: {
+								allow: [{ name: '--oneline', kind: 'flag' }],
+								deny: ['--format']
+							}
+						}
+					]
 				}
 			}
 		});
@@ -116,7 +126,7 @@ describe('GrantInputSchema — valid shapes', () => {
 		const parsed = GrantInputSchema.parse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'ls' } },
+			scope: { kind: 'shell', rule: shell('ls') },
 			expiresAt: future
 		});
 		expect(parsed.expiresAt).toBe(future);
@@ -126,7 +136,7 @@ describe('GrantInputSchema — valid shapes', () => {
 		const parsed = GrantInputSchema.parse({
 			tool: 'shell',
 			decision: 'prompt',
-			scope: { kind: 'shell', rule: { argv0: 'npm' } }
+			scope: { kind: 'shell', rule: shell('npm') }
 		});
 		expect(parsed.decision).toBe('prompt');
 		expect(parsed.denyReason).toBeNull();
@@ -159,7 +169,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'read',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'ls' } }
+			scope: { kind: 'shell', rule: shell('ls') }
 		});
 		expect(r.success).toBe(false);
 	});
@@ -168,7 +178,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: '/usr/bin/ls' } }
+			scope: { kind: 'shell', rule: shell('/usr/bin/ls') }
 		});
 		expect(r.success).toBe(false);
 	});
@@ -216,7 +226,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'ls' } },
+			scope: { kind: 'shell', rule: shell('ls') },
 			expiresAt: Date.now() - 1000
 		});
 		expect(r.success).toBe(false);
@@ -228,7 +238,7 @@ describe('GrantInputSchema — rejections', () => {
 			decision: 'allow',
 			scope: {
 				kind: 'shell',
-				rule: { argv0: 'git', options: { deny: ['foo'] } }
+				rule: { command: [{ token: 'git', options: { deny: ['foo'] } }] }
 			}
 		});
 		expect(r.success).toBe(false);
@@ -238,7 +248,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'ls' } },
+			scope: { kind: 'shell', rule: shell('ls') },
 			denyReason: 'this should not be settable on an allow'
 		});
 		expect(r.success).toBe(false);
@@ -248,7 +258,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'prompt',
-			scope: { kind: 'shell', rule: { argv0: 'npm' } },
+			scope: { kind: 'shell', rule: shell('npm') },
 			denyReason: 'prompt grants should not reject directly'
 		});
 		expect(r.success).toBe(false);
@@ -258,7 +268,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'grep', pipeline: 'sometimes' } }
+			scope: { kind: 'shell', rule: shell('grep', { pipeline: 'sometimes' }) }
 		});
 		expect(r.success).toBe(false);
 	});
@@ -269,7 +279,7 @@ describe('GrantInputSchema — denyReason + pipeline', () => {
 		const r = GrantInputSchema.parse({
 			tool: 'shell',
 			decision: 'deny',
-			scope: { kind: 'shell', rule: { argv0: 'cat', pipeline: 'forbid' } },
+			scope: { kind: 'shell', rule: shell('cat', { pipeline: 'forbid' }) },
 			denyReason: '  prefer the view tool  '
 		});
 		expect(r.denyReason).toBe('prefer the view tool');
@@ -283,7 +293,7 @@ describe('GrantInputSchema — denyReason + pipeline', () => {
 			const r = GrantInputSchema.parse({
 				tool: 'shell',
 				decision: 'deny',
-				scope: { kind: 'shell', rule: { argv0: 'rm' } },
+				scope: { kind: 'shell', rule: shell('rm') },
 				denyReason: reason
 			});
 			expect(r.denyReason).toBeNull();
@@ -294,7 +304,7 @@ describe('GrantInputSchema — denyReason + pipeline', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'deny',
-			scope: { kind: 'shell', rule: { argv0: 'rm' } },
+			scope: { kind: 'shell', rule: shell('rm') },
 			denyReason: 'x'.repeat(501)
 		});
 		expect(r.success).toBe(false);
@@ -304,7 +314,7 @@ describe('GrantInputSchema — denyReason + pipeline', () => {
 		const r = GrantInputSchema.parse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'grep', pipeline: 'must' } }
+			scope: { kind: 'shell', rule: shell('grep', { pipeline: 'must' }) }
 		});
 		if (r.scope.kind === 'shell') {
 			expect(r.scope.rule.pipeline).toBe('must');

@@ -55,7 +55,7 @@ test('creating a shell+workspace-paths grant adds a row to the list', async ({ p
 	// should appear with the expected scope description.
 	const row = page
 		.locator('.grant-list .grant-row')
-		.filter({ has: page.locator(`code.pattern:has-text("argv0=${argv0}")`) });
+		.filter({ has: page.locator(`code.pattern:has-text("command=${argv0}")`) });
 	await expect(row).toBeVisible();
 	await expect(row.locator('code.tool')).toHaveText('shell');
 

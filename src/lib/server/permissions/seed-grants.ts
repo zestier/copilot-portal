@@ -20,6 +20,7 @@
 import {
 	FS_PERMISSIONS,
 	type GrantScope,
+	type ShellCommandStep,
 	type ShellOptionSpec,
 	type ShellRule
 } from '$lib/permissions/scope-types';
@@ -144,6 +145,16 @@ function shellGrant(rule: ShellRule): SeedSpec {
 	return { tool: 'shell', permissionKind: 'shell', scope: { kind: 'shell', rule } };
 }
 
+function shellCommand(
+	token: string,
+	positionals: ShellRule['positionals'],
+	options?: ShellCommandStep['options']
+): ShellRule {
+	const step: ShellCommandStep = { token };
+	if (options) step.options = options;
+	return { command: [step], positionals };
+}
+
 function shellPrompt(rule: ShellRule, reason: string): SeedSpec {
 	return {
 		tool: 'shell',
@@ -213,11 +224,11 @@ export function defaultSeedGrants(): SeedSpec[] {
 	const seeds: SeedSpec[] = [];
 
 	for (const argv0 of PURE_UTILS) {
-		seeds.push(shellGrant({ argv0, positionals: { kind: 'any' } }));
+		seeds.push(shellGrant(shellCommand(argv0, { kind: 'any' })));
 	}
 	for (const argv0 of FS_READ_TOOLS) {
-		seeds.push(shellGrant({ argv0, positionals: { kind: 'workspace-paths' } }));
-		seeds.push(shellGrant({ argv0, positionals: { kind: 'session-workspace-paths' } }));
+		seeds.push(shellGrant(shellCommand(argv0, { kind: 'workspace-paths' })));
+		seeds.push(shellGrant(shellCommand(argv0, { kind: 'session-workspace-paths' })));
 	}
 	for (const tool of GIT_STRUCTURED_TOOLS) {
 		seeds.push({ tool, permissionKind: 'custom-tool', scope: { kind: 'any' } });
@@ -242,7 +253,7 @@ export function defaultSeedGrants(): SeedSpec[] {
 
 	seeds.push(
 		shellPrompt(
-			{ argv0: 'git' },
+			{ command: [{ token: 'git' }] },
 			'Shell `git` requires a prompt. Use `permission_capabilities` to find allowed alternatives, then use an available structured Git tool instead.'
 		)
 	);
@@ -253,9 +264,10 @@ export function defaultSeedGrants(): SeedSpec[] {
 		seeds.push(
 			shellDeny(
 				{
-					argv0: 'git',
-					subcommands: [subcommand],
-					preSubcommandOptions: { allow: SAFE_GIT_GLOBAL_OPTIONS },
+					command: [
+						{ token: 'git', options: { allow: SAFE_GIT_GLOBAL_OPTIONS } },
+						{ token: subcommand }
+					],
 					positionals: { kind: 'any' }
 				},
 				gitStructuredSubcommandFeedback(subcommand, tools)
@@ -268,28 +280,33 @@ export function defaultSeedGrants(): SeedSpec[] {
 	// commonly search for patterns whose syntax overlaps with paths.
 	seeds.push(
 		shellGrant({
-			argv0: 'rg',
-			options: { deny: ['--pre', '--pre-glob', '--hostname-bin', '--no-config'] }
+			command: [
+				{ token: 'rg', options: { deny: ['--pre', '--pre-glob', '--hostname-bin', '--no-config'] } }
+			]
 		})
 	);
 	seeds.push(
 		shellGrant({
-			argv0: 'grep',
+			command: [{ token: 'grep' }],
 			positionals: { kind: 'any' }
 		})
 	);
 	seeds.push(
 		shellGrant({
-			argv0: 'find',
-			options: {
-				deny: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprintf']
-			}
+			command: [
+				{
+					token: 'find',
+					options: {
+						deny: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprintf']
+					}
+				}
+			]
 		})
 	);
 
 	// Prompt only when no allow seed also covers the command.
 	for (const { argv0, reason } of PROMPT_SEEDS) {
-		seeds.push(shellPrompt({ argv0, pipeline: 'forbid' }, reason));
+		seeds.push(shellPrompt({ command: [{ token: argv0 }], pipeline: 'forbid' }, reason));
 	}
 
 	return seeds;

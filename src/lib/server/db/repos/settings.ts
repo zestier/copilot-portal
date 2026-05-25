@@ -123,11 +123,14 @@ interface GrantDbRow {
 }
 
 function dbRowToGrant(r: GrantDbRow): GrantRow {
+	const scope = decodeScope(r.scope_json);
 	return {
 		tool: r.tool,
 		permissionKind: r.permission_kind,
-		scopePattern: r.scope_pattern,
-		scope: decodeScope(r.scope_json),
+		// A non-null structured scope that fails to decode must fail closed;
+		// only true legacy rows with scope_json=NULL may fall back to scope_pattern.
+		scopePattern: r.scope_json === null ? r.scope_pattern : scope ? r.scope_pattern : '\0',
+		scope,
 		decision: normalizeGrantDecision(r.decision),
 		expiresAt: r.expires_at,
 		denyReason: r.deny_reason,
