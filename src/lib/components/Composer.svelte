@@ -27,6 +27,12 @@
 		el.style.height = Math.min(el.scrollHeight, max) + 'px';
 	}
 
+	function reportAutoGrowError(error: unknown) {
+		queueMicrotask(() => {
+			throw error;
+		});
+	}
+
 	$effect(() => {
 		// Re-run autoGrow whenever the composer text changes. `tick()` waits
 		// for the DOM (including `bind:this`) to settle so the very first
@@ -35,7 +41,7 @@
 		// rendering, which differs across browsers and occasionally paints
 		// unusually tall.
 		void value;
-		tick().then(autoGrow);
+		void tick().then(autoGrow).catch(reportAutoGrowError);
 	});
 
 	function onKeydown(e: KeyboardEvent) {
