@@ -190,7 +190,7 @@ describe('seed grants — runtime behaviour', () => {
 		expect(shellMatch('git commit -m x')).toBe('deny');
 		expect(shellMatchDetailed('git --no-pager status').feedback).toContain('git_status');
 		expect(shellMatchDetailed('git diff HEAD').feedback).toContain('git_diff');
-		expect(shellMatchDetailed('git log -n 5').feedback).toContain('git_log');
+		expect(shellMatchDetailed('git log -n 5').feedback).toContain('git_log tool');
 		expect(shellMatchDetailed('git show HEAD').feedback).toContain('git_show_commit');
 		expect(shellMatchDetailed('git commit -m x').feedback).toContain('git_commit');
 	});
@@ -213,6 +213,9 @@ describe('seed grants — runtime behaviour', () => {
 		expect(shellMatch('git --config-env core.sshCommand=GIT_SSH_COMMAND status')).toBe('deny');
 		expect(shellMatchDetailed('git -C /etc status').feedback).toContain(
 			'change repository, worktree, config, namespace, or execution context'
+		);
+		expect(shellMatchDetailed('git -C /etc status').feedback).toContain(
+			'git_status/git_diff/git_log/git_show_commit/git_show_file/git_commit tools'
 		);
 	});
 

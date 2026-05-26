@@ -187,11 +187,12 @@ function shellPatternDeny(pattern: string, reason: string): SeedSpec {
 }
 
 function riskyGitGlobalOptionFeedback(option: string): string {
-	return `Shell \`git ${option}\` is denied because it can change repository, worktree, config, namespace, or execution context. Use git_status/git_diff/git_log/git_show_commit/git_show_file/git_commit where applicable.`;
+	return `Shell \`git ${option}\` is denied because it can change repository, worktree, config, namespace, or execution context. Use git_status/git_diff/git_log/git_show_commit/git_show_file/git_commit tools where applicable.`;
 }
 
 function gitStructuredSubcommandFeedback(subcommand: string, tools: string): string {
-	return `Shell \`git ${subcommand}\` is denied. Use ${tools}.`;
+	const toolNoun = tools.includes(' or ') ? 'tools' : 'tool';
+	return `Shell \`git ${subcommand}\` is denied. Use ${tools} ${toolNoun}.`;
 }
 
 /**
