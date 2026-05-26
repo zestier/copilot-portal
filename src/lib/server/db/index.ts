@@ -5,27 +5,23 @@ import { mkdirSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config';
+import {
+	appGlobalSymbols,
+	clearGlobalSingletonValues,
+	getGlobalSingletonValue,
+	setGlobalSingletonValue
+} from '../global-singleton';
 import { log } from '../log';
 
 // Pin the singleton on globalThis so that Vite HMR re-importing this module
 // in dev doesn't create a parallel connection (and lose any in-memory state
 // like prepared-statement caches).
-const DB_KEY = Symbol.for('zap.db');
-const COMMAND_DECK_DB_KEY = Symbol.for('command-deck.db');
-const AGENT_PORTAL_DB_KEY = Symbol.for('agent-portal.db');
-const LEGACY_DB_KEY = Symbol.for('copilot-portal.db');
-type GlobalSlot = Record<symbol, unknown>;
+const DB_KEYS = appGlobalSymbols('db');
 function getCached(): Database.Database | null {
-	return (
-		((globalThis as unknown as GlobalSlot)[DB_KEY] as Database.Database | undefined) ??
-		((globalThis as unknown as GlobalSlot)[COMMAND_DECK_DB_KEY] as Database.Database | undefined) ??
-		((globalThis as unknown as GlobalSlot)[AGENT_PORTAL_DB_KEY] as Database.Database | undefined) ??
-		((globalThis as unknown as GlobalSlot)[LEGACY_DB_KEY] as Database.Database | undefined) ??
-		null
-	);
+	return getGlobalSingletonValue<Database.Database>(DB_KEYS);
 }
 function setCached(db: Database.Database) {
-	(globalThis as unknown as GlobalSlot)[DB_KEY] = db;
+	setGlobalSingletonValue(DB_KEYS, db);
 }
 
 export function getDb(): Database.Database {
@@ -105,6 +101,6 @@ export function closeDb() {
 	const cached = getCached();
 	if (cached) {
 		cached.close();
-		(globalThis as unknown as GlobalSlot)[DB_KEY] = null;
+		clearGlobalSingletonValues(DB_KEYS);
 	}
 }
