@@ -20,6 +20,10 @@
 		findToolCallRecord,
 		shouldRefreshTicketsAfterToolResult
 	} from '$lib/client/ticket-tool-refresh';
+	import {
+		CHAT_STREAM_STALL_TIMEOUT_MS,
+		streamRefreshAction
+	} from '$lib/client/chat-stream-recovery';
 
 	let {
 		conversation,
@@ -84,10 +88,23 @@
 			/* non-fatal */
 		}
 	}
+
+	function clearCompactionTimer() {
+		if (compactionTimer) {
+			clearTimeout(compactionTimer);
+			compactionTimer = null;
+		}
+	}
+
+	function invalidateRefreshMessages() {
+		refreshMessagesRun++;
+	}
+
 	$effect(() => {
 		// Reset local message list when the conversation prop changes.
 		void conversation.id;
 		untrack(() => {
+			invalidateRefreshMessages();
 			// Tear down any stream attached to the previous conversation
 			// before we swap state — otherwise its events would land in
 			// the new conversation's `messages` array.
@@ -103,10 +120,7 @@
 			hasNewBelow = false;
 			forksByMessage = {};
 			pendingInteractive = [...initialPendingInteractive];
-			if (compactionTimer) {
-				clearTimeout(compactionTimer);
-				compactionTimer = null;
-			}
+			clearCompactionTimer();
 			// Reattach the EventSource to any in-progress turn so a
 			// refresh-mid-stream resumes seamlessly.
 			if (initialActiveTurnId) {
@@ -114,6 +128,10 @@
 			}
 			void refreshForks();
 		});
+		return () => {
+			closeStream();
+			clearCompactionTimer();
+		};
 	});
 
 	let composer = $state(untrack(() => initialComposer));
@@ -132,6 +150,8 @@
 	// Id of the turn we're currently streaming. Tracked separately because
 	// EventSource owns its own URL; we need the id for DELETE on cancel.
 	let activeTurnId: string | null = null;
+	let streamStallTimer: ReturnType<typeof setTimeout> | null = null;
+	let refreshMessagesRun = 0;
 	let scrollEl: HTMLDivElement | undefined;
 	// Sticky-scroll: only auto-scroll if the user is pinned to the bottom.
 	// Otherwise, surface a "New messages" pill (Slack-style) so we don't
@@ -179,7 +199,13 @@
 	//     radio, proxy idle close).
 	//   - Sends `Last-Event-ID` on reconnect so the server replays only
 	//     events we haven't seen yet.
-	// We only need to handle two terminal cases ourselves:
+	// EventSource hides heartbeat comments from JS, so a live-but-stalled
+	// proxy can leave us waiting forever if a terminal data event is lost.
+	// We therefore also run an idle recovery timer keyed to visible stream
+	// activity. Recovery only refetches persisted state; it does not cancel
+	// a server-side turn that is still running.
+	//
+	// We only need to handle two terminal cases directly:
 	//   1. `done` portal event → turn finished cleanly. Close the stream.
 	//   2. Network error with `readyState === CLOSED` → server refused
 	//      reconnect (typically 410 Gone: turn no longer in registry).
@@ -192,6 +218,9 @@
 		const es = new EventSource(`/api/conversations/${conversation.id}/turns/${turnId}/stream`);
 		eventSource = es;
 
+		es.onopen = () => {
+			scheduleStreamStallTimeout();
+		};
 		es.onmessage = (msg) => {
 			let ev: PortalEvent;
 			try {
@@ -202,6 +231,8 @@
 			applyEvent(ev);
 			if (ev.type === 'done') {
 				closeStream();
+			} else {
+				scheduleStreamStallTimeout();
 			}
 		};
 		es.onerror = () => {
@@ -214,11 +245,15 @@
 			if (es.readyState === EventSource.CLOSED) {
 				closeStream();
 				void refreshMessages();
+			} else {
+				scheduleStreamStallTimeout();
 			}
 		};
+		scheduleStreamStallTimeout();
 	}
 
 	function closeStream() {
+		clearStreamStallTimeout();
 		if (eventSource) {
 			eventSource.close();
 			eventSource = null;
@@ -227,11 +262,37 @@
 		streaming = false;
 	}
 
+	function clearStreamStallTimeout() {
+		if (streamStallTimer) {
+			clearTimeout(streamStallTimer);
+			streamStallTimer = null;
+		}
+	}
+
+	function scheduleStreamStallTimeout() {
+		clearStreamStallTimeout();
+		if (!eventSource || !activeTurnId || pendingInteractive.length > 0) return;
+		const turnId = activeTurnId;
+		streamStallTimer = setTimeout(() => {
+			void recoverStalledStream(turnId);
+		}, CHAT_STREAM_STALL_TIMEOUT_MS);
+	}
+
+	async function recoverStalledStream(turnId: string) {
+		if (turnId !== activeTurnId || pendingInteractive.length > 0) {
+			return;
+		}
+		await refreshMessages();
+		if (turnId !== activeTurnId) return;
+		scheduleStreamStallTimeout();
+	}
+
 	// Pull the latest persisted messages for this conversation and replace
 	// local state. Used as a recovery path when the EventSource closes
 	// without a `done` (e.g. 410 Gone after grace expiry) so the UI
 	// doesn't strand mid-stream content forever.
 	async function refreshMessages() {
+		const run = ++refreshMessagesRun;
 		try {
 			const r = await fetch(`/api/conversations/${conversation.id}`);
 			if (!r.ok) return;
@@ -240,6 +301,7 @@
 				activeTurnId: string | null;
 				pendingInteractive?: InteractiveRequestView[];
 			};
+			if (run !== refreshMessagesRun) return;
 			messages = data.messages;
 			// Rehydrate outstanding prompts from the authoritative server
 			// list. Previously we cleared this unconditionally, which meant
@@ -249,10 +311,21 @@
 			// timeout fired. Now we just snap to whatever the server says.
 			pendingInteractive = data.pendingInteractive ?? [];
 			await scrollToBottom();
-			// If a new turn became active between events (unlikely but
-			// possible from another tab), attach to it.
-			if (data.activeTurnId && !eventSource) {
+			if (run !== refreshMessagesRun) return;
+			const action = streamRefreshAction({
+				currentTurnId: activeTurnId,
+				refreshedActiveTurnId: data.activeTurnId,
+				hasEventSource: eventSource !== null
+			});
+			if (action === 'finish') {
+				closeStream();
+			} else if (action === 'reattach' && data.activeTurnId) {
+				// If a new turn became active between events (unlikely but
+				// possible from another tab), attach to it. This also repairs
+				// a locally closed stream when the server still has work.
 				attachStream(data.activeTurnId);
+			} else {
+				scheduleStreamStallTimeout();
 			}
 		} catch {
 			/* non-fatal */
@@ -522,15 +595,27 @@
 	}
 
 	async function respondInteractive(requestId: string, response: InteractiveResponse) {
-		if (!pendingInteractive.some((p) => p.requestId === requestId)) return;
+		const request = pendingInteractive.find((p) => p.requestId === requestId);
+		if (!request) return;
 		// Optimistically drop the prompt; the server will also emit an
 		// `interactive.resolved` which is a no-op once removed.
 		pendingInteractive = removeInteractive(pendingInteractive, requestId);
-		await fetch(`/api/conversations/${conversation.id}/interactive/${requestId}`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(response)
-		});
+		clearStreamStallTimeout();
+		try {
+			const r = await fetch(`/api/conversations/${conversation.id}/interactive/${requestId}`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(response)
+			});
+			if (r.ok) {
+				scheduleStreamStallTimeout();
+				return;
+			}
+		} catch {
+			/* restore below */
+		}
+		pendingInteractive = addInteractive(pendingInteractive, request);
+		scheduleStreamStallTimeout();
 	}
 
 	async function send() {
@@ -591,6 +676,7 @@
 		// Tell the server to actually cancel the turn (just closing the
 		// EventSource would only detach this client; the turn would keep
 		// running). Then close the stream locally.
+		clearStreamStallTimeout();
 		const turnId = activeTurnId;
 		if (turnId) {
 			try {
