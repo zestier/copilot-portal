@@ -79,6 +79,43 @@
 		}
 	}
 
+	function isRecord(v: unknown): v is Record<string, unknown> {
+		return v !== null && typeof v === 'object' && !Array.isArray(v);
+	}
+
+	const gitCommitArgs = $derived(
+		request.kind === 'permission' && request.tool === 'git_commit' && isRecord(request.args)
+			? request.args
+			: null
+	);
+
+	function gitCommitSubject(args: Record<string, unknown>): string {
+		return typeof args.subject === 'string' && args.subject.length > 0 ? args.subject : '(missing)';
+	}
+
+	function gitCommitPaths(args: Record<string, unknown>): string[] | null {
+		return Array.isArray(args.paths) ? args.paths.map(String) : null;
+	}
+
+	function gitCommitBodyLineCount(args: Record<string, unknown>): number {
+		return typeof args.body === 'string' && args.body.length > 0
+			? args.body.split(/\r\n|\r|\n/).length
+			: 0;
+	}
+
+	function gitCommitTrailers(
+		args: Record<string, unknown>
+	): Array<{ token: string; value: string }> {
+		if (!Array.isArray(args.trailers)) return [];
+		return args.trailers
+			.filter(isRecord)
+			.map((trailer) => ({
+				token: String(trailer.token ?? ''),
+				value: String(trailer.value ?? '')
+			}))
+			.filter((trailer) => trailer.token.length > 0 && trailer.value.length > 0);
+	}
+
 	// --- permission scope picker state ---
 	//
 	// The scope choices the user picks from depend on the permission kind:
@@ -568,9 +605,81 @@
 				</div>
 			{/if}
 
+			{#if gitCommitArgs}
+				<div class="git-commit-preview" role="note">
+					<div class="muted small">Commit preview</div>
+					<dl>
+						<div>
+							<dt>Subject</dt>
+							<dd>{gitCommitSubject(gitCommitArgs)}</dd>
+						</div>
+						<div>
+							<dt>Target</dt>
+							<dd>
+								{#if gitCommitArgs.paths === 'all'}
+									All tracked, staged, unstaged, deleted, and untracked workspace changes
+								{:else if gitCommitPaths(gitCommitArgs)}
+									{gitCommitPaths(gitCommitArgs)?.length}
+									{gitCommitPaths(gitCommitArgs)?.length === 1 ? 'selected path' : 'selected paths'}
+								{:else}
+									Selected paths
+								{/if}
+							</dd>
+						</div>
+						{#if gitCommitBodyLineCount(gitCommitArgs) > 0}
+							<div>
+								<dt>Body</dt>
+								<dd>
+									{gitCommitBodyLineCount(gitCommitArgs)}
+									{gitCommitBodyLineCount(gitCommitArgs) === 1 ? 'line' : 'lines'}
+								</dd>
+							</div>
+						{/if}
+						{#if gitCommitTrailers(gitCommitArgs).length > 0}
+							<div>
+								<dt>Trailers</dt>
+								<dd>{gitCommitTrailers(gitCommitArgs).length}</dd>
+							</div>
+						{/if}
+						<div>
+							<dt>Approval</dt>
+							<dd>One-time only; stored grants are disabled for this tool.</dd>
+						</div>
+					</dl>
+					{#if gitCommitPaths(gitCommitArgs)}
+						<ul class="commit-paths">
+							{#each gitCommitPaths(gitCommitArgs) ?? [] as path}
+								<li><code>{path}</code></li>
+							{/each}
+						</ul>
+					{/if}
+					{#if typeof gitCommitArgs.body === 'string' && gitCommitArgs.body.length > 0}
+						<div class="commit-message-block">
+							<div class="muted small">Body</div>
+							<pre>{gitCommitArgs.body}</pre>
+						</div>
+					{/if}
+					{#if gitCommitTrailers(gitCommitArgs).length > 0}
+						<table class="trailers">
+							<thead>
+								<tr><th>Trailer</th><th>Value</th></tr>
+							</thead>
+							<tbody>
+								{#each gitCommitTrailers(gitCommitArgs) as trailer}
+									<tr>
+										<td><code>{trailer.token}</code></td>
+										<td>{trailer.value}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					{/if}
+				</div>
+			{/if}
+
 			{#if formatArgs(request.args)}
 				<details class="args">
-					<summary>Arguments</summary>
+					<summary>{gitCommitArgs ? 'Raw arguments' : 'Arguments'}</summary>
 					<pre>{formatArgs(request.args)}</pre>
 				</details>
 			{/if}
@@ -1083,6 +1192,68 @@
 	.shell-unsafe strong {
 		display: block;
 		margin-bottom: 0.2rem;
+	}
+	.git-commit-preview {
+		margin-top: 0.5rem;
+		padding: 0.5rem 0.6rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--surface);
+		font-size: 0.85em;
+	}
+	.git-commit-preview dl {
+		display: grid;
+		grid-template-columns: max-content minmax(0, 1fr);
+		gap: 0.25rem 0.7rem;
+		margin: 0.35rem 0 0;
+	}
+	.git-commit-preview dl > div {
+		display: contents;
+	}
+	.git-commit-preview dt {
+		color: var(--text-muted);
+		font-weight: 600;
+	}
+	.git-commit-preview dd {
+		margin: 0;
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+	.commit-paths {
+		margin: 0.5rem 0 0;
+		padding-left: 1.2rem;
+		max-height: 10rem;
+		overflow: auto;
+	}
+	.commit-paths li {
+		margin: 0.1rem 0;
+	}
+	.commit-message-block {
+		margin-top: 0.5rem;
+	}
+	.commit-message-block pre {
+		margin-top: 0.25rem;
+		max-height: 10rem;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.trailers {
+		width: 100%;
+		margin-top: 0.5rem;
+		border-collapse: collapse;
+	}
+	.trailers th,
+	.trailers td {
+		padding: 0.2rem 0.3rem;
+		border-top: 1px solid var(--border);
+		text-align: left;
+		vertical-align: top;
+	}
+	.trailers th {
+		color: var(--text-muted);
+		font-size: var(--fs-xs);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
 	.expiry {
 		display: flex;

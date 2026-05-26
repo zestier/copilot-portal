@@ -6,7 +6,12 @@
 // `--` separator so they can't be interpreted as flags.
 
 import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { safeResolve } from './files';
+import { log as logger } from './log';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024; // 8 MiB
@@ -44,7 +49,7 @@ function runGit(args: string[], opts: RunOptions): Promise<GitRunResult> {
 			shell: false,
 			env: {
 				...process.env,
-				// Disable interactive prompts / pagers / hooks.
+				// Disable interactive prompts and pagers. Git hooks still run for commits.
 				GIT_TERMINAL_PROMPT: '0',
 				GIT_PAGER: 'cat',
 				PAGER: 'cat',
@@ -118,6 +123,11 @@ export interface RepoInitState {
 export async function isGitRepo(cwd: string): Promise<boolean> {
 	const r = await runGit(['rev-parse', '--is-inside-work-tree'], { cwd });
 	return r.code === 0 && r.stdout.trim() === 'true';
+}
+
+export async function repositoryRoot(cwd: string): Promise<string> {
+	if (!(await isGitRepo(cwd))) throw new GitError('not a git repository', emptyResult());
+	return (await runGitOk(['rev-parse', '--show-toplevel'], { cwd })).trim();
 }
 
 export interface HeadInfo {
@@ -500,6 +510,176 @@ export async function showFile(cwd: string, ref: string, relPath: string): Promi
 	return await runGitOk(['show', `${ref}:${r.rel}`], { cwd });
 }
 
+export interface CommitTrailer {
+	token: string;
+	value: string;
+}
+
+export interface CommitChangesOptions {
+	paths: 'all' | string[];
+	subject: string;
+	body?: string;
+	trailers?: CommitTrailer[];
+}
+
+export interface CommitChangesResult {
+	sha: string;
+	shortSha: string;
+	subject: string;
+	body: string;
+	trailers: CommitTrailer[];
+	files: NameStatusEntry[];
+	fileStats: NumstatEntry[];
+	diffStat: DiffStat['total'];
+	remainingDirtyFiles: Array<StatusEntry & { status: ReturnType<typeof aggregateStatus> }>;
+}
+
+const TRAILER_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
+
+export function formatCommitMessage(opts: {
+	subject: string;
+	body?: string;
+	trailers?: CommitTrailer[];
+}): string {
+	if (!opts.subject.trim()) throw new GitError('commit subject is required', emptyResult());
+	if (hasControlCharacter(opts.subject)) {
+		throw new GitError(
+			'commit subject must be a single line without control characters',
+			emptyResult()
+		);
+	}
+	const lines = [opts.subject];
+	const body = opts.body;
+	if (body !== undefined && body.length > 0) {
+		if (body.includes('\0'))
+			throw new GitError('commit body must not contain NUL bytes', emptyResult());
+		lines.push('', body.trimEnd());
+	}
+	if (opts.trailers?.length) {
+		lines.push('');
+		for (const trailer of opts.trailers) {
+			if (
+				!TRAILER_TOKEN_RE.test(trailer.token) ||
+				trailer.token.includes('\n') ||
+				trailer.token.includes('\r') ||
+				hasControlCharacter(trailer.token)
+			) {
+				throw new GitError(`invalid trailer token: ${trailer.token}`, emptyResult());
+			}
+			if (
+				trailer.value.includes('\n') ||
+				trailer.value.includes('\r') ||
+				hasControlCharacter(trailer.value)
+			) {
+				throw new GitError(`invalid trailer value for ${trailer.token}`, emptyResult());
+			}
+			lines.push(`${trailer.token}: ${trailer.value}`);
+		}
+	}
+	return lines.join('\n') + '\n';
+}
+
+export async function commitChanges(
+	cwd: string,
+	opts: CommitChangesOptions
+): Promise<CommitChangesResult> {
+	const repoRoot = await repositoryRoot(cwd);
+	const commitMessage = formatCommitMessage(opts);
+	const entries = await status(repoRoot);
+	const conflicts = entries.filter((e) => e.index === 'conflicted' || e.worktree === 'conflicted');
+	if (conflicts.length > 0) {
+		throw new GitError(
+			`cannot commit while conflicted files are present: ${conflicts.map((e) => e.path).join(', ')}`,
+			emptyResult()
+		);
+	}
+
+	const selectedPaths = opts.paths === 'all' ? null : validateCommitPaths(repoRoot, opts.paths);
+	const selectedEntries =
+		selectedPaths === null
+			? entries
+			: entries.filter((entry) => statusEntryMatches(entry, selectedPaths));
+	if (selectedEntries.length === 0) {
+		throw new GitError('no selected changes to commit', emptyResult());
+	}
+
+	if (selectedPaths !== null) {
+		const unrelatedStaged = entries.filter(
+			(entry) => hasIndexChange(entry) && !statusEntryMatches(entry, selectedPaths)
+		);
+		if (unrelatedStaged.length > 0) {
+			throw new GitError(
+				`cannot commit selected paths while unrelated changes are staged: ${unrelatedStaged.map((e) => e.path).join(', ')}`,
+				emptyResult()
+			);
+		}
+	}
+
+	const snapshot = await snapshotIndex(repoRoot);
+	let messageDir: string | null = null;
+
+	try {
+		messageDir = await mkdtemp(join(tmpdir(), 'portal-git-commit-'));
+		const messagePath = join(messageDir, 'message.txt');
+		writeFileSync(messagePath, commitMessage, 'utf8');
+		if (selectedPaths === null) {
+			await runGitOk(['add', '-A', '--', '.'], { cwd: repoRoot });
+		} else {
+			await runGitOk(['--literal-pathspecs', 'add', '-A', '--', ...selectedPaths], {
+				cwd: repoRoot
+			});
+		}
+		const stagedFiles = await nameStatus(repoRoot, { kind: 'index-vs-head' });
+		if (stagedFiles.length === 0) {
+			throw new GitError('no selected changes to commit', emptyResult());
+		}
+		await runGitOk(['commit', '-F', messagePath], { cwd: repoRoot, timeoutMs: 60_000 });
+	} catch (err) {
+		try {
+			restoreIndex(snapshot);
+		} catch (restoreErr) {
+			logger.warn('git.commit.index_restore_failed', {
+				err: String(restoreErr),
+				originalErr: String(err)
+			});
+		}
+		throw err;
+	} finally {
+		if (messageDir) rmSync(messageDir, { recursive: true, force: true });
+	}
+
+	const sha = (await runGitOk(['rev-parse', 'HEAD'], { cwd: repoRoot })).trim();
+	const [files, fileStats, remaining] = await Promise.all([
+		nameStatus(repoRoot, { kind: 'commit', sha }),
+		numstat(repoRoot, { kind: 'commit', sha }),
+		status(repoRoot)
+	]);
+	const diffStatTotal = fileStats.reduce(
+		(acc, file) => {
+			acc.filesChanged += 1;
+			acc.added += file.added ?? 0;
+			acc.removed += file.removed ?? 0;
+			return acc;
+		},
+		{ filesChanged: 0, added: 0, removed: 0 }
+	);
+
+	return {
+		sha,
+		shortSha: sha.slice(0, 8),
+		subject: opts.subject,
+		body: opts.body?.trimEnd() ?? '',
+		trailers: opts.trailers ?? [],
+		files,
+		fileStats,
+		diffStat: diffStatTotal,
+		remainingDirtyFiles: remaining.map((entry) => ({
+			...entry,
+			status: aggregateStatus(entry)
+		}))
+	};
+}
+
 export interface NumstatEntry {
 	/** Current path. For renames, the new path. */
 	path: string;
@@ -628,4 +808,72 @@ export async function nameStatus(
 
 function emptyResult(): GitRunResult {
 	return { stdout: '', stderr: '', code: -1, timedOut: false, truncated: false };
+}
+
+function validateCommitPaths(repoRoot: string, paths: string[]): string[] {
+	if (paths.length === 0)
+		throw new GitError('paths must be "all" or a non-empty array', emptyResult());
+	const validated: string[] = [];
+	const seen = new Set<string>();
+	for (const path of paths) {
+		if (path.length === 0) throw new GitError('commit paths must not be empty', emptyResult());
+		if (hasControlCharacter(path)) {
+			throw new GitError(
+				`invalid path: control characters are not allowed: ${path}`,
+				emptyResult()
+			);
+		}
+		const r = safeResolve(repoRoot, path);
+		if (!r.ok) throw new GitError(`invalid path: ${r.reason}`, emptyResult());
+		if (!r.rel)
+			throw new GitError('use paths: "all" to commit the entire repository', emptyResult());
+		if (!seen.has(r.rel)) {
+			seen.add(r.rel);
+			validated.push(r.rel);
+		}
+	}
+	return validated;
+}
+
+function statusEntryMatches(entry: StatusEntry, selectedPaths: string[]): boolean {
+	return selectedPaths.some((path) => entry.path === path || entry.origPath === path);
+}
+
+function hasIndexChange(entry: StatusEntry): boolean {
+	return entry.index !== 'unmodified' && entry.index !== 'untracked' && entry.index !== 'ignored';
+}
+
+interface IndexSnapshot {
+	path: string;
+	existed: boolean;
+	data: Buffer | null;
+}
+
+async function snapshotIndex(repoRoot: string): Promise<IndexSnapshot> {
+	const gitIndexPath = (
+		await runGitOk(['rev-parse', '--git-path', 'index'], { cwd: repoRoot })
+	).trim();
+	const indexPath = isAbsolute(gitIndexPath) ? gitIndexPath : resolve(repoRoot, gitIndexPath);
+	return {
+		path: indexPath,
+		existed: existsSync(indexPath),
+		data: existsSync(indexPath) ? readFileSync(indexPath) : null
+	};
+}
+
+function restoreIndex(snapshot: IndexSnapshot): void {
+	if (snapshot.existed && snapshot.data) {
+		mkdirSync(dirname(snapshot.path), { recursive: true });
+		writeFileSync(snapshot.path, snapshot.data);
+		return;
+	}
+	rmSync(snapshot.path, { force: true });
+}
+
+function hasControlCharacter(value: string): boolean {
+	for (const char of value) {
+		const code = char.charCodeAt(0);
+		if (code <= 0x1f || code === 0x7f) return true;
+	}
+	return false;
 }

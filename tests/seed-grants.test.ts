@@ -187,15 +187,16 @@ describe('seed grants — runtime behaviour', () => {
 		expect(shellMatch('git log -n 5')).toBe('deny');
 		expect(shellMatch('git diff HEAD')).toBe('deny');
 		expect(shellMatch('git show HEAD')).toBe('deny');
+		expect(shellMatch('git commit -m x')).toBe('deny');
 		expect(shellMatchDetailed('git --no-pager status').feedback).toContain('git_status');
 		expect(shellMatchDetailed('git diff HEAD').feedback).toContain('git_diff');
 		expect(shellMatchDetailed('git log -n 5').feedback).toContain('git_log');
 		expect(shellMatchDetailed('git show HEAD').feedback).toContain('git_show_commit');
+		expect(shellMatchDetailed('git commit -m x').feedback).toContain('git_commit');
 	});
 
 	it('requires prompts for mutating git subcommands instead of auto-approving them', () => {
 		expect(shellMatch('git push')).toBe('prompt');
-		expect(shellMatch('git commit -m x')).toBe('prompt');
 		expect(shellMatch('git config user.email test@example.com')).toBe('prompt');
 		expect(shellMatch('git stash push')).toBe('prompt');
 		expect(shellMatch('git branch -D feature')).toBe('prompt');

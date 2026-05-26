@@ -11,6 +11,18 @@
 	function count(n: number | null): string {
 		return n === null ? 'binary' : String(n);
 	}
+
+	function statFor(path: string) {
+		return result.kind === 'commit-created'
+			? result.fileStats.find((file) => file.path === path)
+			: undefined;
+	}
+
+	function extraStats() {
+		if (result.kind !== 'commit-created') return [];
+		const shown = new Set(result.files.map((file) => file.path));
+		return result.fileStats.filter((file) => !shown.has(file.path));
+	}
 </script>
 
 {#if result.kind === 'diff-stat'}
@@ -114,6 +126,96 @@
 			<DiffView diff={result.commit.patch} collapsible />
 		{/if}
 	</div>
+{:else if result.kind === 'commit-created'}
+	<div class="git-result">
+		<div class="commit-card">
+			<div><code title={result.sha}>{result.shortSha}</code> {result.subject}</div>
+			{#if result.diffStat}
+				<div class="summary">
+					<span>{result.diffStat.filesChanged} files</span>
+					<span class="added">+{result.diffStat.added}</span>
+					<span class="removed">-{result.diffStat.removed}</span>
+				</div>
+			{/if}
+		</div>
+		<div class="muted small">Created commit {result.sha}</div>
+		{#if result.body}
+			<div class="message-block">
+				<div class="muted small">Body</div>
+				<pre class="body">{result.body}</pre>
+			</div>
+		{/if}
+		{#if result.trailers.length > 0}
+			<table class="trailers">
+				<thead>
+					<tr><th>Trailer</th><th>Value</th></tr>
+				</thead>
+				<tbody>
+					{#each result.trailers as trailer}
+						<tr>
+							<td><code>{trailer.token}</code></td>
+							<td>{trailer.value}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		{/if}
+		<table>
+			<thead>
+				<tr><th>Status</th><th>File</th><th>Added</th><th>Removed</th></tr>
+			</thead>
+			<tbody>
+				{#each result.files as file}
+					{@const stat = statFor(file.path)}
+					<tr>
+						<td><span class="status">{file.statusCode}</span></td>
+						<td>
+							<code>{file.path}</code>
+							{#if file.origPath}<span class="muted"> from {file.origPath}</span>{/if}
+						</td>
+						<td class="num added">{stat ? count(stat.added) : '—'}</td>
+						<td class="num removed">{stat ? count(stat.removed) : '—'}</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+		{#if extraStats().length > 0}
+			<details class="remaining">
+				<summary class="muted">Additional diff stat entries: {extraStats().length}</summary>
+				<table>
+					<thead>
+						<tr><th>File</th><th>Added</th><th>Removed</th></tr>
+					</thead>
+					<tbody>
+						{#each extraStats() as file}
+							<tr>
+								<td>
+									<code>{file.path}</code>
+									{#if file.origPath}<span class="muted"> from {file.origPath}</span>{/if}
+								</td>
+								<td class="num added">{count(file.added)}</td>
+								<td class="num removed">{count(file.removed)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</details>
+		{/if}
+		{#if result.remainingDirtyFiles.length > 0}
+			<details class="remaining">
+				<summary class="muted">
+					Remaining dirty files: {result.remainingDirtyFiles.length}
+				</summary>
+				<ul class="paths">
+					{#each result.remainingDirtyFiles as file}
+						<li><span class="status">{file.statusCode}</span> <code>{file.path}</code></li>
+					{/each}
+				</ul>
+			</details>
+		{:else}
+			<div class="muted">No remaining dirty files.</div>
+		{/if}
+	</div>
 {/if}
 
 <style>
@@ -169,6 +271,35 @@
 	.paths {
 		margin: 0;
 		padding-left: 1.2rem;
+	}
+	.remaining summary {
+		cursor: pointer;
+	}
+	.small {
+		font-size: var(--fs-xs);
+	}
+	.message-block {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+	.trailers {
+		width: 100%;
+		border-collapse: collapse;
+	}
+	.trailers th,
+	.trailers td {
+		padding: 0.25rem 0.4rem;
+		border-bottom: 1px solid var(--border);
+		text-align: left;
+		vertical-align: top;
+	}
+	.trailers th {
+		color: var(--text-muted);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
 	.body {
 		width: 100%;

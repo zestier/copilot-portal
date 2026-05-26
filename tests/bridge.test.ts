@@ -795,16 +795,16 @@ describe('bridge.open() session mode and permissions', () => {
 			req: unknown
 		) => Promise<unknown>;
 		const reason =
-			'User explicitly requested a commit; structured Git tools cannot commit changes.';
+			'Structured Git tools do not expose reflog expiration, and this exact command is needed for cleanup.';
 
 		sdkSessionStub.send.mockReset().mockImplementation(async () => {
 			await Promise.resolve();
 			void onPermissionRequest({
 				kind: 'shell',
 				toolName: 'shell',
-				fullCommandText: 'git commit -m x',
+				fullCommandText: 'git reflog expire --expire=now --all',
 				forcePermissionPrompt: reason,
-				args: { command: 'git commit -m x' }
+				args: { command: 'git reflog expire --expire=now --all' }
 			});
 			return 'msg-id';
 		});
@@ -822,6 +822,54 @@ describe('bridge.open() session mode and permissions', () => {
 				escalationReason: reason
 			}
 		});
+		ac.abort();
+		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
+	});
+
+	it('shows useful git_commit details in the permission prompt', async () => {
+		const { open } = await importBridge();
+		const interactive = await import('../src/lib/server/runtime/interactive-requests');
+		const { ensureLocalUser } = await import('../src/lib/server/db/repos/users');
+		const user = ensureLocalUser();
+		const session = await open({ ...baseOpts, userId: user.id, mode: 'best-effort' });
+		const onPermissionRequest = clientStub.createSession.mock.calls[0][0].onPermissionRequest as (
+			req: unknown
+		) => Promise<unknown>;
+
+		sdkSessionStub.send.mockReset().mockImplementation(async () => {
+			await Promise.resolve();
+			void onPermissionRequest({
+				kind: 'custom-tool',
+				toolName: 'git_commit',
+				args: {
+					paths: ['src/a.ts', 'src/b.ts'],
+					subject: 'Add git commit tool',
+					body: 'Details\nMore details',
+					trailers: [{ token: 'Co-authored-by', value: 'Copilot <copilot@example.com>' }]
+				}
+			});
+			return 'msg-id';
+		});
+
+		const ac = new AbortController();
+		const iter = session.send('hi', ac.signal)[Symbol.asyncIterator]();
+		const first = await iter.next();
+		expect(first.value).toMatchObject({
+			type: 'interactive.request',
+			request: {
+				kind: 'permission',
+				tool: 'git_commit',
+				permissionKind: 'custom-tool',
+				canPersistDecision: false,
+				summary: expect.stringContaining('Subject: Add git commit tool')
+			}
+		});
+		const summary = (first.value as { request: { summary: string } }).request.summary;
+		expect(summary).toContain('Target: 2 selected paths');
+		expect(summary).toContain('- src/a.ts');
+		expect(summary).toContain('Body: 2 lines');
+		expect(summary).toContain('Trailers: 1 (Co-authored-by)');
+		expect(summary).toContain('one-time only');
 		ac.abort();
 		interactive.cancelConversation(baseOpts.conversationId, 'test_cleanup');
 	});
@@ -904,12 +952,12 @@ describe('bridge.open() session mode and permissions', () => {
 			status: 'streaming'
 		});
 		const reason =
-			'User explicitly requested committing these reviewed local changes; structured Git tools cannot commit.';
+			'Structured Git tools do not expose reflog expiration, and this exact command is needed for cleanup.';
 		messages.insertToolCall(assistant.id, {
 			id: 'git-commit-tool',
 			tool: 'shell',
 			argsJson: JSON.stringify({
-				command: 'git commit -m x',
+				command: 'git reflog expire --expire=now --all',
 				forcePermissionPrompt: reason
 			}),
 			resultJson: null,
@@ -930,8 +978,8 @@ describe('bridge.open() session mode and permissions', () => {
 				kind: 'shell',
 				toolName: 'shell',
 				toolCallId: 'git-commit-tool',
-				fullCommandText: 'git commit -m x',
-				args: { command: 'git commit -m x' }
+				fullCommandText: 'git reflog expire --expire=now --all',
+				args: { command: 'git reflog expire --expire=now --all' }
 			});
 			return 'msg-id';
 		});

@@ -108,6 +108,25 @@ export function summarizeToolCall(tool: string, argsJson: string): string | null
 			const sha = str(args.sha);
 			return args.includePatch === true && sha ? `${sha} · patch` : sha;
 		}
+		case 'git_commit': {
+			const subject = str(args.subject);
+			const paths = args.paths;
+			const trailers = Array.isArray(args.trailers) ? args.trailers.length : 0;
+			const hasBody = str(args.body) !== null;
+			const target =
+				paths === 'all'
+					? 'all changes'
+					: Array.isArray(paths)
+						? paths.length === 1
+							? String(paths[0])
+							: `${String(paths[0])} +${paths.length - 1} more`
+						: null;
+			const extras = [hasBody ? 'body' : null, trailers ? `${trailers} trailers` : null].filter(
+				Boolean
+			);
+			const main = [subject ? truncate(subject, 50) : null, target].filter(Boolean).join(' · ');
+			return [main || null, ...extras].filter(Boolean).join(' · ') || null;
+		}
 		case 'skill':
 			return str(args.skill);
 		case 'sql':

@@ -465,5 +465,44 @@ function bestEffortAlternativeHint(permissionKind: string): string {
 }
 
 function summarizePermissionRequest(req: PermissionRequestLike, tool: string): string {
+	if (
+		tool === 'git_commit' &&
+		req.args &&
+		typeof req.args === 'object' &&
+		!Array.isArray(req.args)
+	) {
+		const args = req.args as Record<string, unknown>;
+		const subject = typeof args.subject === 'string' && args.subject ? args.subject : 'commit';
+		const paths = args.paths;
+		const lines = ['Create Git commit', `Subject: ${subject}`];
+		if (paths === 'all') {
+			lines.push('Target: all current workspace changes');
+		} else if (Array.isArray(paths)) {
+			lines.push(`Target: ${paths.length} selected ${paths.length === 1 ? 'path' : 'paths'}`);
+			for (const path of paths.slice(0, 10)) lines.push(`- ${String(path)}`);
+			if (paths.length > 10) lines.push(`- ...and ${paths.length - 10} more`);
+		} else {
+			lines.push('Target: selected paths');
+		}
+		if (typeof args.body === 'string' && args.body.length > 0) {
+			const lineCount = args.body.split(/\r\n|\r|\n/).length;
+			lines.push(`Body: ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`);
+		}
+		const trailers = Array.isArray(args.trailers) ? args.trailers : [];
+		if (trailers.length > 0) {
+			const tokens = trailers
+				.map((trailer) =>
+					trailer && typeof trailer === 'object'
+						? String((trailer as Record<string, unknown>).token ?? '')
+						: ''
+				)
+				.filter(Boolean);
+			lines.push(
+				`Trailers: ${trailers.length}${tokens.length ? ` (${tokens.slice(0, 5).join(', ')}${tokens.length > 5 ? ', ...' : ''})` : ''}`
+			);
+		}
+		lines.push('Approval: one-time only; stored grants are disabled for git_commit.');
+		return lines.join('\n');
+	}
 	return req.fullCommandText ?? req.fileName ?? req.path ?? req.url ?? req.toolDescription ?? tool;
 }

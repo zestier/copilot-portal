@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
 	aggregateStatus,
+	commitChanges,
 	diff,
 	diffStat,
 	headInfo,
@@ -77,6 +78,42 @@ const GitShowFileArgs = z
 	.object({
 		ref: z.string().min(1).max(200),
 		path: z.string().min(1).max(4096)
+	})
+	.strict();
+
+const TrailerToken = z
+	.string()
+	.min(1)
+	.max(100)
+	.regex(/^[A-Za-z0-9][A-Za-z0-9-]*$/, 'invalid trailer token');
+
+const GitCommitArgs = z
+	.object({
+		paths: z.union([z.literal('all'), z.array(z.string().min(1).max(4096)).min(1)]),
+		subject: z
+			.string()
+			.min(1)
+			.max(200)
+			.refine((s) => !hasControlCharacter(s), {
+				message: 'subject must be a single line without control characters'
+			}),
+		body: z.string().max(100_000).optional(),
+		trailers: z
+			.array(
+				z
+					.object({
+						token: TrailerToken,
+						value: z
+							.string()
+							.max(1000)
+							.refine((s) => !hasControlCharacter(s), {
+								message: 'trailer value must be a single line without control characters'
+							})
+					})
+					.strict()
+			)
+			.max(50)
+			.optional()
 	})
 	.strict();
 
@@ -245,6 +282,58 @@ export function buildGitTools(cwd: string): PortalTool[] {
 				const { ref, path } = GitShowFileArgs.parse(args);
 				return await showFile(cwd, ref, path);
 			}
+		},
+		{
+			name: 'git_commit',
+			description:
+				'Structured replacement for `git add` plus `git commit`. Creates a normal commit from a deterministic structured message and either all current changes or explicitly named whole-file workspace paths.',
+			permissionBehavior: 'always-prompt',
+			parameters: {
+				type: 'object',
+				properties: {
+					paths: {
+						oneOf: [
+							{ type: 'string', enum: ['all'] },
+							{
+								type: 'array',
+								items: { type: 'string' },
+								minItems: 1,
+								description:
+									'Workspace-relative file paths to commit. Untracked files are included only when named explicitly.'
+							}
+						],
+						description:
+							'Use "all" to commit all current workspace changes, or a non-empty array of workspace-relative file paths.'
+					},
+					subject: {
+						type: 'string',
+						description: 'Required single-line commit subject.'
+					},
+					body: {
+						type: 'string',
+						description: 'Optional commit message body.'
+					},
+					trailers: {
+						type: 'array',
+						items: {
+							type: 'object',
+							properties: {
+								token: { type: 'string' },
+								value: { type: 'string' }
+							},
+							required: ['token', 'value'],
+							additionalProperties: false
+						},
+						description: 'Optional structured commit trailers.'
+					}
+				},
+				required: ['paths', 'subject'],
+				additionalProperties: false
+			},
+			async handler(args) {
+				const parsed = GitCommitArgs.parse(args);
+				return JSON.stringify(await commitChanges(cwd, parsed), null, 2);
+			}
 		}
 	];
 }
@@ -264,4 +353,12 @@ function toDiffTarget(kind: z.infer<typeof TargetKind>, sha: string | undefined)
 
 function requiresSha(kind: z.infer<typeof TargetKind>): boolean {
 	return kind === 'commit' || kind === 'commit-vs-parent';
+}
+
+function hasControlCharacter(value: string): boolean {
+	for (const char of value) {
+		const code = char.charCodeAt(0);
+		if (code <= 0x1f || code === 0x7f) return true;
+	}
+	return false;
 }

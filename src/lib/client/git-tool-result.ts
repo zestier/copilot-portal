@@ -36,6 +36,11 @@ export interface GitCommitDetail {
 	patch?: string;
 }
 
+export interface GitCommitTrailer {
+	token: string;
+	value: string;
+}
+
 export type GitRenderedResult =
 	| {
 			kind: 'diff-stat';
@@ -45,7 +50,19 @@ export type GitRenderedResult =
 	| { kind: 'diff-name-only'; files: string[] }
 	| { kind: 'diff-name-status'; files: GitNameStatusEntry[] }
 	| { kind: 'log'; commits: GitLogEntry[] }
-	| { kind: 'commit'; commit: GitCommitDetail };
+	| { kind: 'commit'; commit: GitCommitDetail }
+	| {
+			kind: 'commit-created';
+			sha: string;
+			shortSha: string;
+			subject: string;
+			body: string;
+			trailers: GitCommitTrailer[];
+			files: GitNameStatusEntry[];
+			fileStats: GitFileStat[];
+			diffStat: { filesChanged: number; added: number; removed: number } | null;
+			remainingDirtyFiles: GitNameStatusEntry[];
+	  };
 
 function isRecord(v: unknown): v is JsonRecord {
 	return v != null && typeof v === 'object' && !Array.isArray(v);
@@ -145,6 +162,14 @@ function commitDetail(v: JsonRecord): GitCommitDetail | null {
 	};
 }
 
+function commitTrailer(v: unknown): GitCommitTrailer | null {
+	if (!isRecord(v)) return null;
+	const token = str(v.token);
+	const value = str(v.value);
+	if (!token || value === null) return null;
+	return { token, value };
+}
+
 export function parseGitToolResult(
 	tool: string,
 	argsJson: string,
@@ -190,6 +215,40 @@ export function parseGitToolResult(
 	if (t === 'git_show_commit') {
 		const commit = commitDetail(result);
 		return commit ? { kind: 'commit', commit } : null;
+	}
+
+	if (t === 'git_commit') {
+		const sha = str(result.sha);
+		const shortSha = str(result.shortSha);
+		const subject = str(result.subject);
+		if (!sha || !shortSha || !subject) return null;
+		const diffStat = isRecord(result.diffStat)
+			? {
+					filesChanged: num(result.diffStat.filesChanged) ?? 0,
+					added: num(result.diffStat.added) ?? 0,
+					removed: num(result.diffStat.removed) ?? 0
+				}
+			: null;
+		return {
+			kind: 'commit-created',
+			sha,
+			shortSha,
+			subject,
+			body: str(result.body) ?? '',
+			trailers: Array.isArray(result.trailers)
+				? result.trailers.map(commitTrailer).filter((t) => t !== null)
+				: [],
+			files: Array.isArray(result.files)
+				? result.files.map(nameStatusEntry).filter((f) => f !== null)
+				: [],
+			fileStats: Array.isArray(result.fileStats)
+				? result.fileStats.map(fileStat).filter((f) => f !== null)
+				: [],
+			diffStat,
+			remainingDirtyFiles: Array.isArray(result.remainingDirtyFiles)
+				? result.remainingDirtyFiles.map(nameStatusEntry).filter((f) => f !== null)
+				: []
+		};
 	}
 
 	return null;

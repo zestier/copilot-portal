@@ -81,6 +81,20 @@ describe('summarizeToolCall', () => {
 		expect(
 			summarizeToolCall('git_show_commit', JSON.stringify({ sha: 'abc1234', includePatch: true }))
 		).toBe('abc1234 · patch');
+		expect(
+			summarizeToolCall('git_commit', JSON.stringify({ subject: 'Add feature', paths: 'all' }))
+		).toBe('Add feature · all changes');
+		expect(
+			summarizeToolCall(
+				'git_commit',
+				JSON.stringify({
+					subject: 'Add feature',
+					paths: ['src/a.ts', 'src/b.ts'],
+					body: 'Details',
+					trailers: [{ token: 'Co-authored-by', value: 'Copilot <copilot@example.com>' }]
+				})
+			)
+		).toBe('Add feature · src/a.ts +1 more · body · 1 trailers');
 	});
 });
 
@@ -136,6 +150,32 @@ describe('parseGitToolResult', () => {
 				})
 			)
 		).toMatchObject({ kind: 'commit', commit: { shortSha: 'abc123' } });
+	});
+
+	it('parses git_commit output', () => {
+		expect(
+			parseGitToolResult(
+				'git_commit',
+				'{}',
+				JSON.stringify({
+					sha: 'abcdef123456',
+					shortSha: 'abcdef12',
+					subject: 'created',
+					body: 'Body line',
+					trailers: [{ token: 'Reviewed-by', value: 'Tester <t@example.com>' }],
+					files: [{ statusCode: 'M', status: 'modified', path: 'src/a.ts', origPath: null }],
+					fileStats: [{ path: 'src/a.ts', origPath: null, added: 1, removed: 0 }],
+					diffStat: { filesChanged: 1, added: 1, removed: 0 },
+					remainingDirtyFiles: []
+				})
+			)
+		).toMatchObject({
+			kind: 'commit-created',
+			shortSha: 'abcdef12',
+			body: 'Body line',
+			trailers: [{ token: 'Reviewed-by', value: 'Tester <t@example.com>' }],
+			diffStat: { filesChanged: 1, added: 1, removed: 0 }
+		});
 	});
 });
 

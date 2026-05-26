@@ -18,7 +18,7 @@ export const PORTAL_PRELUDE = [
 	'Tool calls run through a permission gateway. On reject, the `feedback` string is',
 	'authoritative — read it and adapt. Prefer structured tools (view/edit/create/grep/glob)',
 	'over shell equivalents (cat/sed/rg/find) where available.',
-	'Use git_status/git_diff/git_log/git_show_commit/git_show_file instead of shell git.',
+	'Use git_status/git_diff/git_log/git_show_commit/git_show_file/git_commit instead of shell git.',
 	'Use ticket_add/ticket_list/ticket_update for durable workspace tickets and later-task stashes.',
 	'Use permission_capabilities to inspect allowed alternatives after permission rejections.',
 	'Use `forcePermissionPrompt` sparingly: only after verifying no allowed alternative',

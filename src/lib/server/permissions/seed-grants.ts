@@ -138,7 +138,8 @@ const GIT_STRUCTURED_SUBCOMMAND_DENIES: { subcommand: string; tools: string }[] 
 	{ subcommand: 'status', tools: 'git_status' },
 	{ subcommand: 'diff', tools: 'git_diff' },
 	{ subcommand: 'log', tools: 'git_log' },
-	{ subcommand: 'show', tools: 'git_show_commit or git_show_file' }
+	{ subcommand: 'show', tools: 'git_show_commit or git_show_file' },
+	{ subcommand: 'commit', tools: 'git_commit' }
 ];
 
 function shellGrant(rule: ShellRule): SeedSpec {
@@ -186,11 +187,11 @@ function shellPatternDeny(pattern: string, reason: string): SeedSpec {
 }
 
 function riskyGitGlobalOptionFeedback(option: string): string {
-	return `Shell \`git ${option}\` is denied because it can change repository, worktree, config, namespace, or execution context. Use git_status/git_diff/git_log/git_show_commit/git_show_file, or request a one-time escalation with a clear reason if no structured tool fits.`;
+	return `Shell \`git ${option}\` is denied because it can change repository, worktree, config, namespace, or execution context. Use git_status/git_diff/git_log/git_show_commit/git_show_file/git_commit where applicable.`;
 }
 
 function gitStructuredSubcommandFeedback(subcommand: string, tools: string): string {
-	return `Shell \`git ${subcommand}\` is denied. Use ${tools}, or request a one-time escalation with a clear reason if no structured tool fits.`;
+	return `Shell \`git ${subcommand}\` is denied. Use ${tools}.`;
 }
 
 /**
