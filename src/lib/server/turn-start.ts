@@ -8,11 +8,12 @@ import { providerAuthToken } from '$lib/server/providers/auth';
 import { snapshot as takeSnapshot } from '$lib/server/snapshots';
 import { effectiveWorkdir } from '$lib/server/workdir';
 import { log } from '$lib/server/log';
-import type { Conversation, Message } from '$lib/types';
+import type { Conversation, Message, PortalEvent } from '$lib/types';
 import type { ProviderConversationMessage } from '$lib/server/providers/provider';
 
 export interface StartTurnFromUserMessageOptions {
 	includePriorMessages?: boolean;
+	initialEvents?: PortalEvent[];
 }
 
 export async function startTurnFromUserMessage(
@@ -57,6 +58,7 @@ export async function startTurnFromUserMessage(
 				}
 			}
 		},
+		initialEvents: opts.initialEvents,
 		beforeSend: async () => {
 			try {
 				await takeSnapshot(workdir, userMsg.id, 'pre');

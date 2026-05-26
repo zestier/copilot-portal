@@ -186,6 +186,17 @@ export function rename(id: string, userId: string, title: string): boolean {
 	return r.changes > 0;
 }
 
+export function renameIfDefault(id: string, userId: string, title: string): boolean {
+	const r = getDb()
+		.prepare(
+			`UPDATE conversations
+			    SET title = ?, updated_at = ?
+			  WHERE id = ? AND user_id = ? AND (title = '' OR trim(title) = 'New chat')`
+		)
+		.run(title, Date.now(), id, userId);
+	return r.changes > 0;
+}
+
 /**
  * Update per-conversation session settings (mode and/or approve-all bypass).
  * Returns true iff a row was modified. The bridge reads these on each

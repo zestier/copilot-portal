@@ -702,11 +702,20 @@
 				applyEvent({ type: 'error', code: 'start_failed', message: msg });
 				return;
 			}
-			const { turnId, userMessageId } = (await r.json()) as {
+			const {
+				turnId,
+				userMessageId,
+				title: updatedTitle
+			} = (await r.json()) as {
 				turnId: string;
 				userMessageId: string;
+				title?: string | null;
 			};
 			messages = messages.map((m) => (m.id === localMessageId ? { ...m, id: userMessageId } : m));
+			if (updatedTitle && updatedTitle !== title) {
+				title = updatedTitle;
+				void invalidateAll();
+			}
 			attachStream(turnId);
 		} catch (e) {
 			streaming = false;

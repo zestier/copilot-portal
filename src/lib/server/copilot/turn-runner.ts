@@ -17,7 +17,6 @@ import * as messages from '../db/repos/messages';
 import * as convs from '../db/repos/conversations';
 import * as usageRepo from '../db/repos/usage';
 import * as pool from './pool';
-import { deriveTitle, isDefaultTitle } from '../title';
 import * as interactiveRequests from './interactive-requests';
 import { PORTAL_PRELUDE } from './portal-prelude';
 import { isStubMode } from './bridge-stub';
@@ -114,6 +113,7 @@ export interface StartTurnOptions {
 	prompt: string;
 	conversationId: string;
 	beforeSend?: () => Promise<void>;
+	initialEvents?: PortalEvent[];
 }
 
 export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
@@ -175,6 +175,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	};
 
 	turns.set(opts.conversationId, turn);
+	for (const ev of opts.initialEvents ?? []) emit(ev);
 
 	// Accumulators for persistence.
 	let assistantBuf = '';
@@ -200,9 +201,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 
 	function dispatch(ev: PortalEvent) {
 		// Suppress the SDK's `done` event: we always emit our own terminal
-		// `done` in the finally block, after the auto-title `conversation.update`
-		// has been pushed. Otherwise clients (which break their stream loop on
-		// the first `done`) would miss the title update.
+		// `done` in the finally block after persistence work completes.
 		if (ev.type === 'done') return;
 
 		emit(ev);
@@ -369,31 +368,6 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 					}
 				}
 				convs.touch(opts.conversationId);
-
-				// Auto-title: on the first turn of a conversation whose title is
-				// still the placeholder, derive a short name from the user's
-				// prompt and notify subscribers so the UI can update in place.
-				try {
-					const conv = convs.get(opts.conversationId, opts.bridge.userId);
-					if (conv && isDefaultTitle(conv.title)) {
-						const newTitle = deriveTitle(opts.prompt);
-						if (newTitle && newTitle !== conv.title) {
-							const renamed = convs.rename(opts.conversationId, opts.bridge.userId, newTitle);
-							if (renamed) {
-								emit({
-									type: 'conversation.update',
-									conversationId: opts.conversationId,
-									title: newTitle
-								});
-							}
-						}
-					}
-				} catch (titleErr) {
-					log.warn('turn.autotitle.failed', {
-						conversationId: opts.conversationId,
-						err: String(titleErr)
-					});
-				}
 			} catch (persistErr) {
 				log.error('turn.persist.failed', {
 					conversationId: opts.conversationId,

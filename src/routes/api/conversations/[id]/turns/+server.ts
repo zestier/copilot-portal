@@ -7,6 +7,7 @@ import { getTurn } from '$lib/server/runtime/turn-runner';
 import { startTurnFromUserMessage } from '$lib/server/turn-start';
 import { parseBody } from '$lib/server/validate';
 import { authorizeConversation } from '$lib/server/conversation-auth';
+import { tryRenameFromFirstUserMessage } from '$lib/server/conversation-title';
 
 const Body = z.object({ content: z.string().min(1).max(64_000) });
 
@@ -34,7 +35,12 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const userMsg = messages.append(conv.id, { role: 'user', content });
 	convs.touch(conv.id);
 
-	const turn = await startTurnFromUserMessage(conv, userMsg);
+	const title = tryRenameFromFirstUserMessage(conv, userMsg);
+	const turn = await startTurnFromUserMessage(conv, userMsg, {
+		initialEvents: title
+			? [{ type: 'conversation.update', conversationId: conv.id, title }]
+			: undefined
+	});
 
-	return json({ turnId: turn.id, userMessageId: userMsg.id });
+	return json({ turnId: turn.id, userMessageId: userMsg.id, title });
 };
