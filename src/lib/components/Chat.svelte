@@ -25,6 +25,8 @@
 		streamRefreshAction
 	} from '$lib/client/chat-stream-recovery';
 
+	const INTERACTIVE_REVEAL_DELAY_MS = 150;
+
 	let {
 		conversation,
 		initialMessages,
@@ -96,6 +98,11 @@
 		}
 	}
 
+	function clearInteractiveRevealTimers() {
+		for (const timer of interactiveRevealTimers.values()) clearTimeout(timer);
+		interactiveRevealTimers.clear();
+	}
+
 	function invalidateRefreshMessages() {
 		refreshMessagesRun++;
 	}
@@ -120,6 +127,8 @@
 			hasNewBelow = false;
 			forksByMessage = {};
 			pendingInteractive = [...initialPendingInteractive];
+			visibleInteractive = [...initialPendingInteractive];
+			clearInteractiveRevealTimers();
 			clearCompactionTimer();
 			// Reattach the EventSource to any in-progress turn so a
 			// refresh-mid-stream resumes seamlessly.
@@ -131,6 +140,7 @@
 		return () => {
 			closeStream();
 			clearCompactionTimer();
+			clearInteractiveRevealTimers();
 		};
 	});
 
@@ -143,6 +153,10 @@
 	let pendingInteractive = $state<InteractiveRequestView[]>(
 		untrack(() => [...initialPendingInteractive])
 	);
+	let visibleInteractive = $state<InteractiveRequestView[]>(
+		untrack(() => [...initialPendingInteractive])
+	);
+	const interactiveRevealTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	// Active EventSource for the in-flight turn (if any). null when idle.
 	// Holding a reference here lets `stop()` close it on user-cancel and
 	// lets the conversation-prop $effect tear it down on navigation.
@@ -310,6 +324,8 @@
 			// would only see a response after the (formerly 10-minute)
 			// timeout fired. Now we just snap to whatever the server says.
 			pendingInteractive = data.pendingInteractive ?? [];
+			visibleInteractive = data.pendingInteractive ?? [];
+			clearInteractiveRevealTimers();
 			await scrollToBottom();
 			if (run !== refreshMessagesRun) return;
 			const action = streamRefreshAction({
@@ -492,7 +508,7 @@
 				break;
 			}
 			case 'interactive.request': {
-				pendingInteractive = addInteractive(pendingInteractive, ev.request);
+				addPendingInteractive(ev.request);
 				break;
 			}
 			case 'interactive.resolved': {
@@ -500,7 +516,7 @@
 				// `interactive.request` event lives forever in the turn's event
 				// log, so without this signal a refresh or a visibility-driven
 				// reconnect would resurrect a dialog the user already answered.
-				pendingInteractive = removeInteractive(pendingInteractive, ev.requestId);
+				removePendingInteractive(ev.requestId);
 				break;
 			}
 			case 'file.edit': {
@@ -594,12 +610,42 @@
 		}
 	}
 
+	function addPendingInteractive(
+		request: InteractiveRequestView,
+		opts: { revealImmediately?: boolean } = {}
+	) {
+		pendingInteractive = addInteractive(pendingInteractive, request);
+		if (visibleInteractive.some((p) => p.requestId === request.requestId)) return;
+		if (opts.revealImmediately) {
+			visibleInteractive = addInteractive(visibleInteractive, request);
+			return;
+		}
+		if (interactiveRevealTimers.has(request.requestId)) return;
+		const timer = setTimeout(() => {
+			interactiveRevealTimers.delete(request.requestId);
+			if (!pendingInteractive.some((p) => p.requestId === request.requestId)) return;
+			visibleInteractive = addInteractive(visibleInteractive, request);
+			void scrollToBottom();
+		}, INTERACTIVE_REVEAL_DELAY_MS);
+		interactiveRevealTimers.set(request.requestId, timer);
+	}
+
+	function removePendingInteractive(requestId: string) {
+		const timer = interactiveRevealTimers.get(requestId);
+		if (timer) {
+			clearTimeout(timer);
+			interactiveRevealTimers.delete(requestId);
+		}
+		pendingInteractive = removeInteractive(pendingInteractive, requestId);
+		visibleInteractive = removeInteractive(visibleInteractive, requestId);
+	}
+
 	async function respondInteractive(requestId: string, response: InteractiveResponse) {
 		const request = pendingInteractive.find((p) => p.requestId === requestId);
 		if (!request) return;
 		// Optimistically drop the prompt; the server will also emit an
 		// `interactive.resolved` which is a no-op once removed.
-		pendingInteractive = removeInteractive(pendingInteractive, requestId);
+		removePendingInteractive(requestId);
 		clearStreamStallTimeout();
 		try {
 			const r = await fetch(`/api/conversations/${conversation.id}/interactive/${requestId}`, {
@@ -614,7 +660,7 @@
 		} catch {
 			/* restore below */
 		}
-		pendingInteractive = addInteractive(pendingInteractive, request);
+		addPendingInteractive(request, { revealImmediately: true });
 		scheduleStreamStallTimeout();
 	}
 
@@ -741,7 +787,7 @@
 					onToolRerunStarted={handleToolRerunStarted}
 				/>
 			{/each}
-			{#each pendingInteractive as p (p.requestId)}
+			{#each visibleInteractive as p (p.requestId)}
 				<InteractiveRequestDialog
 					request={p}
 					onRespond={(r) => respondInteractive(p.requestId, r)}
