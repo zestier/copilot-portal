@@ -18,6 +18,8 @@ import { loadConfig } from '$lib/server/config';
 import { getDeployMetadata } from '$lib/server/deploy';
 import { log } from '$lib/server/log';
 import { canRedeployUser } from '$lib/server/redeploy';
+import { listBuiltInPromptTemplates } from '$lib/prompt-templates';
+import * as promptTemplates from '$lib/server/db/repos/prompt-templates';
 import {
 	normalizeBackendProvider,
 	BACKEND_PROVIDER_IDS,
@@ -76,6 +78,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		defaultProviderStatus,
 		recentDecisions: settings.listRecentDecisionsForUser(userId, 25),
 		grants: markSeedGrants(settings.listGrantsForUser(userId)),
+		builtInPromptTemplates: listBuiltInPromptTemplates(),
+		promptTemplates: promptTemplates.list(userId, { status: 'all' }),
 		enableRedeploy: cfg.ENABLE_REDEPLOY && canRedeployUser(locals.user, cfg),
 		deploy: getDeployMetadata()
 	};
@@ -88,6 +92,18 @@ const SaveSchema = z.object({
 	defaultConversationMode: z.enum(['interactive', 'plan', 'autopilot', 'best-effort']),
 	defaultPolicy: z.enum(['prompt', 'allow-all', 'deny-all']),
 	theme: z.enum(['dark', 'light', 'system'])
+});
+
+const PromptTemplateSchema = z.object({
+	title: z.string().trim().min(1).max(120),
+	description: z.string().trim().max(500).optional(),
+	prompt: z.string().trim().min(1).max(20_000),
+	pinned: z.boolean().optional(),
+	orderIndex: z.coerce.number().int().min(-1_000_000).max(1_000_000).optional()
+});
+
+const UpdatePromptTemplateSchema = PromptTemplateSchema.extend({
+	id: z.string().min(1)
 });
 
 export const actions: Actions = {
@@ -119,6 +135,77 @@ export const actions: Actions = {
 		};
 		settings.save(locals.userId, next);
 		return { ok: true, formId: 'save' };
+	},
+	createPromptTemplate: async ({ request, locals }) => {
+		if (!locals.userId)
+			return fail(401, { ok: false, error: 'Not authenticated', formId: 'createPromptTemplate' });
+		const data = await request.formData();
+		const parsed = PromptTemplateSchema.safeParse({
+			title: data.get('title'),
+			description: (data.get('description') as string) || undefined,
+			prompt: data.get('prompt'),
+			pinned: data.get('pinned') === 'on',
+			orderIndex: (data.get('orderIndex') as string) || undefined
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				ok: false,
+				error: parsed.error.issues[0]?.message ?? 'Invalid prompt template',
+				formId: 'createPromptTemplate'
+			});
+		}
+		promptTemplates.create(locals.userId, parsed.data);
+		return { ok: true, formId: 'createPromptTemplate' };
+	},
+	updatePromptTemplate: async ({ request, locals }) => {
+		if (!locals.userId)
+			return fail(401, { ok: false, error: 'Not authenticated', formId: 'updatePromptTemplate' });
+		const data = await request.formData();
+		const parsed = UpdatePromptTemplateSchema.safeParse({
+			id: data.get('id'),
+			title: data.get('title'),
+			description: (data.get('description') as string) || undefined,
+			prompt: data.get('prompt'),
+			pinned: data.get('pinned') === 'on',
+			orderIndex: (data.get('orderIndex') as string) || undefined
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				ok: false,
+				error: parsed.error.issues[0]?.message ?? 'Invalid prompt template',
+				formId: 'updatePromptTemplate'
+			});
+		}
+		const { id, ...patch } = parsed.data;
+		const updated = promptTemplates.update(id, locals.userId, patch);
+		if (!updated)
+			return fail(404, {
+				ok: false,
+				error: 'Prompt template not found',
+				formId: 'updatePromptTemplate'
+			});
+		return { ok: true, formId: 'updatePromptTemplate' };
+	},
+	archivePromptTemplate: async ({ request, locals }) => {
+		if (!locals.userId)
+			return fail(401, { ok: false, error: 'Not authenticated', formId: 'archivePromptTemplate' });
+		const data = await request.formData();
+		const id = data.get('id');
+		if (typeof id !== 'string' || id.length === 0) {
+			return fail(400, {
+				ok: false,
+				error: 'Invalid prompt template id',
+				formId: 'archivePromptTemplate'
+			});
+		}
+		const archived = promptTemplates.archive(id, locals.userId);
+		if (!archived)
+			return fail(404, {
+				ok: false,
+				error: 'Prompt template not found',
+				formId: 'archivePromptTemplate'
+			});
+		return { ok: true, formId: 'archivePromptTemplate' };
 	},
 	revokeGrant: async ({ request, locals }) => {
 		if (!locals.userId)

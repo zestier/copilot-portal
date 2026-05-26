@@ -3,6 +3,7 @@
 	import { tick } from 'svelte';
 	import type { Conversation, User, WorkspaceTicket } from '$lib/types';
 	import Alert from '$lib/components/ui/Alert.svelte';
+	import PromptTemplateLauncher from '$lib/components/PromptTemplateLauncher.svelte';
 	import type { TicketChatMode } from '$lib/client/tickets';
 	import { ticketChatPrompt, ticketChatTitle } from '$lib/client/tickets';
 	import { createTicketDraftChat } from '$lib/client/ticket-chat-launch';
@@ -70,22 +71,6 @@
 			flashError(`${errLabel} failed`);
 			return false;
 		}
-	}
-
-	async function newChat() {
-		const res = await fetch('/api/conversations', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ title: 'New chat' })
-		});
-		if (!res.ok) {
-			flashError(`Could not create chat (${res.status})`);
-			return;
-		}
-		const body = await res.json();
-		await invalidateAll();
-		onnavigate?.();
-		location.href = `/conversations/${body.conversation.id}`;
 	}
 
 	async function addTicket() {
@@ -404,7 +389,11 @@
 
 <div class="sidebar-inner">
 	<div class="top">
-		<button class="btn primary block" onclick={newChat}>+ New chat</button>
+		<PromptTemplateLauncher
+			variant="sidebar"
+			onNavigate={onnavigate}
+			onError={(message) => flashError(message)}
+		/>
 		<div class="top-meta">
 			<span class="count muted">
 				{active.length} chat{active.length === 1 ? '' : 's'}
@@ -938,10 +927,6 @@
 		font-size: var(--fs-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-	}
-	.block {
-		display: block;
-		width: 100%;
 	}
 	.select-toggle.active {
 		color: var(--accent);

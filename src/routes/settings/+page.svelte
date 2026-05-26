@@ -6,6 +6,7 @@
 	import ActivityPanel from './ActivityPanel.svelte';
 	import GeneralSettings from './GeneralSettings.svelte';
 	import PermissionGrants from './PermissionGrants.svelte';
+	import PromptsSettings from './PromptsSettings.svelte';
 	import SettingsTabs from './SettingsTabs.svelte';
 	import UpdatePanel from './UpdatePanel.svelte';
 
@@ -13,8 +14,8 @@
 
 	const visibleTabs = $derived<SettingsTab[]>(
 		data.enableRedeploy
-			? ['general', 'permissions', 'activity', 'update']
-			: ['general', 'permissions', 'activity']
+			? ['general', 'prompts', 'permissions', 'activity', 'update']
+			: ['general', 'prompts', 'permissions', 'activity']
 	);
 
 	function readTab(value: string | null, allowedTabs: SettingsTab[]): SettingsTab {
@@ -23,6 +24,7 @@
 
 	function fallbackTab(form: FormResult | null): SettingsTab {
 		if (form?.formId === 'save') return 'general';
+		if (form?.formId?.includes('PromptTemplate')) return 'prompts';
 		if (
 			form?.formId === 'createGrant' ||
 			form?.formId === 'updateGrant' ||
@@ -78,6 +80,12 @@
 
 	{#if activeTab === 'general'}
 		<GeneralSettings settings={data.settings} providers={data.providers} {form} />
+	{:else if activeTab === 'prompts'}
+		<PromptsSettings
+			builtInTemplates={data.builtInPromptTemplates}
+			promptTemplates={data.promptTemplates}
+			{form}
+		/>
 	{:else if activeTab === 'permissions'}
 		<PermissionGrants grants={data.grants} {form} />
 	{:else if activeTab === 'activity'}

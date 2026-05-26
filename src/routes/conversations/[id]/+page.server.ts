@@ -2,8 +2,10 @@ import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
+import * as promptTemplates from '$lib/server/db/repos/prompt-templates';
 import * as tickets from '$lib/server/db/repos/tickets';
 import * as usage from '$lib/server/db/repos/usage';
+import { getBuiltInPromptTemplate } from '$lib/prompt-templates';
 import { getTurn } from '$lib/server/runtime/turn-runner';
 import { listForConversation as listPendingInteractive } from '$lib/server/runtime/interactive-requests';
 import { getProvider } from '$lib/server/providers';
@@ -26,6 +28,18 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 		const requestedMode = url.searchParams.get('ticketMode');
 		const mode = isTicketChatMode(requestedMode) ? requestedMode : 'do';
 		initialComposer = ticketChatPrompt(ticket, mode);
+	}
+	const promptTemplateId = url.searchParams.get('promptTemplateId');
+	if (!initialComposer && promptTemplateId && msgs.length === 0) {
+		const source = url.searchParams.get('promptTemplateSource');
+		const template =
+			source === 'builtin'
+				? getBuiltInPromptTemplate(promptTemplateId)
+				: source === 'custom'
+					? promptTemplates.get(promptTemplateId, locals.userId)
+					: null;
+		if (!template || template.status !== 'open') throw error(404);
+		initialComposer = template.prompt;
 	}
 
 	// Surface any in-flight turn so the client can reattach its

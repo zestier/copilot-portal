@@ -4,7 +4,10 @@ import Chat from '../src/lib/components/Chat.svelte';
 import DiffView from '../src/lib/components/DiffView.svelte';
 import FileBrowser from '../src/lib/components/FileBrowser.svelte';
 import InteractiveRequestDialog from '../src/lib/components/InteractiveRequestDialog.svelte';
+import PromptTemplateLauncher from '../src/lib/components/PromptTemplateLauncher.svelte';
+import PromptsSettings from '../src/routes/settings/PromptsSettings.svelte';
 import { MAX_RENDERABLE_DIFF_CHARS } from '../src/lib/client/diff-parser';
+import { listBuiltInPromptTemplates } from '../src/lib/prompt-templates';
 import type {
 	Conversation,
 	InteractiveRequestView,
@@ -213,5 +216,49 @@ describe('Svelte component regression coverage', () => {
 		expect(body).toContain('aria-label="Git status"');
 		expect(body).toContain('Working tree clean.');
 		expect(body).toContain('Select a file or commit to view it.');
+	});
+
+	test('PromptTemplateLauncher preserves blank chat and exposes template entry points', () => {
+		const home = render(PromptTemplateLauncher, {
+			props: { variant: 'home' }
+		}).body;
+		const rail = render(PromptTemplateLauncher, {
+			props: { variant: 'rail' }
+		}).body;
+
+		expect(home).toContain('+ New chat');
+		expect(home).toContain('Use template');
+		expect(rail).toContain('aria-label="New blank chat"');
+		expect(rail).toContain('aria-label="New chat from template"');
+	});
+
+	test('Prompts settings lists built-ins and user-managed templates', () => {
+		const body = render(PromptsSettings, {
+			props: {
+				builtInTemplates: listBuiltInPromptTemplates(),
+				promptTemplates: [
+					{
+						id: 'tmpl-1',
+						userId: 'user-1',
+						title: 'Weekly review',
+						description: 'Summarize changes',
+						prompt: 'Review this week of work.',
+						status: 'open',
+						pinned: true,
+						orderIndex: 1,
+						createdAt: 1,
+						updatedAt: 1,
+						archivedAt: null
+					}
+				],
+				form: null
+			}
+		}).body;
+
+		expect(body).toContain('Create a custom template');
+		expect(body).toContain('Built-in templates');
+		expect(body).toContain('Code review');
+		expect(body).toContain('Weekly review');
+		expect(body).toContain('Archive');
 	});
 });

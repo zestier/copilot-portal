@@ -69,6 +69,23 @@ export interface WorkspaceTicket {
 	closedAt: number | null;
 }
 
+export type PromptTemplateStatus = 'open' | 'archived';
+
+export interface ChatPromptTemplate {
+	id: string;
+	/** Built-in templates are static and not owned by a user. */
+	userId: string | null;
+	title: string;
+	description: string;
+	prompt: string;
+	status: PromptTemplateStatus;
+	pinned: boolean;
+	orderIndex: number;
+	createdAt: number;
+	updatedAt: number;
+	archivedAt: number | null;
+}
+
 // Portal session modes. `best-effort` is the only portal-only extension; it
 // maps to the runtime's `autopilot` mode while keeping stricter permission
 // semantics in the bridge.

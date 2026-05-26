@@ -24,6 +24,7 @@ describe('db migrations + repos', () => {
 				'messages',
 				'permission_decisions',
 				'permission_grants',
+				'prompt_templates',
 				'schema_migrations',
 				'background_agent_lifecycles',
 				'tool_calls',

@@ -8,12 +8,13 @@ export type FormResult = {
 	duplicate?: boolean;
 };
 
-export type SettingsTab = 'general' | 'permissions' | 'activity' | 'update';
+export type SettingsTab = 'general' | 'prompts' | 'permissions' | 'activity' | 'update';
 
 export type SettingsData = PageData['settings'];
 export type ProviderStatus = PageData['providers'][number];
 export type PermissionGrant = PageData['grants'][number];
 export type PermissionDecision = PageData['recentDecisions'][number];
+export type PromptTemplate = PageData['promptTemplates'][number];
 
 export function formatContextWindow(tokens: number | undefined): string {
 	if (!tokens || !Number.isFinite(tokens)) return 'context size unknown';
