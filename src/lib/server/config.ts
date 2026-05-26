@@ -8,6 +8,18 @@ const optionalUrl = z
 	.transform((v) => (v ? v : undefined))
 	.pipe(z.string().url().optional());
 
+const commaList = z
+	.string()
+	.optional()
+	.transform((v) =>
+		v
+			? v
+					.split(',')
+					.map((s) => s.trim().toLowerCase())
+					.filter(Boolean)
+			: []
+	);
+
 const Schema = z
 	.object({
 		HOST: z.string().default('127.0.0.1'),
@@ -31,17 +43,8 @@ const Schema = z
 
 		GITHUB_CLIENT_ID: z.string().optional(),
 		GITHUB_CLIENT_SECRET: z.string().optional(),
-		ALLOWED_GITHUB_LOGINS: z
-			.string()
-			.optional()
-			.transform((v) =>
-				v
-					? v
-							.split(',')
-							.map((s) => s.trim().toLowerCase())
-							.filter(Boolean)
-					: []
-			),
+		ALLOWED_GITHUB_LOGINS: commaList,
+		REDEPLOY_ADMIN_GITHUB_LOGINS: commaList,
 
 		SHARED_SECRET: z.string().optional(),
 
@@ -113,6 +116,29 @@ const Schema = z
 				ctx.addIssue({
 					code: z.ZodIssueCode.custom,
 					message: 'ALLOWED_GITHUB_LOGINS must be a non-empty list for AUTH_MODE=github.'
+				});
+			}
+			const unknownRedeployAdmins = cfg.REDEPLOY_ADMIN_GITHUB_LOGINS.filter(
+				(login) => !cfg.ALLOWED_GITHUB_LOGINS.includes(login)
+			);
+			if (unknownRedeployAdmins.length > 0) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ['REDEPLOY_ADMIN_GITHUB_LOGINS'],
+					message:
+						'REDEPLOY_ADMIN_GITHUB_LOGINS entries must also be present in ALLOWED_GITHUB_LOGINS.'
+				});
+			}
+			if (
+				cfg.ENABLE_REDEPLOY &&
+				cfg.ALLOWED_GITHUB_LOGINS.length > 1 &&
+				cfg.REDEPLOY_ADMIN_GITHUB_LOGINS.length === 0
+			) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ['REDEPLOY_ADMIN_GITHUB_LOGINS'],
+					message:
+						'REDEPLOY_ADMIN_GITHUB_LOGINS is required when ENABLE_REDEPLOY=1 and multiple GitHub logins are allowed.'
 				});
 			}
 		}

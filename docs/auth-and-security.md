@@ -30,8 +30,13 @@ The intended boundary is therefore **outside the portal**:
 - Only allow identities that you would also trust with a terminal on the host
   and the selected `PROJECT_ROOT`.
 - Treat features such as redeploy, global permission grants, arbitrary workdir
-  selection, and same-workdir concurrent conversations as capabilities of that
-  trusted operator model, not as isolation guarantees.
+   selection, and same-workdir concurrent conversations as capabilities of that
+   trusted operator model, not as isolation guarantees.
+- When `ENABLE_REDEPLOY=1` with GitHub auth, use
+  `REDEPLOY_ADMIN_GITHUB_LOGINS` to restrict the update/restart endpoint to a
+  subset of allowed operators. Single-user GitHub installs default that one
+  login to redeploy admin; shared-secret and local modes have no per-user
+  identity to split.
 - If you need isolation between users, repositories, or experiments, run
   separate portal instances with separate `DATA_DIR`s and `PROJECT_ROOT`s (or
   use OS/container isolation outside the app).

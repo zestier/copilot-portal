@@ -17,6 +17,7 @@ import { providerAuthToken } from '$lib/server/providers/auth';
 import { loadConfig } from '$lib/server/config';
 import { getDeployMetadata } from '$lib/server/deploy';
 import { log } from '$lib/server/log';
+import { canRedeployUser } from '$lib/server/redeploy';
 import {
 	normalizeBackendProvider,
 	BACKEND_PROVIDER_IDS,
@@ -75,7 +76,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		defaultProviderStatus,
 		recentDecisions: settings.listRecentDecisionsForUser(userId, 25),
 		grants: markSeedGrants(settings.listGrantsForUser(userId)),
-		enableRedeploy: cfg.ENABLE_REDEPLOY,
+		enableRedeploy: cfg.ENABLE_REDEPLOY && canRedeployUser(locals.user, cfg),
 		deploy: getDeployMetadata()
 	};
 };

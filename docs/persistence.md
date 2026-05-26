@@ -220,12 +220,15 @@ They are authenticated like the rest of `/api/*` (session cookie required)
 and live alongside the data routes:
 
 - `POST /api/admin/redeploy` — streams a Server-Sent Events feed of a
-  `git fetch` / `git pull` / `pnpm install` / `pnpm run verify` pipeline,
-  then exits the process so the supervisor (`scripts/serve.mjs`) can
-  relaunch from the refreshed `build/`. Body: `{pull?: boolean}` (defaults
-  to `true`). Gated by the `ENABLE_REDEPLOY` env flag — returns `403`
-  when disabled and `409` if a redeploy is already in flight. Only
-  meaningful when the portal is started via `pnpm run serve`.
+   `git fetch` / `git pull` / `pnpm install` / `pnpm run verify` pipeline,
+   then exits the process so the supervisor (`scripts/serve.mjs`) can
+   relaunch from the refreshed `build/`. Body: `{pull?: boolean}` (defaults
+   to `true`). Gated by the `ENABLE_REDEPLOY` env flag — returns `403`
+   when disabled and `409` if a redeploy is already in flight. Under
+   `AUTH_MODE=github`, redeploy is limited to `REDEPLOY_ADMIN_GITHUB_LOGINS`
+   (or the sole `ALLOWED_GITHUB_LOGINS` entry in single-user installs);
+   shared-secret and local auth modes treat the authenticated operator as the
+   admin. Only meaningful when the portal is started via `pnpm run serve`.
 - `POST /api/conversations/:id/permissions/:requestId` — resolves a
   pending Copilot tool-permission prompt. Body:
   `{decision: 'allow-once' | 'allow-always' | 'deny'}`. Returns

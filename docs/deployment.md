@@ -279,12 +279,14 @@ the local DB isn't polluted. See [`AGENTS.md`](../AGENTS.md).
 
 - **Containerized deployment:** `docker compose pull && docker compose up -d`.
 - **Bare metal under `pnpm run serve` (the supervisor):** the in-app
-  redeploy button runs `git pull && pnpm install && pnpm run verify`
-  and exits; the supervisor relaunches on the new code. `verify`
-  overlaps independent lint/check/unit phases, then runs one production
-  build and Playwright e2e with phase-prefixed logs. Disabled by default;
-  set `ENABLE_REDEPLOY=1` to opt in. Not used in the container image
-  (the image ships only the built tree, not the source).
+   redeploy button runs `git pull && pnpm install && pnpm run verify`
+   and exits; the supervisor relaunches on the new code. `verify`
+   overlaps independent lint/check/unit phases, then runs one production
+   build and Playwright e2e with phase-prefixed logs. Disabled by default;
+   set `ENABLE_REDEPLOY=1` to opt in. With `AUTH_MODE=github`, set
+   `REDEPLOY_ADMIN_GITHUB_LOGINS` to the GitHub logins allowed to trigger
+   redeploys when more than one login can sign in. Not used in the container
+   image (the image ships only the built tree, not the source).
 - Migrations run automatically on startup; DB schema is forward-only.
   Rolling back across a migration requires restoring a pre-update DB
   backup.
