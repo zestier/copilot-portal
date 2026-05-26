@@ -45,6 +45,8 @@
 
 	const active = $derived(conversations.filter((c) => c.archivedAt == null));
 	const archived = $derived(conversations.filter((c) => c.archivedAt != null));
+	const selectedActiveCount = $derived(active.filter((c) => selected.has(c.id)).length);
+	const allActiveSelected = $derived(active.length > 0 && selectedActiveCount === active.length);
 
 	function flashError(msg: string) {
 		errorMsg = msg;
@@ -317,6 +319,16 @@
 		const next = new Set(selected);
 		if (next.has(id)) next.delete(id);
 		else next.add(id);
+		selected = next;
+	}
+
+	function toggleSelectAllActive() {
+		const next = new Set(selected);
+		if (allActiveSelected) {
+			for (const c of active) next.delete(c.id);
+		} else {
+			for (const c of active) next.add(c.id);
+		}
 		selected = next;
 	}
 
@@ -719,6 +731,14 @@
 		<div class="bulk-bar" role="toolbar" aria-label="Bulk actions">
 			<span class="bulk-count muted">{selected.size} selected</span>
 			<div class="bulk-actions">
+				<button
+					class="btn sm ghost"
+					disabled={bulkBusy || active.length === 0}
+					aria-pressed={allActiveSelected}
+					onclick={toggleSelectAllActive}
+				>
+					{allActiveSelected ? 'Clear active' : 'Select all'}
+				</button>
 				<button
 					class="btn sm"
 					disabled={bulkBusy ||
