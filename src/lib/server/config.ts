@@ -69,12 +69,6 @@ const Schema = z
 			.optional()
 			.transform((v) => v === '1' || v === 'true'),
 
-		// When set, the server is reached via a tunnel/proxy whose hostname
-		// won't match event.url.origin. Disables the Origin/Referer check on
-		// mutating API calls (the SameSite=Lax session cookie still blocks
-		// cross-site CSRF).
-		TUNNEL_HOST: z.string().optional(),
-
 		// When "1", `copilot-provider.ts` swaps the real Copilot SDK for the
 		// in-process stub in `bridge-stub.ts`. Used by e2e tests.
 		COPILOT_STUB: z

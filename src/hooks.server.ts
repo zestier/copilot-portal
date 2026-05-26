@@ -5,7 +5,6 @@ import { getDb } from '$lib/server/db';
 import * as users from '$lib/server/db/repos/users';
 import * as settings from '$lib/server/db/repos/settings';
 import { read as readSession, generateCsrfToken } from '$lib/server/auth/session';
-import { perWindow } from '$lib/server/rate-limit';
 import { apiErrorResponse } from '$lib/server/http';
 import { startIdleReaper } from '$lib/server/runtime/pool';
 import * as messages from '$lib/server/db/repos/messages';
@@ -23,24 +22,12 @@ function boot() {
 }
 boot();
 
-const loginLimiter = perWindow(5, 15 * 60_000); // 5 / 15min per IP
-// Per-user API limit. Allow tests to raise it via env so e2e helper
-// flows (poll-for-idle, reset-all-conversations) don't false-positive.
-const API_LIMIT = Number(process.env.API_RATE_LIMIT_PER_MIN) || 60;
-const apiLimiter = perWindow(API_LIMIT, 60_000);
-
 const PUBLIC_PATHS = new Set(['/login', '/auth/callback', '/api/health']);
 const PUBLIC_PREFIXES = ['/_app/', '/favicon'];
 
 function isPublic(pathname: string): boolean {
 	if (PUBLIC_PATHS.has(pathname)) return true;
 	return PUBLIC_PREFIXES.some((p) => pathname.startsWith(p));
-}
-
-function clientIp(event: Parameters<Handle>[0]['event']): string {
-	const xff = event.request.headers.get('x-forwarded-for');
-	if (xff) return xff.split(',')[0].trim();
-	return event.getClientAddress();
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
@@ -80,10 +67,9 @@ export const handle: Handle = async ({ event, resolve }) => {
 		});
 	}
 
-	// Origin check for mutating JSON API calls. Skipped when TUNNEL_HOST is
-	// set because event.url.origin won't match what the browser sent. The
-	// session cookie is SameSite=Lax which still blocks cross-site CSRF.
-	if (!cfg.TUNNEL_HOST && path.startsWith('/api/') && event.request.method !== 'GET') {
+	// Origin check for mutating JSON API calls. SvelteKit covers form
+	// actions; this keeps JSON API mutations on the same boundary.
+	if (path.startsWith('/api/') && event.request.method !== 'GET') {
 		const origin = event.request.headers.get('origin');
 		const referer = event.request.headers.get('referer');
 		const expectedOrigin = event.url.origin;
@@ -92,18 +78,6 @@ export const handle: Handle = async ({ event, resolve }) => {
 			(referer && referer.startsWith(expectedOrigin + '/'));
 		if (!ok) {
 			return apiErrorResponse(403, 'bad_origin');
-		}
-	}
-
-	// Rate limit.
-	if (path === '/login' && event.request.method === 'POST') {
-		if (!loginLimiter.tryAcquire(`login:${clientIp(event)}`)) {
-			return new Response('Too many requests', { status: 429 });
-		}
-	}
-	if (path.startsWith('/api/') && event.locals.userId && path !== '/api/health') {
-		if (!apiLimiter.tryAcquire(`api:${event.locals.userId}`)) {
-			return apiErrorResponse(429, 'rate_limited');
 		}
 	}
 

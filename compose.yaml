@@ -40,7 +40,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       IDLE_TIMEOUT_MIN: ${IDLE_TIMEOUT_MIN:-15}
       MAX_CONCURRENT_SESSIONS: ${MAX_CONCURRENT_SESSIONS:-4}
-      TUNNEL_HOST: ${TUNNEL_HOST:-}
+      ORIGIN: ${ORIGIN:-}
     volumes:
       - ./data:/data
       - ${PROJECT_DIR:?required}:/workspace

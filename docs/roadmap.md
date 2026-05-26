@@ -49,7 +49,7 @@ with explicit approval, and review the diffs in the UI.
 ## Phase 3 — Remote-safe auth and deploy
 
 - GitHub OAuth flow + `ALLOWED_GITHUB_LOGINS`.
-- Session cookie + CSRF + CSP + rate limiting.
+- Session cookie + CSRF + CSP.
 - Encrypted token storage.
 - Cloudflare Tunnel docs verified end-to-end.
 

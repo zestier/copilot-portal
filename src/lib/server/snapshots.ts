@@ -77,6 +77,7 @@ function run(args: string[], opts: RunOpts): Promise<RunResult> {
 			timedOut = true;
 			child.kill('SIGKILL');
 		}, timeoutMs);
+		timer.unref?.();
 		child.stdout.on('data', (c: Buffer) => {
 			if (stdout.length < SNAP_MAX_BYTES) {
 				stdout = Buffer.concat([stdout, c.subarray(0, SNAP_MAX_BYTES - stdout.length)]);

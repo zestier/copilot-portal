@@ -1,9 +1,15 @@
 import { redirect } from '@sveltejs/kit';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { PageServerLoad, Actions } from './$types';
 import { loadConfig } from '$lib/server/config';
 import { authorizeUrl } from '$lib/server/auth/github';
 import { issue } from '$lib/server/auth/session';
+
+function sharedSecretMatches(input: string, expected: string): boolean {
+	const inputBytes = Buffer.from(input);
+	const expectedBytes = Buffer.from(expected);
+	return inputBytes.length === expectedBytes.length && timingSafeEqual(inputBytes, expectedBytes);
+}
 
 export const load: PageServerLoad = ({ locals, cookies, url }) => {
 	if (locals.userId) throw redirect(302, '/');
@@ -34,7 +40,7 @@ export const actions: Actions = {
 		}
 		const data = await request.formData();
 		const secret = String(data.get('secret') ?? '');
-		if (!secret || secret !== cfg.SHARED_SECRET) {
+		if (!secret || !cfg.SHARED_SECRET || !sharedSecretMatches(secret, cfg.SHARED_SECRET)) {
 			return { ok: false, error: 'Invalid secret' };
 		}
 		// Use the local user as the principal in shared-secret mode.

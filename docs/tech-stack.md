@@ -90,7 +90,6 @@ zap/
 │  │  │  ├─ conversation-auth.ts
 │  │  │  ├─ http.ts             # JSON response envelopes
 │  │  │  ├─ sse.ts              # SSE response helper
-│  │  │  ├─ rate-limit.ts
 │  │  │  ├─ crypto.ts           # AES-256-GCM
 │  │  │  ├─ title.ts            # auto-title via the SDK
 │  │  │  ├─ validate.ts
@@ -177,7 +176,6 @@ invalid config.
 | `IDLE_TIMEOUT_MIN`        | `15`                     | SDK session idle reap.               |
 | `MAX_CONCURRENT_SESSIONS` | `4`                      | Hard cap on live sessions.           |
 | `LOG_LEVEL`               | `info`                   | `debug` \| `info` \| `warn` \| `error`. |
-| `TUNNEL_HOST`             | —                        | When set, relaxes the Origin/Referer check for requests fronted by a tunnel/proxy whose hostname won't match `event.url.origin`. |
 | `ENABLE_REDEPLOY`         | —                        | Set to `1` to enable `POST /api/admin/redeploy` (only meaningful under `pnpm run serve`). |
 | `COPILOT_STUB`            | —                        | Set to `1` to swap the real SDK for the in-process stub. Used by e2e tests. |
 | `DB_MIGRATIONS_DIR`       | *(auto)*                 | Explicit override for the migrations directory. Useful when cwd isn't the repo root. |

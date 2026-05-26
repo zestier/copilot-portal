@@ -73,6 +73,21 @@ function setReaperTimer(t: NodeJS.Timeout | null) {
 	(globalThis as unknown as GlobalSlot)[REAPER_KEY] = t;
 }
 
+async function disposeSession(
+	session: ProviderSession,
+	context: { conversationId: string; reason: string }
+): Promise<void> {
+	try {
+		await session.dispose();
+	} catch (err) {
+		log.warn('copilot.pool.dispose_failed', {
+			...context,
+			provider: session.provider,
+			err: err instanceof Error ? (err.stack ?? err.message) : String(err)
+		});
+	}
+}
+
 export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSession> {
 	const existing = sessions.get(opts.conversationId);
 	const requestedProvider = opts.provider ?? getDefaultProviderId();
@@ -98,7 +113,10 @@ export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSessio
 			cachedProviderSessionId,
 			requestedProviderSessionId
 		});
-		await existing.session.dispose().catch(() => undefined);
+		await disposeSession(existing.session, {
+			conversationId: opts.conversationId,
+			reason: 'session_mismatch'
+		});
 		sessions.delete(opts.conversationId);
 	}
 	// Coalesce concurrent acquires for the same conversation. Without
@@ -113,7 +131,7 @@ export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSessio
 		const sorted = [...sessions.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed);
 		const [oldestId, oldest] = sorted[0];
 		log.info('copilot.pool.evict', { conversationId: oldestId });
-		await oldest.session.dispose().catch(() => undefined);
+		await disposeSession(oldest.session, { conversationId: oldestId, reason: 'capacity_evict' });
 		sessions.delete(oldestId);
 	}
 	const openPromise = open(opts).then(
@@ -150,7 +168,7 @@ export async function release(conversationId: string) {
 	const e = sessions.get(conversationId);
 	if (!e) return;
 	sessions.delete(conversationId);
-	await e.session.dispose().catch(() => undefined);
+	await disposeSession(e.session, { conversationId, reason: 'release' });
 }
 
 export function startIdleReaper() {
@@ -163,7 +181,7 @@ export function startIdleReaper() {
 			if (now - entry.lastUsed > idleMs) {
 				log.info('copilot.pool.reap', { conversationId: id });
 				sessions.delete(id);
-				await entry.session.dispose().catch(() => undefined);
+				await disposeSession(entry.session, { conversationId: id, reason: 'idle_reap' });
 			}
 		}
 	}, 60_000);
@@ -185,10 +203,17 @@ export async function shutdown() {
 	const built = await Promise.allSettled(pending);
 	for (const r of built) {
 		if (r.status === 'fulfilled') {
-			await r.value.dispose().catch(() => undefined);
+			await disposeSession(r.value, {
+				conversationId: r.value.conversationId,
+				reason: 'shutdown_inflight'
+			});
 		}
 	}
 	const all = [...sessions.values()];
 	sessions.clear();
-	await Promise.all(all.map((e) => e.session.dispose().catch(() => undefined)));
+	await Promise.all(
+		all.map((e) =>
+			disposeSession(e.session, { conversationId: e.session.conversationId, reason: 'shutdown' })
+		)
+	);
 }

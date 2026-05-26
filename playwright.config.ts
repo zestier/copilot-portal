@@ -96,10 +96,7 @@ export default defineConfig({
 			// git repo. Without this, git commands run inside conversation workdirs
 			// would walk up into the outer repo. Tell git to stop at dataDir so each
 			// test sees an isolated workspace.
-			GIT_CEILING_DIRECTORIES: dataDir,
-			// Bump rate limit so test-only patterns (poll-for-idle,
-			// reset-all-conversations) don't trip the per-user limiter.
-			API_RATE_LIMIT_PER_MIN: '10000'
+			GIT_CEILING_DIRECTORIES: dataDir
 		}
 	}
 });

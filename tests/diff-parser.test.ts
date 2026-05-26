@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { parseUnifiedDiff, diffStats } from '../src/lib/client/diff-parser';
+import {
+	MAX_RENDERABLE_DIFF_CHARS,
+	isRenderableDiff,
+	parseUnifiedDiff,
+	diffStats
+} from '../src/lib/client/diff-parser';
 
 const SAMPLE = `diff --git a/a.txt b/a.txt
 index 0000001..0000002 100644
@@ -93,5 +98,10 @@ Binary files a/x and b/x differ
 `;
 		const rows = parseUnifiedDiff(d);
 		expect(rows.every((r) => r.kind === 'meta')).toBe(true);
+	});
+
+	it('bounds diffs that are safe for eager rendering', () => {
+		expect(isRenderableDiff('x'.repeat(MAX_RENDERABLE_DIFF_CHARS))).toBe(true);
+		expect(isRenderableDiff('x'.repeat(MAX_RENDERABLE_DIFF_CHARS + 1))).toBe(false);
 	});
 });

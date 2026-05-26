@@ -13,7 +13,6 @@ export async function setupLocalEnv(prefix = 'portal-test-'): Promise<string> {
 	process.env.I_KNOW_THIS_IS_LOCAL = '1';
 	delete process.env.SESSION_SECRET;
 	delete process.env.SHARED_SECRET;
-	delete process.env.TUNNEL_HOST;
 	await resetServerSingletons();
 	return dir;
 }
@@ -30,7 +29,6 @@ export async function setupAuthedEnv(prefix = 'portal-test-'): Promise<string> {
 	process.env.SESSION_SECRET = randomBytes(48).toString('base64');
 	process.env.ENCRYPTION_KEY = randomBytes(32).toString('base64');
 	delete process.env.I_KNOW_THIS_IS_LOCAL;
-	delete process.env.TUNNEL_HOST;
 	await resetServerSingletons();
 	return dir;
 }

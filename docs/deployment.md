@@ -255,10 +255,9 @@ Cloudflare side:
 With Access in front, the portal is doubly protected: CF gates at the
 network edge, and the portal's own login still applies.
 
-When fronted by a tunnel whose hostname won't match
-`event.url.origin`, also set `TUNNEL_HOST=<your-host>` in `.env` so the
-Origin/Referer check on mutating API calls is relaxed (the
-`SameSite=Lax` session cookie still blocks cross-site CSRF).
+When fronted by a tunnel or reverse proxy, set SvelteKit's `ORIGIN` environment
+variable to the public origin (for example, `https://copilot.example.com`) so
+same-origin checks compare against the browser-visible URL.
 
 ## Local development
 
