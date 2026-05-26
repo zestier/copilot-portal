@@ -7,29 +7,30 @@
 		type FormResult,
 		type PermissionGrant
 	} from './settings-types';
+	import type { ShellCommandStep } from '$lib/permissions/scope-types';
 	import {
-		FS_RULE_BEHAVIORS_WITH_VALUE,
-		FS_RULE_ROOTS,
-		type FsRuleBehaviorWithValue,
-		type FsRuleRoot,
-		type ShellCommandStep,
-		type ShellOptionRules,
-		type ShellOptionSpec
-	} from '$lib/permissions/scope-types';
+		GRANT_TOOLS,
+		grantToolLabel,
+		isGrantTool,
+		type GrantTool
+	} from '$lib/permissions/metadata';
+	import {
+		buildGrantScopeJson,
+		defaultGrantScopeFormFields,
+		grantScopeToFormFields,
+		nextShellStepOptions,
+		type BuildResult,
+		type FsBehaviorKind,
+		type GrantScopeFormFields,
+		type ShellPipelineKind,
+		type ShellPositionalsKind,
+		type ShellStepOptionInput,
+		type UrlRuleKind
+	} from '$lib/permissions/grant-form';
+	import PermissionGrantScopeFields from './PermissionGrantScopeFields.svelte';
 
 	let { grants, form }: { grants: PermissionGrant[]; form: FormResult | null } = $props();
 
-	type GrantTool = 'shell' | 'read' | 'write' | 'edit' | 'url';
-	type ShellPositionalsKind =
-		| 'unset'
-		| 'none'
-		| 'any'
-		| 'workspace-paths'
-		| 'session-workspace-paths';
-	type ShellPipelineKind = 'unset' | 'must' | 'forbid';
-	type FsRootKind = FsRuleRoot;
-	type FsBehaviorKind = 'any' | FsRuleBehaviorWithValue;
-	type UrlRuleKind = 'exact' | 'host' | 'host-suffix';
 	type GrantDecision = 'allow' | 'force-allow' | 'deny' | 'prompt';
 
 	let newGrantTool = $state<GrantTool>('shell');
@@ -59,7 +60,7 @@
 	let shellStepOptions = $state<ShellStepOptionInput[]>([{ allow: '', deny: '' }]);
 	let originalShellCommand = $state<ShellCommandStep[] | null>(null);
 
-	let fsRoot = $state<FsRootKind>('workspace');
+	let fsRoot = $state<GrantScopeFormFields['fsRoot']>('workspace');
 	let fsBehavior = $state<FsBehaviorKind>('any');
 	let fsValue = $state('');
 
@@ -68,79 +69,37 @@
 	let urlHost = $state('');
 	let urlSuffix = $state('');
 
-	function csvToList(s: string): string[] {
-		return s
-			.split(',')
-			.map((t) => t.trim())
-			.filter((t) => t.length > 0);
+	function grantScopeFormFields(): GrantScopeFormFields {
+		return {
+			shellArgv0,
+			shellSubcommands,
+			shellPositionals,
+			shellPipeline,
+			shellStepOptions,
+			fsRoot,
+			fsBehavior,
+			fsValue,
+			urlRuleKind,
+			urlExact,
+			urlHost,
+			urlSuffix
+		};
 	}
 
-	function parseShellOptionSpecs(input: string): ShellOptionSpec[] {
-		return csvToList(input).map((entry) => {
-			const split = entry.indexOf('=');
-			if (split === -1) {
-				if (!entry.startsWith('-')) {
-					throw new Error(`option name "${entry}" must start with '-'`);
-				}
-				return { name: entry, kind: 'flag' };
-			}
-			const name = entry.slice(0, split).trim();
-			const valueKind = entry.slice(split + 1).trim();
-			if (!name.startsWith('-')) {
-				throw new Error(`option name "${name}" must start with '-'`);
-			}
-			if (valueKind !== 'any' && valueKind !== 'workspace-path') {
-				throw new Error(`option "${name}" must end with =any or =workspace-path`);
-			}
-			const valueRule =
-				valueKind === 'any' ? ({ kind: 'any' } as const) : ({ kind: 'workspace-path' } as const);
-			return {
-				name,
-				kind: 'option',
-				value: valueRule
-			};
-		});
+	function applyGrantScopeFormFields(fields: GrantScopeFormFields) {
+		shellArgv0 = fields.shellArgv0;
+		shellSubcommands = fields.shellSubcommands;
+		shellPositionals = fields.shellPositionals;
+		shellPipeline = fields.shellPipeline;
+		shellStepOptions = fields.shellStepOptions;
+		fsRoot = fields.fsRoot;
+		fsBehavior = fields.fsBehavior;
+		fsValue = fields.fsValue;
+		urlRuleKind = fields.urlRuleKind;
+		urlExact = fields.urlExact;
+		urlHost = fields.urlHost;
+		urlSuffix = fields.urlSuffix;
 	}
-
-	function shellOptionSpecsToCsv(specs: ShellOptionSpec[]): string {
-		return specs
-			.map((spec) => (spec.kind === 'flag' ? spec.name : `${spec.name}=${spec.value.kind}`))
-			.join(', ');
-	}
-
-	function commandTailToText(command: ShellCommandStep[] | undefined): string {
-		return (command ?? [])
-			.slice(1)
-			.map((step) => step.token)
-			.join(' ');
-	}
-
-	function fsRootLabel(root: FsRootKind): string {
-		switch (root) {
-			case 'workspace':
-				return 'workspace';
-			case 'session-workspace':
-				return 'SDK session workspace';
-			case 'absolute':
-				return 'absolute path';
-		}
-	}
-
-	function fsBehaviorLabel(behavior: FsBehaviorKind): string {
-		switch (behavior) {
-			case 'any':
-				return 'any path inside the root';
-			case 'exact':
-				return 'one exact path';
-			case 'prefix':
-				return 'path or anything inside it';
-			case 'glob':
-				return 'path matching a glob';
-		}
-	}
-
-	type BuildResult = { json: string; error: null } | { json: null; error: string };
-	type ShellStepOptionInput = { allow: string; deny: string };
 
 	const shellCommandTokens = $derived([
 		shellArgv0.trim(),
@@ -151,22 +110,11 @@
 	]);
 
 	$effect(() => {
-		const next = shellCommandTokens.map((token, i) => {
-			const existing = shellStepOptions[i];
-			if (existing) return existing;
-			const original = originalShellCommand?.[i];
-			if (original?.token === token) {
-				return {
-					allow: shellOptionSpecsToCsv(original.options?.allow ?? []),
-					deny: (original.options?.deny ?? []).join(', ')
-				};
-			}
-			return { allow: '', deny: '' };
-		});
+		const next = nextShellStepOptions(shellCommandTokens, shellStepOptions, originalShellCommand);
 		const changed =
 			next.length !== shellStepOptions.length ||
 			next.some((entry, i) => entry !== shellStepOptions[i]);
-		if (changed) shellStepOptions = next.length > 0 ? next : [{ allow: '', deny: '' }];
+		if (changed) shellStepOptions = next;
 	});
 
 	function updateShellStepOption(index: number, field: keyof ShellStepOptionInput, value: string) {
@@ -176,59 +124,7 @@
 	}
 
 	function buildScopeJson(): BuildResult {
-		try {
-			if (newGrantTool === 'shell') {
-				if (!shellArgv0.trim()) return { json: null, error: 'argv0 is required' };
-				const command: ShellCommandStep[] = shellCommandTokens.map((token) => ({ token }));
-				const rule: Record<string, unknown> = { command };
-				if (shellPositionals !== 'unset') rule.positionals = { kind: shellPositionals };
-				if (shellPipeline !== 'unset') rule.pipeline = shellPipeline;
-				for (let i = 0; i < command.length; i++) {
-					const allow = parseShellOptionSpecs(shellStepOptions[i]?.allow ?? '');
-					const deny = csvToList(shellStepOptions[i]?.deny ?? '');
-					if (allow.length === 0 && deny.length === 0) continue;
-					const options: ShellOptionRules = {};
-					if (allow.length > 0) options.allow = allow;
-					if (deny.length > 0) options.deny = deny;
-					command[i].options = options;
-				}
-				return { json: JSON.stringify({ kind: 'shell', rule }), error: null };
-			}
-			if (newGrantTool === 'url') {
-				let rule: Record<string, unknown>;
-				switch (urlRuleKind) {
-					case 'exact':
-						if (!urlExact.trim()) return { json: null, error: 'URL is required' };
-						rule = { kind: 'exact', url: urlExact.trim() };
-						break;
-					case 'host':
-						if (!urlHost.trim()) return { json: null, error: 'host is required' };
-						rule = { kind: 'host', host: urlHost.trim() };
-						break;
-					case 'host-suffix':
-						if (!urlSuffix.trim()) return { json: null, error: 'suffix is required' };
-						rule = { kind: 'host-suffix', suffix: urlSuffix.trim() };
-						break;
-				}
-				return { json: JSON.stringify({ kind: 'url', rule }), error: null };
-			}
-
-			const perms = [newGrantTool] as ('read' | 'write' | 'edit')[];
-			let rule: Record<string, unknown>;
-			if (fsBehavior === 'any') {
-				if (fsRoot === 'absolute') {
-					return { json: null, error: 'absolute root requires exact, prefix, or glob behavior' };
-				}
-				rule = { kind: 'path', root: fsRoot, behavior: 'any' };
-			} else {
-				const value = fsValue.trim();
-				if (!value) return { json: null, error: 'path or glob value is required' };
-				rule = { kind: 'path', root: fsRoot, behavior: fsBehavior, value };
-			}
-			return { json: JSON.stringify({ kind: 'fs', perms, rule }), error: null };
-		} catch (e) {
-			return { json: null, error: e instanceof Error ? e.message : String(e) };
-		}
+		return buildGrantScopeJson(newGrantTool, grantScopeFormFields());
 	}
 
 	const buildResult = $derived<BuildResult>(
@@ -283,19 +179,8 @@
 		newGrantDecision = 'allow';
 		newGrantExpiry = '';
 		newGrantDenyReason = '';
-		shellArgv0 = '';
-		shellSubcommands = '';
-		shellPositionals = 'unset';
-		shellPipeline = 'unset';
-		shellStepOptions = [{ allow: '', deny: '' }];
+		applyGrantScopeFormFields(defaultGrantScopeFormFields());
 		originalShellCommand = null;
-		fsRoot = 'workspace';
-		fsBehavior = 'any';
-		fsValue = '';
-		urlRuleKind = 'host';
-		urlExact = '';
-		urlHost = '';
-		urlSuffix = '';
 		userTouched = false;
 	}
 
@@ -316,39 +201,13 @@
 		newGrantExpiry = expiryToLocalInput(g.expiresAt);
 		newGrantDenyReason = g.denyReason ?? '';
 
-		if (
-			g.tool === 'shell' ||
-			g.tool === 'url' ||
-			g.tool === 'read' ||
-			g.tool === 'write' ||
-			g.tool === 'edit'
-		) {
+		if (isGrantTool(g.tool)) {
 			newGrantTool = g.tool;
 		}
 
-		const sc = g.scope;
-		if (sc) {
-			if (sc.kind === 'shell') {
-				originalShellCommand = sc.rule.command;
-				shellArgv0 = sc.rule.command[0]?.token ?? '';
-				shellSubcommands = commandTailToText(sc.rule.command);
-				shellPositionals = sc.rule.positionals?.kind ?? 'unset';
-				shellPipeline = sc.rule.pipeline ?? 'unset';
-				shellStepOptions = sc.rule.command.map((step) => ({
-					allow: shellOptionSpecsToCsv(step.options?.allow ?? []),
-					deny: (step.options?.deny ?? []).join(', ')
-				}));
-			} else if (sc.kind === 'url') {
-				urlRuleKind = sc.rule.kind;
-				if (sc.rule.kind === 'exact') urlExact = sc.rule.url;
-				else if (sc.rule.kind === 'host') urlHost = sc.rule.host;
-				else urlSuffix = sc.rule.suffix;
-			} else if (sc.kind === 'fs') {
-				fsRoot = sc.rule.root;
-				fsBehavior = sc.rule.behavior;
-				fsValue = 'value' in sc.rule ? sc.rule.value : '';
-			}
-		}
+		const editState = grantScopeToFormFields(g.scope);
+		applyGrantScopeFormFields(editState.fields);
+		originalShellCommand = editState.originalShellCommand;
 
 		detailsOpen = true;
 		queueMicrotask(() => {
@@ -375,7 +234,7 @@
 	function canEditGrant(g: PermissionGrant): boolean {
 		if (g.scope === null) return false;
 		if (g.scope.kind === 'any') return false;
-		if (!['shell', 'read', 'write', 'edit', 'url'].includes(g.tool)) return false;
+		if (!isGrantTool(g.tool)) return false;
 		if (g.scope.kind === 'fs' && g.scope.perms && g.scope.perms.length > 1) return false;
 		return true;
 	}
@@ -636,11 +495,9 @@
 					<label>
 						Tool
 						<select name="tool" bind:value={newGrantTool}>
-							<option value="shell">shell (run a command)</option>
-							<option value="read">read (file read)</option>
-							<option value="write">write (file write)</option>
-							<option value="edit">edit (file edit)</option>
-							<option value="url">url (fetch URL)</option>
+							{#each GRANT_TOOLS as tool}
+								<option value={tool}>{grantToolLabel(tool)}</option>
+							{/each}
 						</select>
 					</label>
 					<label>
@@ -675,202 +532,23 @@
 					{/if}
 				{/if}
 
-				{#if newGrantTool === 'shell'}
-					<fieldset class="scope-fields">
-						<legend>Shell scope</legend>
-						<label>
-							argv0 (the bare command name)
-							<input
-								type="text"
-								bind:value={shellArgv0}
-								placeholder="cd"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small">No slashes, no leading dot — just the program name.</span>
-						</label>
-						<label>
-							Subcommand path (optional, space-separated)
-							<input
-								type="text"
-								bind:value={shellSubcommands}
-								placeholder="remote set-url"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small"
-								>Each token extends the command path. Options can be configured for every command
-								step below.</span
-							>
-						</label>
-						<label>
-							Positional arguments
-							<select bind:value={shellPositionals}>
-								<option value="unset">(unconstrained — any positionals)</option>
-								<option value="none">none (the command takes no positional args)</option>
-								<option value="any">any (positionals are anything)</option>
-								<option value="workspace-paths"
-									>workspace-paths (every positional must resolve inside the conversation's
-									workspace)</option
-								>
-								<option value="session-workspace-paths"
-									>session-workspace-paths (every positional must resolve inside the SDK session
-									workspace)</option
-								>
-							</select>
-						</label>
-						<label>
-							Pipeline constraint
-							<select bind:value={shellPipeline}>
-								<option value="unset">(no constraint — matches regardless of `|` neighbours)</option
-								>
-								<option value="must"
-									>must — only matches when the command is part of a pipeline (`a | b`)</option
-								>
-								<option value="forbid"
-									>forbid — only matches when the command is NOT pipelined</option
-								>
-							</select>
-							<span class="muted small"
-								>Useful for deny grants that nudge toward structured alternatives: `pipeline=forbid`
-								lets `cmd | grep ...` keep working while rejecting bare `grep`.</span
-							>
-						</label>
-						<div class="step-options">
-							<p class="muted small">
-								Option-spec syntax: bare names are boolean flags; `name=any` and
-								`name=workspace-path` consume a value (`name value` or `name=value`). Options on a
-								non-final step are consumed before matching the next command token; options on the
-								final step may be interleaved with positionals.
-							</p>
-							{#each shellCommandTokens as token, i}
-								<fieldset class="step-option-fields">
-									<legend>
-										Options after `{token || '(argv0)'}`
-										{#if i === 0}
-											<span class="muted">(base command)</span>
-										{:else if i === shellCommandTokens.length - 1}
-											<span class="muted">(final step)</span>
-										{:else}
-											<span class="muted">(intermediate step)</span>
-										{/if}
-									</legend>
-									<label>
-										Allow list (optional, comma-separated)
-										<input
-											type="text"
-											value={shellStepOptions[i]?.allow ?? ''}
-											oninput={(e) => updateShellStepOption(i, 'allow', e.currentTarget.value)}
-											placeholder={i === 0 ? '--no-pager, -C=any' : '-v, --format=any'}
-											spellcheck="false"
-											autocomplete="off"
-										/>
-									</label>
-									<label>
-										Deny list (optional, comma-separated)
-										<input
-											type="text"
-											value={shellStepOptions[i]?.deny ?? ''}
-											oninput={(e) => updateShellStepOption(i, 'deny', e.currentTarget.value)}
-											placeholder={i === 0 ? '--git-dir, -C' : '--upload-pack'}
-											spellcheck="false"
-											autocomplete="off"
-										/>
-									</label>
-								</fieldset>
-							{/each}
-						</div>
-					</fieldset>
-				{:else if newGrantTool === 'url'}
-					<fieldset class="scope-fields">
-						<legend>URL scope</legend>
-						<label>
-							Match by
-							<select bind:value={urlRuleKind}>
-								<option value="exact">exact URL</option>
-								<option value="host">exact host</option>
-								<option value="host-suffix">host suffix (e.g. *.github.com)</option>
-							</select>
-						</label>
-						{#if urlRuleKind === 'exact'}
-							<label>
-								URL
-								<input
-									type="url"
-									bind:value={urlExact}
-									placeholder="https://api.github.com/users/octocat"
-									autocomplete="off"
-								/>
-							</label>
-						{:else if urlRuleKind === 'host'}
-							<label>
-								Host
-								<input
-									type="text"
-									bind:value={urlHost}
-									placeholder="api.github.com"
-									autocomplete="off"
-								/>
-							</label>
-						{:else}
-							<label>
-								Suffix
-								<input
-									type="text"
-									bind:value={urlSuffix}
-									placeholder="github.com"
-									autocomplete="off"
-								/>
-								<span class="muted small"
-									>Matches hosts equal to `suffix` or ending with `.suffix` (so `github.com` and
-									`api.github.com` both match `github.com`).</span
-								>
-							</label>
-						{/if}
-					</fieldset>
-				{:else}
-					<fieldset class="scope-fields">
-						<legend>Filesystem scope ({newGrantTool})</legend>
-						<label>
-							Root
-							<select bind:value={fsRoot}>
-								{#each FS_RULE_ROOTS as root}
-									<option value={root}>{fsRootLabel(root)}</option>
-								{/each}
-							</select>
-						</label>
-						<label>
-							Behavior
-							<select bind:value={fsBehavior}>
-								{#if fsRoot !== 'absolute'}
-									<option value="any">{fsBehaviorLabel('any')}</option>
-								{/if}
-								{#each FS_RULE_BEHAVIORS_WITH_VALUE as behavior}
-									<option value={behavior}>{fsBehaviorLabel(behavior)}</option>
-								{/each}
-							</select>
-						</label>
-						{#if fsBehavior !== 'any'}
-							<label>
-								{fsRoot === 'absolute' ? 'Absolute path or glob' : 'Relative path or glob'}
-								<input
-									type="text"
-									bind:value={fsValue}
-									placeholder={fsRoot === 'absolute'
-										? '/workspaces/project/src/**/*.ts'
-										: 'src/**/*.ts'}
-									spellcheck="false"
-									autocomplete="off"
-								/>
-								<span class="muted small"
-									>Workspace and session-workspace values are relative to that root. Absolute values
-									start with `/`. For glob, `*` matches one path segment and `**` matches any
-									number.</span
-								>
-							</label>
-						{/if}
-					</fieldset>
-				{/if}
+				<PermissionGrantScopeFields
+					tool={newGrantTool}
+					{shellCommandTokens}
+					bind:shellArgv0
+					bind:shellSubcommands
+					bind:shellPositionals
+					bind:shellPipeline
+					bind:shellStepOptions
+					bind:fsRoot
+					bind:fsBehavior
+					bind:fsValue
+					bind:urlRuleKind
+					bind:urlExact
+					bind:urlHost
+					bind:urlSuffix
+					{updateShellStepOption}
+				/>
 
 				<input type="hidden" name="scopeJson" value={scopeJsonPreview} />
 
@@ -1269,35 +947,6 @@
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 		gap: 0.75rem;
-	}
-	.scope-fields {
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		padding: 0.5rem 0.75rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-	.scope-fields legend {
-		padding: 0 0.25rem;
-		font-size: 0.85em;
-		color: var(--muted, #888);
-	}
-	.step-options {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-	.step-option-fields {
-		border: 1px dashed var(--border);
-		border-radius: 6px;
-		padding: 0.5rem 0.75rem;
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-		gap: 0.75rem;
-	}
-	.step-option-fields legend {
-		grid-column: 1 / -1;
 	}
 	.scope-preview pre {
 		background: var(--code-bg, #1118);

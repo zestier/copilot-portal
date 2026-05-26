@@ -1,4 +1,4 @@
-import type { GrantScope } from '$lib/permissions/scope-types';
+export { describeGrantScope } from '$lib/permissions/scope-summary';
 import type { PageData } from './$types';
 
 export type FormResult = {
@@ -68,64 +68,6 @@ export function grantScopeLabel(g: {
 }) {
 	if (!g.conversationId) return 'Global';
 	return g.conversationTitle ?? g.conversationId;
-}
-
-export function describeGrantScope(g: {
-	scope: GrantScope | null;
-	scopePattern: string | null;
-}): string {
-	const s = g.scope;
-	if (s) {
-		switch (s.kind) {
-			case 'any':
-				return '*';
-			case 'shell':
-				return describeShellRule(s.rule);
-			case 'url':
-				switch (s.rule.kind) {
-					case 'exact':
-						return s.rule.url;
-					case 'host':
-						return `host=${s.rule.host}`;
-					case 'host-suffix':
-						return `*.${s.rule.suffix}`;
-				}
-				break;
-			case 'fs': {
-				const perms = s.perms && s.perms.length > 0 ? `[${s.perms.join('|')}] ` : '';
-				switch (s.rule.kind) {
-					case 'path':
-						return `${perms}${describeFsPathRule(s.rule)}`;
-				}
-			}
-		}
-	}
-	return g.scopePattern ?? '*';
-}
-
-function describeFsPathRule(rule: Extract<GrantScope, { kind: 'fs' }>['rule']): string {
-	const root =
-		rule.root === 'workspace'
-			? '<workspace>'
-			: rule.root === 'session-workspace'
-				? '<session workspace>'
-				: '';
-	if (rule.behavior === 'any') return root;
-	const sep = root && rule.value ? '/' : '';
-	if (rule.behavior === 'prefix') return `${root}${sep}${rule.value}/**`;
-	return `${root}${sep}${rule.value}`;
-}
-
-function describeShellRule(rule: Extract<GrantScope, { kind: 'shell' }>['rule']): string {
-	const command = rule.command.map((step) => step.token).join(' ');
-	const parts = [`command=${command}`];
-	if (rule.positionals) {
-		parts.push(`positionals=${rule.positionals.kind}`);
-	}
-	if (rule.pipeline) {
-		parts.push(`pipeline=${rule.pipeline}`);
-	}
-	return parts.join('; ');
 }
 
 export function formatExpiry(ms: number | null): string {

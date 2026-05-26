@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import type { PermissionPolicy, SessionMode } from '$lib/types';
-import type { GrantScope } from '$lib/permissions/scope-types';
+import { GRANT_TOOLS, isFilesystemPermissionKind } from '$lib/permissions/metadata';
+import { capabilityRuleKindForScope, capabilityScopeSummary } from '$lib/permissions/scope-summary';
 import * as settings from '../db/repos/settings';
 import type { PortalTool } from './git';
 
-const PermissionKind = z.enum(['shell', 'read', 'write', 'edit', 'url', 'custom-tool']);
+const CAPABILITY_PERMISSION_KINDS = [...GRANT_TOOLS, 'custom-tool'] as const;
+const PermissionKind = z.enum(CAPABILITY_PERMISSION_KINDS);
 
 const CapabilitiesArgs = z
 	.object({
@@ -18,7 +20,7 @@ const CapabilitiesArgs = z
 type CapabilityStatus = 'allowed' | 'denied' | 'prompt_required' | 'partially_allowed';
 
 interface CapabilityRule {
-	kind: 'tool' | 'filesystem' | 'shell' | 'url' | 'legacy' | 'exact-invocation' | 'policy';
+	kind: ReturnType<typeof capabilityRuleKindForScope> | 'policy';
 	decision: 'allow' | 'force-allow' | 'deny' | 'prompt';
 	scope: 'all-conversations' | 'current-conversation';
 	summary: string;
@@ -102,8 +104,8 @@ function permissionCapabilities(opts: {
 	const kinds = opts.permissionKind
 		? [opts.permissionKind]
 		: opts.toolName
-			? ['shell', 'read', 'write', 'edit', 'url', 'custom-tool']
-			: ['shell', 'read', 'write', 'edit', 'url'];
+			? CAPABILITY_PERMISSION_KINDS
+			: GRANT_TOOLS;
 	const capabilities = kinds.map((permissionKind) =>
 		capabilityForKind(permissionKind, grants, opts.policy)
 	);
@@ -179,8 +181,8 @@ function grantCoversPermissionKind(g: settings.GrantSummary, permissionKind: str
 		return true;
 	}
 	if (permissionKind === 'custom-tool' && g.permissionKind === 'custom-tool') return true;
-	if (g.scope?.kind === 'fs' && ['read', 'write', 'edit'].includes(permissionKind)) {
-		return !g.scope.perms || g.scope.perms.includes(permissionKind as 'read' | 'write' | 'edit');
+	if (g.scope?.kind === 'fs' && isFilesystemPermissionKind(permissionKind)) {
+		return !g.scope.perms || g.scope.perms.includes(permissionKind);
 	}
 	return g.scope?.kind === permissionKind;
 }
@@ -195,24 +197,13 @@ function grantToRule(g: settings.GrantSummary): CapabilityRule {
 }
 
 function ruleKind(g: settings.GrantSummary): CapabilityRule['kind'] {
-	if (g.argsHash) return 'exact-invocation';
-	if (!g.scope) return 'legacy';
-	switch (g.scope.kind) {
-		case 'any':
-			return 'tool';
-		case 'fs':
-			return 'filesystem';
-		case 'shell':
-			return 'shell';
-		case 'url':
-			return 'url';
-	}
+	return capabilityRuleKindForScope(g.scope, g.argsHash);
 }
 
 function grantSummary(g: settings.GrantSummary): string {
 	if (g.argsHash) return `${decisionVerb(g)} a previously approved exact ${g.tool} invocation.`;
 	if (!g.scope) return `${decisionVerb(g)} ${g.tool} requests covered by a legacy grant.`;
-	return `${decisionVerb(g)} ${g.tool} for ${scopeSummary(g.scope)}.`;
+	return `${decisionVerb(g)} ${g.tool} for ${capabilityScopeSummary(g.scope)}.`;
 }
 
 function decisionVerb(
@@ -222,46 +213,6 @@ function decisionVerb(
 	if (g.decision === 'deny') return 'Deny';
 	if (g.decision === 'prompt') return 'Prompt for';
 	return 'Approve';
-}
-
-function scopeSummary(scope: GrantScope): string {
-	switch (scope.kind) {
-		case 'any':
-			return 'any request to this tool';
-		case 'shell':
-			return shellRuleSummary(scope.rule);
-		case 'fs':
-			return fsScopeSummary(scope);
-		case 'url':
-			return urlRuleSummary(scope.rule);
-	}
-}
-
-function shellRuleSummary(rule: Extract<GrantScope, { kind: 'shell' }>['rule']): string {
-	const command = rule.command.map((step) => step.token).join(' ');
-	const parts = [`shell command \`${command}\``];
-	if (rule.positionals) parts.push(`positionals: ${rule.positionals.kind}`);
-	if (rule.pipeline) parts.push(`pipeline: ${rule.pipeline}`);
-	return parts.join('; ');
-}
-
-function fsScopeSummary(scope: Extract<GrantScope, { kind: 'fs' }>): string {
-	const perms = scope.perms?.length ? scope.perms.join('/') : 'read/write/edit';
-	const rule = scope.rule;
-	if (rule.behavior === 'any') return `${perms} anywhere under ${rule.root}`;
-	if (rule.root === 'absolute') return `${perms} for a specific absolute ${rule.behavior} rule`;
-	return `${perms} for a ${rule.behavior} rule under ${rule.root}`;
-}
-
-function urlRuleSummary(rule: Extract<GrantScope, { kind: 'url' }>['rule']): string {
-	switch (rule.kind) {
-		case 'exact':
-			return 'a specific URL';
-		case 'host':
-			return `URLs on host ${rule.host}`;
-		case 'host-suffix':
-			return `URLs on hosts ending in ${rule.suffix}`;
-	}
 }
 
 function policyRuleFor(permissionKind: string, policy: PermissionPolicy): CapabilityRule | null {

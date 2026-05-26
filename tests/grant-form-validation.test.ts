@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { GrantInputSchema, permissionKindForTool } from '../src/lib/permissions/scope-schema';
+import {
+	GrantInputSchema,
+	expectedScopeKind,
+	permissionKindForTool
+} from '../src/lib/permissions/scope-schema';
+import { GRANT_TOOLS, grantToolLabel } from '../src/lib/permissions/metadata';
+import {
+	buildGrantScopeJson,
+	defaultGrantScopeFormFields,
+	grantScopeToFormFields
+} from '../src/lib/permissions/grant-form';
+import {
+	capabilityRuleKindForScope,
+	describeGrantScope
+} from '../src/lib/permissions/scope-summary';
 
 const future = Date.now() + 60_000;
 const shell = (token: string, rest: Record<string, unknown> = {}) => ({
@@ -324,10 +338,105 @@ describe('GrantInputSchema — denyReason + pipeline', () => {
 
 describe('permissionKindForTool', () => {
 	it('maps tool to permission kind 1:1', () => {
-		expect(permissionKindForTool('shell')).toBe('shell');
-		expect(permissionKindForTool('read')).toBe('read');
-		expect(permissionKindForTool('write')).toBe('write');
-		expect(permissionKindForTool('edit')).toBe('edit');
-		expect(permissionKindForTool('url')).toBe('url');
+		for (const tool of GRANT_TOOLS) {
+			expect(permissionKindForTool(tool)).toBe(tool);
+		}
+	});
+
+	it('centralizes grant tool metadata used by schema and settings forms', () => {
+		expect(GRANT_TOOLS).toEqual(['shell', 'read', 'write', 'edit', 'url']);
+		expect(expectedScopeKind('shell')).toBe('shell');
+		expect(expectedScopeKind('url')).toBe('url');
+		expect(expectedScopeKind('read')).toBe('fs');
+		expect(expectedScopeKind('write')).toBe('fs');
+		expect(expectedScopeKind('edit')).toBe('fs');
+		expect(grantToolLabel('shell')).toBe('shell (run a command)');
+		expect(grantToolLabel('read')).toBe('read (file read)');
+	});
+});
+
+describe('grant form metadata helpers', () => {
+	it('builds shell, fs, and url scope JSON through shared form helpers', () => {
+		const shellFields = {
+			...defaultGrantScopeFormFields(),
+			shellArgv0: 'git',
+			shellSubcommands: 'status',
+			shellPositionals: 'any' as const,
+			shellStepOptions: [
+				{ allow: '--no-pager', deny: '--git-dir' },
+				{ allow: '', deny: '' }
+			]
+		};
+		expect(JSON.parse(buildGrantScopeJson('shell', shellFields).json ?? '')).toEqual({
+			kind: 'shell',
+			rule: {
+				command: [
+					{
+						token: 'git',
+						options: { allow: [{ name: '--no-pager', kind: 'flag' }], deny: ['--git-dir'] }
+					},
+					{ token: 'status' }
+				],
+				positionals: { kind: 'any' }
+			}
+		});
+
+		const fsFields = {
+			...defaultGrantScopeFormFields(),
+			fsRoot: 'workspace' as const,
+			fsBehavior: 'glob' as const,
+			fsValue: 'src/**/*.ts'
+		};
+		expect(JSON.parse(buildGrantScopeJson('read', fsFields).json ?? '')).toEqual({
+			kind: 'fs',
+			perms: ['read'],
+			rule: { kind: 'path', root: 'workspace', behavior: 'glob', value: 'src/**/*.ts' }
+		});
+
+		const urlFields = {
+			...defaultGrantScopeFormFields(),
+			urlRuleKind: 'host-suffix' as const,
+			urlSuffix: 'github.com'
+		};
+		expect(JSON.parse(buildGrantScopeJson('url', urlFields).json ?? '')).toEqual({
+			kind: 'url',
+			rule: { kind: 'host-suffix', suffix: 'github.com' }
+		});
+	});
+
+	it('initializes edit form fields from existing grant scopes', () => {
+		const { fields, originalShellCommand } = grantScopeToFormFields({
+			kind: 'shell',
+			rule: {
+				command: [
+					{
+						token: 'git',
+						options: { allow: [{ name: '-C', kind: 'option', value: { kind: 'any' } }] }
+					},
+					{ token: 'log' }
+				],
+				pipeline: 'forbid'
+			}
+		});
+		expect(fields.shellArgv0).toBe('git');
+		expect(fields.shellSubcommands).toBe('log');
+		expect(fields.shellPipeline).toBe('forbid');
+		expect(fields.shellStepOptions[0].allow).toBe('-C=any');
+		expect(originalShellCommand?.map((step) => step.token)).toEqual(['git', 'log']);
+	});
+
+	it('shares grant scope descriptions between settings and capability surfaces', () => {
+		const scope = {
+			kind: 'fs' as const,
+			perms: ['read' as const],
+			rule: {
+				kind: 'path' as const,
+				root: 'workspace' as const,
+				behavior: 'prefix' as const,
+				value: 'src'
+			}
+		};
+		expect(describeGrantScope({ scope, scopePattern: null })).toBe('[read] <workspace>/src/**');
+		expect(capabilityRuleKindForScope(scope)).toBe('filesystem');
 	});
 });

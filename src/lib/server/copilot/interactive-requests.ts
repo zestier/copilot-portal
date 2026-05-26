@@ -33,7 +33,7 @@ import type {
 	PermissionPolicy,
 	PortalEvent
 } from '$lib/types';
-import { FS_PERMISSIONS } from '$lib/permissions/scope-types';
+import { isFilesystemPermissionKind } from '$lib/permissions/metadata';
 
 // Default = no timeout. We used to default to 10 minutes "so a forgotten
 // dialog doesn't pin the session forever", but in headless mode (where
@@ -262,7 +262,7 @@ export function cancel(requestId: string, reason: string = 'cancelled') {
 	pending.delete(requestId);
 	if (p.timeoutHandle) clearTimeout(p.timeoutHandle);
 
-	const fallback = defaultDenial(p.kind);
+	const fallback = defaultInteractiveResponse(p.kind);
 	try {
 		p.emit?.({
 			type: 'interactive.resolved',
@@ -302,25 +302,19 @@ export function cancelConversation(conversationId: string, reason: string = 'tur
 	}
 }
 
-function defaultDenial(kind: InteractiveKind): InteractiveResponse {
-	switch (kind) {
-		case 'permission':
-			return { kind: 'permission', decision: 'deny' };
-		case 'auto_mode_switch':
-			return { kind: 'auto_mode_switch', decision: 'no' };
-		case 'user_input':
-			return { kind: 'user_input', answer: '', wasFreeform: true };
-		case 'elicitation':
-			return { kind: 'elicitation', action: 'cancel' };
-		case 'exit_plan_mode':
-			return { kind: 'exit_plan_mode', approved: false };
-		case 'sampling':
-			return { kind: 'sampling', action: 'ack' };
-		case 'mcp_oauth':
-			return { kind: 'mcp_oauth', action: 'ack' };
-		case 'external_tool':
-			return { kind: 'external_tool', action: 'ack' };
-	}
+const interactiveKindDescriptors = {
+	permission: () => ({ kind: 'permission', decision: 'deny' }),
+	auto_mode_switch: () => ({ kind: 'auto_mode_switch', decision: 'no' }),
+	user_input: () => ({ kind: 'user_input', answer: '', wasFreeform: true }),
+	elicitation: () => ({ kind: 'elicitation', action: 'cancel' }),
+	exit_plan_mode: () => ({ kind: 'exit_plan_mode', approved: false }),
+	sampling: () => ({ kind: 'sampling', action: 'ack' }),
+	mcp_oauth: () => ({ kind: 'mcp_oauth', action: 'ack' }),
+	external_tool: () => ({ kind: 'external_tool', action: 'ack' })
+} satisfies Record<InteractiveKind, () => InteractiveResponse>;
+
+export function defaultInteractiveResponse(kind: InteractiveKind): InteractiveResponse {
+	return interactiveKindDescriptors[kind]();
 }
 
 function normalizeDenyFeedback(feedback: string | undefined): string | null {
@@ -362,8 +356,6 @@ function normalizeResponse(response: InteractiveResponse): InteractiveResponse {
 
 import { isPathInWorkspace } from '../permissions/workspace';
 
-const FILESYSTEM_PERMISSION_KINDS = new Set<string>(FS_PERMISSIONS);
-
 export interface PolicyContext {
 	/** The runtime scope key (file path / command / URL) for this request. */
 	scopeKey?: string | null;
@@ -386,7 +378,7 @@ export function decideByPolicy(
 			return 'denied';
 		case 'prompt':
 		default:
-			if (FILESYSTEM_PERMISSION_KINDS.has(pk)) {
+			if (isFilesystemPermissionKind(pk)) {
 				const root = ctx?.workspaceRoot;
 				const target = ctx?.scopeKey;
 				if (root && target && isPathInWorkspace(target, root)) return 'approved';

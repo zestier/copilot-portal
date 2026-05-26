@@ -23,6 +23,42 @@ function str(v: unknown): string | null {
 	return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
+type SummaryHandler = (args: Record<string, unknown>) => string | null;
+
+const summaryHandlers: Record<string, SummaryHandler> = {
+	bash: commandSummary,
+	shell: commandSummary,
+	run: commandSummary,
+	view: readPathSummary,
+	read: readPathSummary,
+	read_file: readPathSummary,
+	cat: readPathSummary,
+	edit: pathSummary,
+	create: pathSummary,
+	write: pathSummary,
+	write_file: pathSummary,
+	grep: grepSummary,
+	glob: patternSummary,
+	write_bash: writeBashSummary,
+	read_bash: shellIdSummary,
+	stop_bash: shellIdSummary,
+	task: taskSummary,
+	read_agent: agentIdSummary,
+	stop_agent: agentIdSummary,
+	write_agent: writeAgentSummary,
+	list_agents: listAgentsSummary,
+	report_intent: intentSummary,
+	web_fetch: urlSummary,
+	fetch: urlSummary,
+	git_diff: gitDiffSummary,
+	git_log: gitLogSummary,
+	git_show_commit: gitShowCommitSummary,
+	git_commit: gitCommitSummary,
+	skill: skillSummary,
+	sql: sqlSummary,
+	session_store_sql: sqlSummary
+};
+
 export function summarizeToolCall(tool: string, argsJson: string): string | null {
 	const t = tool.toLowerCase();
 	if (t === 'apply_patch') {
@@ -36,105 +72,123 @@ export function summarizeToolCall(tool: string, argsJson: string): string | null
 
 	const args = parseArgs(argsJson);
 	if (!args) return null;
-	switch (t) {
-		case 'bash':
-		case 'shell':
-		case 'run': {
-			const desc = str(args.description);
-			if (desc) return desc;
-			const cmd = str(args.command) ?? str(args.cmd);
-			return cmd ? truncate(cmd, 60) : null;
-		}
-		case 'view':
-		case 'read':
-		case 'read_file':
-		case 'cat': {
-			const p = str(args.path) ?? str(args.file) ?? str(args.filename);
-			const range = Array.isArray(args.view_range) ? args.view_range : null;
-			if (p && range && range.length === 2) return `${p} [${range[0]}-${range[1]}]`;
-			return p;
-		}
-		case 'edit':
-		case 'create':
-		case 'write':
-		case 'write_file':
-			return str(args.path) ?? str(args.file) ?? str(args.filename);
-		case 'grep': {
-			const pat = str(args.pattern);
-			const glob = str(args.glob) ?? str(args.type);
-			if (pat && glob) return `${pat}  (${glob})`;
-			return pat;
-		}
-		case 'glob':
-			return str(args.pattern);
-		case 'write_bash': {
-			const input = str(args.input);
-			return input ? truncate(input, 40) : null;
-		}
-		case 'read_bash':
-		case 'stop_bash':
-			return str(args.shellId);
-		case 'task':
-			return str(args.description) ?? str(args.name);
-		case 'read_agent':
-		case 'stop_agent':
-			return str(args.agent_id);
-		case 'write_agent': {
-			const id = str(args.agent_id);
-			const input = str(args.input);
-			if (id && input) return `${id} ← ${truncate(input, 40)}`;
-			return id ?? (input ? truncate(input, 60) : null);
-		}
-		case 'list_agents':
-			return args.include_completed === false ? 'active only' : 'all agents';
-		case 'report_intent':
-			return str(args.intent);
-		case 'web_fetch':
-		case 'fetch':
-			return str(args.url);
-		case 'git_diff': {
-			const output = str(args.output) ?? 'patch';
-			const target = str(args.target) ?? 'worktree-vs-head';
-			const path = str(args.path);
-			return [output, target, path].filter(Boolean).join(' · ');
-		}
-		case 'git_log': {
-			const ref = str(args.ref);
-			const path = str(args.path);
-			if (ref && path) return `${ref} · ${path}`;
-			return path ?? ref ?? null;
-		}
-		case 'git_show_commit': {
-			const sha = str(args.sha);
-			return args.includePatch === true && sha ? `${sha} · patch` : sha;
-		}
-		case 'git_commit': {
-			const subject = str(args.subject);
-			const paths = args.paths;
-			const trailers = Array.isArray(args.trailers) ? args.trailers.length : 0;
-			const hasBody = str(args.body) !== null;
-			const target =
-				paths === 'all'
-					? 'all changes'
-					: Array.isArray(paths)
-						? paths.length === 1
-							? String(paths[0])
-							: `${String(paths[0])} +${paths.length - 1} more`
-						: null;
-			const extras = [hasBody ? 'body' : null, trailers ? `${trailers} trailers` : null].filter(
-				Boolean
-			);
-			const main = [subject ? truncate(subject, 50) : null, target].filter(Boolean).join(' · ');
-			return [main || null, ...extras].filter(Boolean).join(' · ') || null;
-		}
-		case 'skill':
-			return str(args.skill);
-		case 'sql':
-		case 'session_store_sql':
-			return str(args.description) ?? (str(args.query) ? truncate(str(args.query)!, 60) : null);
-	}
+	const handler = summaryHandlers[t];
+	if (handler) return handler(args);
 	for (const v of Object.values(args)) {
 		if (typeof v === 'string' && v.length > 0) return truncate(v, 80);
 	}
 	return null;
+}
+
+function commandSummary(args: Record<string, unknown>): string | null {
+	const desc = str(args.description);
+	if (desc) return desc;
+	const cmd = str(args.command) ?? str(args.cmd);
+	return cmd ? truncate(cmd, 60) : null;
+}
+
+function pathSummary(args: Record<string, unknown>): string | null {
+	return str(args.path) ?? str(args.file) ?? str(args.filename);
+}
+
+function readPathSummary(args: Record<string, unknown>): string | null {
+	const p = pathSummary(args);
+	const range = Array.isArray(args.view_range) ? args.view_range : null;
+	if (p && range && range.length === 2) return `${p} [${range[0]}-${range[1]}]`;
+	return p;
+}
+
+function grepSummary(args: Record<string, unknown>): string | null {
+	const pat = str(args.pattern);
+	const glob = str(args.glob) ?? str(args.type);
+	if (pat && glob) return `${pat}  (${glob})`;
+	return pat;
+}
+
+function patternSummary(args: Record<string, unknown>): string | null {
+	return str(args.pattern);
+}
+
+function writeBashSummary(args: Record<string, unknown>): string | null {
+	const input = str(args.input);
+	return input ? truncate(input, 40) : null;
+}
+
+function shellIdSummary(args: Record<string, unknown>): string | null {
+	return str(args.shellId);
+}
+
+function taskSummary(args: Record<string, unknown>): string | null {
+	return str(args.description) ?? str(args.name);
+}
+
+function agentIdSummary(args: Record<string, unknown>): string | null {
+	return str(args.agent_id);
+}
+
+function writeAgentSummary(args: Record<string, unknown>): string | null {
+	const id = str(args.agent_id);
+	const input = str(args.input);
+	if (id && input) return `${id} ← ${truncate(input, 40)}`;
+	return id ?? (input ? truncate(input, 60) : null);
+}
+
+function listAgentsSummary(args: Record<string, unknown>): string {
+	return args.include_completed === false ? 'active only' : 'all agents';
+}
+
+function intentSummary(args: Record<string, unknown>): string | null {
+	return str(args.intent);
+}
+
+function urlSummary(args: Record<string, unknown>): string | null {
+	return str(args.url);
+}
+
+function gitDiffSummary(args: Record<string, unknown>): string {
+	const output = str(args.output) ?? 'patch';
+	const target = str(args.target) ?? 'worktree-vs-head';
+	const path = str(args.path);
+	return [output, target, path].filter(Boolean).join(' · ');
+}
+
+function gitLogSummary(args: Record<string, unknown>): string | null {
+	const ref = str(args.ref);
+	const path = str(args.path);
+	if (ref && path) return `${ref} · ${path}`;
+	return path ?? ref ?? null;
+}
+
+function gitShowCommitSummary(args: Record<string, unknown>): string | null {
+	const sha = str(args.sha);
+	return args.includePatch === true && sha ? `${sha} · patch` : sha;
+}
+
+function gitCommitSummary(args: Record<string, unknown>): string | null {
+	const subject = str(args.subject);
+	const paths = args.paths;
+	const trailers = Array.isArray(args.trailers) ? args.trailers.length : 0;
+	const hasBody = str(args.body) !== null;
+	const target =
+		paths === 'all'
+			? 'all changes'
+			: Array.isArray(paths)
+				? paths.length === 1
+					? String(paths[0])
+					: `${String(paths[0])} +${paths.length - 1} more`
+				: null;
+	const extras = [hasBody ? 'body' : null, trailers ? `${trailers} trailers` : null].filter(
+		Boolean
+	);
+	const main = [subject ? truncate(subject, 50) : null, target].filter(Boolean).join(' · ');
+	return [main || null, ...extras].filter(Boolean).join(' · ') || null;
+}
+
+function skillSummary(args: Record<string, unknown>): string | null {
+	return str(args.skill);
+}
+
+function sqlSummary(args: Record<string, unknown>): string | null {
+	const query = str(args.query);
+	return str(args.description) ?? (query ? truncate(query, 60) : null);
 }

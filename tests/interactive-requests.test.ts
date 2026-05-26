@@ -9,7 +9,8 @@ import {
 	cancel,
 	cancelConversation,
 	newRequestId,
-	get
+	get,
+	defaultInteractiveResponse
 } from '../src/lib/server/runtime/interactive-requests';
 import { createInteractiveCallbacks } from '../src/lib/server/copilot/interactive-adapter';
 import * as users from '../src/lib/server/db/repos/users';
@@ -89,6 +90,24 @@ describe('interactive request registry', () => {
 		await setupLocalEnv('portal-interactive-test-');
 		userId = users.ensureLocalUser().id;
 		conversationId = convs.create(userId, { title: 't', workdir: '/tmp', model: null }).id;
+	});
+
+	it('defines default cancellations through the interactive-kind registry', () => {
+		const expected: Record<InteractiveKind, InteractiveResponse> = {
+			permission: { kind: 'permission', decision: 'deny' },
+			auto_mode_switch: { kind: 'auto_mode_switch', decision: 'no' },
+			user_input: { kind: 'user_input', answer: '', wasFreeform: true },
+			elicitation: { kind: 'elicitation', action: 'cancel' },
+			exit_plan_mode: { kind: 'exit_plan_mode', approved: false },
+			sampling: { kind: 'sampling', action: 'ack' },
+			mcp_oauth: { kind: 'mcp_oauth', action: 'ack' },
+			external_tool: { kind: 'external_tool', action: 'ack' }
+		};
+		for (const [kind, response] of Object.entries(expected) as Array<
+			[InteractiveKind, InteractiveResponse]
+		>) {
+			expect(defaultInteractiveResponse(kind)).toEqual(response);
+		}
 	});
 
 	function makePending(

@@ -11,6 +11,7 @@ import {
 	FS_RULE_BEHAVIORS_WITH_VALUE,
 	FS_RULE_CONTAINER_ROOTS
 } from './scope-types';
+import { GRANT_TOOLS, expectedScopeKind, permissionKindForTool } from './metadata';
 import type { GrantScope } from './scope-types';
 
 const ArgvToken = z
@@ -157,7 +158,7 @@ export const GrantScopeSchema: z.ZodType<Exclude<GrantScope, { kind: 'any' }>> =
  */
 export const GrantInputSchema = z
 	.object({
-		tool: z.enum(['shell', 'read', 'write', 'edit', 'url']),
+		tool: z.enum(GRANT_TOOLS),
 		decision: z.enum(['allow', 'deny', 'prompt']),
 		scope: GrantScopeSchema,
 		/** Unix ms. `null` = never expires. */
@@ -228,25 +229,4 @@ export const GrantInputSchema = z
 	});
 
 export type GrantInput = z.infer<typeof GrantInputSchema>;
-
-function expectedScopeKind(tool: GrantInput['tool']): 'shell' | 'fs' | 'url' {
-	switch (tool) {
-		case 'shell':
-			return 'shell';
-		case 'url':
-			return 'url';
-		case 'read':
-		case 'write':
-		case 'edit':
-			return 'fs';
-	}
-}
-
-/**
- * Map `tool` to the `permission_kind` we store on the grant row. Kept
- * in sync with the kinds the bridge dispatches on (`shell`, `read`,
- * `write`, `edit`, `url`).
- */
-export function permissionKindForTool(tool: GrantInput['tool']): string {
-	return tool;
-}
+export { expectedScopeKind, permissionKindForTool };

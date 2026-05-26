@@ -23,6 +23,12 @@ import {
 import { log } from '../log';
 import * as messagesRepo from '../db/repos/messages';
 import { argsHash } from '../tool-invocation';
+import {
+	bestEffortAlternativeHint,
+	bestEffortPermissionKindLabel,
+	isFilesystemPermissionKind
+} from '$lib/permissions/metadata';
+import { summarizeGitCommitPermission } from '$lib/permissions/git-commit';
 
 interface PermissionRequestLike {
 	kind?: string;
@@ -171,10 +177,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			audit('auto-allow');
 			return { kind: 'approve-once' } as const;
 		}
-		const target =
-			permissionKind === 'read' || permissionKind === 'write' || permissionKind === 'edit'
-				? scopeKey
-				: null;
+		const target = isFilesystemPermissionKind(permissionKind) ? scopeKey : null;
 		const url = permissionKind === 'url' ? scopeKey : null;
 
 		const grant = settingsRepo.matchGrantDetailed(
@@ -432,77 +435,10 @@ function bestEffortPromptGrantFeedback(view: { permissionKind: string }): string
 	);
 }
 
-function bestEffortPermissionKindLabel(permissionKind: string): string {
-	switch (permissionKind) {
-		case 'shell':
-		case 'read':
-		case 'write':
-		case 'edit':
-		case 'url':
-			return permissionKind;
-		default:
-			return 'unknown';
-	}
-}
-
-function bestEffortAlternativeHint(permissionKind: string): string {
-	switch (permissionKind) {
-		case 'shell':
-			return 'Try a structured tool or another already-allowed approach first.';
-		case 'read':
-			return 'Try the structured read/search tools or existing workspace context first.';
-		case 'write':
-		case 'edit':
-			return 'Try a structured workspace edit/create workflow or another already-allowed path first.';
-		case 'url':
-			return (
-				'Try a local source or another non-network approach first. ' +
-				'If the answer depends on external documentation, current API behavior, or other version-specific online information, retry with `forcePermissionPrompt` instead of guessing.'
-			);
-		default:
-			return 'Try another approach that stays within the current permission set first.';
-	}
-}
-
 function summarizePermissionRequest(req: PermissionRequestLike, tool: string): string {
-	if (
-		tool === 'git_commit' &&
-		req.args &&
-		typeof req.args === 'object' &&
-		!Array.isArray(req.args)
-	) {
-		const args = req.args as Record<string, unknown>;
-		const subject = typeof args.subject === 'string' && args.subject ? args.subject : 'commit';
-		const paths = args.paths;
-		const lines = ['Create Git commit', `Subject: ${subject}`];
-		if (paths === 'all') {
-			lines.push('Target: all current workspace changes');
-		} else if (Array.isArray(paths)) {
-			lines.push(`Target: ${paths.length} selected ${paths.length === 1 ? 'path' : 'paths'}`);
-			for (const path of paths.slice(0, 10)) lines.push(`- ${String(path)}`);
-			if (paths.length > 10) lines.push(`- ...and ${paths.length - 10} more`);
-		} else {
-			lines.push('Target: selected paths');
-		}
-		if (typeof args.body === 'string' && args.body.length > 0) {
-			const lineCount = args.body.split(/\r\n|\r|\n/).length;
-			lines.push(`Body: ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`);
-		}
-		const trailers = Array.isArray(args.trailers) ? args.trailers : [];
-		if (trailers.length > 0) {
-			const tokens = trailers
-				.map((trailer) =>
-					trailer && typeof trailer === 'object'
-						? String((trailer as Record<string, unknown>).token ?? '')
-						: ''
-				)
-				.filter(Boolean);
-			lines.push(
-				`Trailers: ${trailers.length}${tokens.length ? ` (${tokens.slice(0, 5).join(', ')}${tokens.length > 5 ? ', ...' : ''})` : ''}`
-			);
-		}
-		lines.push('Approval: one-time only; stored grants are disabled for git_commit.');
-		return lines.join('\n');
+	if (tool === 'git_commit') {
+		const summary = summarizeGitCommitPermission(req.args);
+		if (summary) return summary;
 	}
 	return req.fullCommandText ?? req.fileName ?? req.path ?? req.url ?? req.toolDescription ?? tool;
 }
