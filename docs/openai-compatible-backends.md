@@ -20,6 +20,24 @@ Keep the backend reachable from the portal process. For Docker deployments, use
 a host or service name that is valid from inside the container rather than a
 desktop-only loopback address.
 
+## Trust model and production egress
+
+`OPENAI_COMPATIBLE_BASE_URL` is trusted operator configuration loaded from the
+portal environment. It is not accepted from chat messages, model output, or
+untrusted browser input, so the portal intentionally allows both hosted HTTPS
+endpoints and local/private HTTP endpoints such as `http://127.0.0.1:1234/v1`,
+Docker service names, or internal model gateways.
+
+The portal does not impose scheme restrictions or private-network deny rules on
+this URL because those would block the local and self-hosted deployments this
+provider is designed for. Production deployments that need stricter egress
+policy should enforce it outside the portal, for example with container network
+policy, firewall rules, proxy allowlists, or secret-management controls over the
+environment. The portal does bound outbound provider requests: model-discovery
+requests time out after 10 seconds, and chat-completion requests must return
+response headers within 120 seconds. Once a streaming chat response starts, it
+may continue until the turn finishes or the user/server aborts it.
+
 ## Configure the portal
 
 Set these environment variables and restart the portal:

@@ -163,7 +163,7 @@ invalid config.
 | `COPILOT_CLI_URL`         | —                        | If set, connect to an external `copilot --headless --port N` instead of spawning the bundled CLI. See `docs/deployment.md` Topology C. |
 | `DEFAULT_BACKEND_PROVIDER`| `copilot`                | Default backend for new conversations: `copilot` \| `openai-compatible` \| `lm-studio`. |
 | `DEFAULT_MODEL`           | `claude-sonnet-4.5`      | Default model id for new conversations, stored separately from the provider id. |
-| `OPENAI_COMPATIBLE_BASE_URL` | —                     | Base `/v1` URL for an OpenAI-compatible backend. |
+| `OPENAI_COMPATIBLE_BASE_URL` | —                     | Trusted operator-configured base `/v1` URL for an OpenAI-compatible backend; may intentionally be hosted, local, or private. |
 | `OPENAI_COMPATIBLE_API_KEY` | —                      | Optional bearer token for the generic OpenAI-compatible backend. |
 | `OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS` | `8`       | Maximum OpenAI-compatible tool-calling loops before the portal stops the turn. |
 | `OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES` | `20`  | Maximum complete portal messages replayed when a fresh OpenAI-compatible session restores context. |

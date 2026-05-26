@@ -5,7 +5,7 @@ import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 import { buildGitTools, type PortalTool } from '../tools/git';
 import { buildPermissionTools } from '../tools/permissions';
 import { buildTicketTools } from '../tools/tickets';
-import { jsonRequestHeaders, parseJson, streamSseData } from './provider-utils';
+import { fetchWithTimeout, jsonRequestHeaders, parseJson, streamSseData } from './provider-utils';
 import type { BackendProviderId, PortalEvent, SessionMode, ToolCallRecord } from '$lib/types';
 import { AsyncQueue } from '../runtime/async-queue';
 import { createInteractiveCallbacks } from '../copilot/interactive-adapter';
@@ -111,6 +111,8 @@ interface ModelsResponse {
 
 const providerId = 'openai-compatible' satisfies Extract<BackendProviderId, 'openai-compatible'>;
 const displayName = 'OpenAI compatible';
+const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
+const CHAT_RESPONSE_TIMEOUT_MS = 120_000;
 
 export const openAICompatibleProvider: ModelBackendProvider = {
 	id: providerId,
@@ -226,9 +228,13 @@ export const openAICompatibleProvider: ModelBackendProvider = {
 		const cfg = providerConfig();
 		if (!cfg.baseUrl) return [];
 		try {
-			const res = await fetch(endpoint(cfg.baseUrl, '/models'), {
-				headers: requestHeaders(cfg)
-			});
+			const res = await fetchWithTimeout(
+				endpoint(cfg.baseUrl, '/models'),
+				{
+					headers: requestHeaders(cfg)
+				},
+				MODEL_DISCOVERY_TIMEOUT_MS
+			);
 			const body = (await parseJson(res)) as ModelsResponse;
 			if (!res.ok) {
 				log.warn('openai_compatible.models_failed', {
@@ -323,6 +329,9 @@ function chunkText(chunk: ChatStreamChunk): string {
 }
 
 function backendErrorMessage(cfg: OpenAICompatibleConfig, e: unknown): string {
+	if (e instanceof Error && e.name === 'TimeoutError') {
+		return `Timed out connecting to ${cfg.displayName} backend at ${cfg.baseUrl}. Check that the server is reachable from the portal process.`;
+	}
 	if (e instanceof Error && e.name === 'AbortError') return 'Aborted by client.';
 	if (e instanceof TypeError) {
 		return `Unable to connect to ${cfg.displayName} backend at ${cfg.baseUrl}. Check that the server is running and OPENAI_COMPATIBLE_BASE_URL points at its /v1 endpoint.`;
@@ -429,20 +438,24 @@ export function openOpenAICompatibleSession(
 		messages.push({ role: 'user', content: prompt });
 		for (let iteration = 0; iteration < cfg.maxToolIterations; iteration += 1) {
 			const messagesLength = messages.length;
-			const res = await fetch(endpoint(cfg.baseUrl!, '/chat/completions'), {
-				method: 'POST',
-				headers: requestHeaders(cfg),
-				body: JSON.stringify({
-					model: opts.model,
-					messages,
-					tools: openAITools,
-					tool_choice: 'auto',
-					stream: true,
-					...cfg.sampling,
-					...(cfg.includeUsage ? { stream_options: { include_usage: true } } : {})
-				}),
-				signal: activeAbortController?.signal
-			});
+			const res = await fetchWithTimeout(
+				endpoint(cfg.baseUrl!, '/chat/completions'),
+				{
+					method: 'POST',
+					headers: requestHeaders(cfg),
+					body: JSON.stringify({
+						model: opts.model,
+						messages,
+						tools: openAITools,
+						tool_choice: 'auto',
+						stream: true,
+						...cfg.sampling,
+						...(cfg.includeUsage ? { stream_options: { include_usage: true } } : {})
+					}),
+					signal: activeAbortController?.signal
+				},
+				CHAT_RESPONSE_TIMEOUT_MS
+			);
 			const turn = yieldFromQueue(streamChatCompletionTurn(cfg, res, messageId), q);
 			const assistantTurn = await turn;
 			if (aborted) return;

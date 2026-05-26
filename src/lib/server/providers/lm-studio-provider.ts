@@ -1,6 +1,6 @@
 import { loadConfig } from '../config';
 import { log } from '../log';
-import { jsonRequestHeaders, parseJson } from './provider-utils';
+import { fetchWithTimeout, jsonRequestHeaders, parseJson } from './provider-utils';
 import {
 	openAICompatibleSamplingOptions,
 	openOpenAICompatibleSession,
@@ -46,6 +46,7 @@ interface ModelsResponse {
 const providerId = 'lm-studio' satisfies Extract<BackendProviderId, 'lm-studio'>;
 const displayName = 'LM Studio';
 const MODEL_CONTEXT_CACHE_TTL_MS = 5 * 60_000;
+const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 const modelContextCache = new Map<string, { at: number; contextLength: number }>();
 
 export const lmStudioProvider: ModelBackendProvider = {
@@ -147,9 +148,13 @@ export const lmStudioProvider: ModelBackendProvider = {
 	async fetchAuthStatus(): Promise<ProviderAuthStatus> {
 		const cfg = providerConfig();
 		try {
-			const res = await fetch(nativeEndpoint(cfg.nativeBaseUrl, '/models'), {
-				headers: requestHeaders(cfg)
-			});
+			const res = await fetchWithTimeout(
+				nativeEndpoint(cfg.nativeBaseUrl, '/models'),
+				{
+					headers: requestHeaders(cfg)
+				},
+				MODEL_DISCOVERY_TIMEOUT_MS
+			);
 			if (res.ok) {
 				return {
 					isAuthenticated: true,
@@ -172,9 +177,13 @@ export const lmStudioProvider: ModelBackendProvider = {
 	async listModels(): Promise<ProviderModelInfo[]> {
 		const cfg = providerConfig();
 		try {
-			const res = await fetch(nativeEndpoint(cfg.nativeBaseUrl, '/models'), {
-				headers: requestHeaders(cfg)
-			});
+			const res = await fetchWithTimeout(
+				nativeEndpoint(cfg.nativeBaseUrl, '/models'),
+				{
+					headers: requestHeaders(cfg)
+				},
+				MODEL_DISCOVERY_TIMEOUT_MS
+			);
 			const body = (await parseJson(res)) as ModelsResponse;
 			if (!res.ok) {
 				log.warn('lm_studio.models_failed', {
@@ -262,9 +271,13 @@ async function fetchModelContextLength(
 		return cached.contextLength;
 	}
 	try {
-		const res = await fetch(nativeEndpoint(cfg.nativeBaseUrl, '/models'), {
-			headers: requestHeaders(cfg)
-		});
+		const res = await fetchWithTimeout(
+			nativeEndpoint(cfg.nativeBaseUrl, '/models'),
+			{
+				headers: requestHeaders(cfg)
+			},
+			MODEL_DISCOVERY_TIMEOUT_MS
+		);
 		const body = (await parseJson(res)) as ModelsResponse;
 		if (!res.ok) return null;
 		const model = (body.models ?? []).find((candidate) => matchesModel(candidate, modelId));

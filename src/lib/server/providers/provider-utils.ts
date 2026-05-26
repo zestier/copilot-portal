@@ -15,6 +15,45 @@ export function jsonRequestHeaders(apiKey?: string | null): HeadersInit {
 	return headers;
 }
 
+export async function fetchWithTimeout(
+	input: RequestInfo | URL,
+	init: RequestInit,
+	timeoutMs: number
+): Promise<Response> {
+	const timeout = new AbortController();
+	const handle = setTimeout(() => {
+		timeout.abort(new DOMException(`Request timed out after ${timeoutMs}ms.`, 'TimeoutError'));
+	}, timeoutMs);
+	const { signal, cleanup } = combineAbortSignals(init.signal, timeout.signal);
+	try {
+		return await fetch(input, { ...init, signal });
+	} finally {
+		clearTimeout(handle);
+		cleanup();
+	}
+}
+
+function combineAbortSignals(
+	existing: AbortSignal | null | undefined,
+	timeout: AbortSignal
+): { signal: AbortSignal; cleanup: () => void } {
+	if (!existing) return { signal: timeout, cleanup: () => undefined };
+	const combined = new AbortController();
+	const abortFromExisting = () => combined.abort(existing.reason);
+	const abortFromTimeout = () => combined.abort(timeout.reason);
+	if (existing.aborted) abortFromExisting();
+	if (timeout.aborted) abortFromTimeout();
+	existing.addEventListener('abort', abortFromExisting, { once: true });
+	timeout.addEventListener('abort', abortFromTimeout, { once: true });
+	return {
+		signal: combined.signal,
+		cleanup: () => {
+			existing.removeEventListener('abort', abortFromExisting);
+			timeout.removeEventListener('abort', abortFromTimeout);
+		}
+	};
+}
+
 export async function* streamSseData(body: ReadableStream<Uint8Array>): AsyncIterable<string> {
 	for await (const event of streamSseEvents(body)) {
 		yield event.data;

@@ -99,12 +99,15 @@ describe('lmStudioProvider', () => {
 				capabilities: { limits: { max_context_window_tokens: 8192 } }
 			}
 		]);
-		expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:1234/api/v1/models', {
-			headers: {
-				'content-type': 'application/json',
-				authorization: 'Bearer lm-token'
-			}
-		});
+		expect(fetchMock).toHaveBeenCalledWith(
+			'http://127.0.0.1:1234/api/v1/models',
+			expect.objectContaining({
+				headers: {
+					'content-type': 'application/json',
+					authorization: 'Bearer lm-token'
+				}
+			})
+		);
 	});
 
 	it('streams OpenAI-compatible chat chunks with LM Studio context usage metadata', async () => {

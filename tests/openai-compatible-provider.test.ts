@@ -149,12 +149,15 @@ describe('openAICompatibleProvider', () => {
 		await expect(openAICompatibleProvider.listModels('user-1')).resolves.toEqual([
 			{ id: 'local-chat-model', name: 'Local Chat Model' }
 		]);
-		expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:1234/v1/models', {
-			headers: {
-				'content-type': 'application/json',
-				authorization: 'Bearer test-key'
-			}
-		});
+		expect(fetchMock).toHaveBeenCalledWith(
+			'http://127.0.0.1:1234/v1/models',
+			expect.objectContaining({
+				headers: {
+					'content-type': 'application/json',
+					authorization: 'Bearer test-key'
+				}
+			})
+		);
 	});
 
 	it('falls back to manual model entry when model discovery is unavailable', async () => {
