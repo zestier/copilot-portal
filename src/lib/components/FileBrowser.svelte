@@ -39,51 +39,94 @@
 	let showHidden = $state(false);
 	let showIgnored = $state(false);
 	let gitRefreshToken = $state(0);
+	let fileRequestSeq = 0;
+	let fileAbortController: AbortController | null = null;
+	let diffRequestSeq = 0;
+	let diffAbortController: AbortController | null = null;
+	let commitRequestSeq = 0;
+	let commitAbortController: AbortController | null = null;
+	let commitFileDiffRequestSeq = 0;
+	let commitFileDiffAbortController: AbortController | null = null;
+
+	function isAbortError(e: unknown) {
+		return e instanceof Error && e.name === 'AbortError';
+	}
 
 	function bumpGitRefresh() {
 		gitRefreshToken++;
 	}
 
 	function clearSelectionAndRefresh() {
+		fileAbortController?.abort();
+		diffAbortController?.abort();
+		fileRequestSeq++;
+		diffRequestSeq++;
 		selectedPath = null;
 		selectedStatus = null;
 		fileData = null;
 		fileError = null;
+		fileLoading = false;
 		diffText = '';
 		diffError = null;
+		diffLoading = false;
 		bumpGitRefresh();
 	}
 
 	async function loadFile(path: string) {
+		const requestSeq = ++fileRequestSeq;
+		fileAbortController?.abort();
+		const controller = new AbortController();
+		fileAbortController = controller;
 		fileLoading = true;
 		fileError = null;
 		fileData = null;
 		try {
 			const params = new URLSearchParams({ path });
-			const res = await fetch(`/api/conversations/${conversationId}/fs/file?${params}`);
+			const res = await fetch(`/api/conversations/${conversationId}/fs/file?${params}`, {
+				signal: controller.signal
+			});
 			if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-			fileData = (await res.json()).file;
+			const data = (await res.json()) as { file: FileResponse };
+			if (requestSeq !== fileRequestSeq || controller.signal.aborted || selectedPath !== path)
+				return;
+			fileData = data.file;
 		} catch (e) {
+			if (requestSeq !== fileRequestSeq || controller.signal.aborted || isAbortError(e)) return;
 			fileError = e instanceof Error ? e.message : String(e);
 		} finally {
-			fileLoading = false;
+			if (requestSeq === fileRequestSeq && fileAbortController === controller) {
+				fileLoading = false;
+				fileAbortController = null;
+			}
 		}
 	}
 
 	async function loadDiff(path: string) {
+		const requestSeq = ++diffRequestSeq;
+		diffAbortController?.abort();
+		const controller = new AbortController();
+		diffAbortController = controller;
 		diffLoading = true;
 		diffError = null;
 		diffText = '';
 		try {
 			const params = new URLSearchParams({ target: 'worktree-vs-head', path });
-			const res = await fetch(`/api/conversations/${conversationId}/fs/diff?${params}`);
+			const res = await fetch(`/api/conversations/${conversationId}/fs/diff?${params}`, {
+				signal: controller.signal
+			});
 			if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
 			const data = (await res.json()) as { diff: string };
+			if (requestSeq !== diffRequestSeq || controller.signal.aborted || selectedPath !== path)
+				return;
 			diffText = data.diff;
 		} catch (e) {
+			if (requestSeq !== diffRequestSeq || controller.signal.aborted || isAbortError(e)) return;
 			diffError = e instanceof Error ? e.message : String(e);
 		} finally {
-			diffLoading = false;
+			if (requestSeq === diffRequestSeq && diffAbortController === controller) {
+				diffLoading = false;
+				diffAbortController = null;
+			}
 		}
 	}
 
@@ -122,36 +165,73 @@
 	});
 
 	async function loadCommit(sha: string) {
+		const requestSeq = ++commitRequestSeq;
+		commitAbortController?.abort();
+		commitFileDiffAbortController?.abort();
+		commitFileDiffRequestSeq++;
+		const controller = new AbortController();
+		commitAbortController = controller;
 		selectedSha = sha;
 		commitDetail = null;
 		commitDetailError = null;
 		commitFilePath = null;
 		commitFileDiff = '';
 		try {
-			const res = await fetch(`/api/conversations/${conversationId}/git/commit/${sha}`);
+			const res = await fetch(`/api/conversations/${conversationId}/git/commit/${sha}`, {
+				signal: controller.signal
+			});
 			if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-			commitDetail = (await res.json()).commit;
+			const data = (await res.json()) as { commit: CommitDetail };
+			if (requestSeq !== commitRequestSeq || controller.signal.aborted || selectedSha !== sha)
+				return;
+			commitDetail = data.commit;
 		} catch (e) {
+			if (requestSeq !== commitRequestSeq || controller.signal.aborted || isAbortError(e)) return;
 			commitDetailError = e instanceof Error ? e.message : String(e);
+		} finally {
+			if (requestSeq === commitRequestSeq && commitAbortController === controller) {
+				commitAbortController = null;
+			}
 		}
 	}
 
 	async function loadCommitFileDiff(path: string) {
 		if (!selectedSha) return;
+		const sha = selectedSha;
+		const requestSeq = ++commitFileDiffRequestSeq;
+		commitFileDiffAbortController?.abort();
+		const controller = new AbortController();
+		commitFileDiffAbortController = controller;
 		commitFilePath = path;
 		commitFileDiff = '';
 		try {
 			const params = new URLSearchParams({
 				target: 'commit-vs-parent',
-				sha: selectedSha,
+				sha,
 				path
 			});
-			const res = await fetch(`/api/conversations/${conversationId}/fs/diff?${params}`);
+			const res = await fetch(`/api/conversations/${conversationId}/fs/diff?${params}`, {
+				signal: controller.signal
+			});
 			if (!res.ok) throw new Error(await res.text());
 			const data = (await res.json()) as { diff: string };
+			if (
+				requestSeq !== commitFileDiffRequestSeq ||
+				controller.signal.aborted ||
+				selectedSha !== sha ||
+				commitFilePath !== path
+			) {
+				return;
+			}
 			commitFileDiff = data.diff;
 		} catch (e) {
+			if (requestSeq !== commitFileDiffRequestSeq || controller.signal.aborted || isAbortError(e))
+				return;
 			commitFileDiff = `Failed to load diff: ${e instanceof Error ? e.message : String(e)}`;
+		} finally {
+			if (requestSeq === commitFileDiffRequestSeq && commitFileDiffAbortController === controller) {
+				commitFileDiffAbortController = null;
+			}
 		}
 	}
 

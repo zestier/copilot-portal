@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Route } from '@playwright/test';
 import { writeFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
@@ -36,6 +36,24 @@ async function createConversation(request: import('@playwright/test').APIRequest
 	return { id: body.conversation.id as string };
 }
 
+function deferred() {
+	let resolve!: () => void;
+	const promise = new Promise<void>((r) => {
+		resolve = r;
+	});
+	return { promise, resolve };
+}
+
+async function fulfillJson(route: Route, body: unknown) {
+	await route
+		.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify(body)
+		})
+		.catch(() => undefined);
+}
+
 test('Files tab lists workspace contents and reads a file', async ({ page, request }) => {
 	const { id } = await createConversation(request);
 	// Drop a file at the workspace root.
@@ -65,6 +83,61 @@ test('Files tab lists workspace contents and reads a file', async ({ page, reque
 	await expect(page).toHaveURL(`/conversations/${id}?tab=files`);
 	await expect(page.getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
 	await expect(page.getByRole('button', { name: /hello\.txt/ })).toBeVisible();
+});
+
+test('Files tab ignores stale content responses after rapid selection changes', async ({
+	page,
+	request
+}) => {
+	const { id } = await createConversation(request);
+	writeFileSync(join(workspaceRoot, 'slow.txt'), 'real slow\n');
+	writeFileSync(join(workspaceRoot, 'fresh.txt'), 'real fresh\n');
+
+	const slowStarted = deferred();
+	const releaseSlow = deferred();
+	await page.route(`**/api/conversations/${id}/fs/file?**`, async (route) => {
+		const path = new URL(route.request().url()).searchParams.get('path');
+		if (path === 'slow.txt') {
+			slowStarted.resolve();
+			await releaseSlow.promise;
+			await fulfillJson(route, {
+				file: {
+					binary: false,
+					path: 'slow.txt',
+					content: 'stale slow\n',
+					size: 11,
+					truncated: false
+				}
+			});
+			return;
+		}
+		if (path === 'fresh.txt') {
+			await fulfillJson(route, {
+				file: {
+					binary: false,
+					path: 'fresh.txt',
+					content: 'current fresh\n',
+					size: 14,
+					truncated: false
+				}
+			});
+			return;
+		}
+		await route.continue();
+	});
+
+	await page.goto(`/conversations/${id}`);
+	await page.getByRole('tab', { name: 'Files' }).click();
+	await expect(page.getByRole('button', { name: /slow\.txt/ })).toBeVisible();
+
+	await page.getByRole('button', { name: /slow\.txt/ }).click();
+	await slowStarted.promise;
+	await page.getByRole('button', { name: /fresh\.txt/ }).click();
+	await expect(page.locator('pre.file-view')).toContainText('current fresh');
+
+	releaseSlow.resolve();
+	await expect(page.locator('pre.file-view')).toContainText('current fresh');
+	await expect(page.locator('pre.file-view')).not.toContainText('stale slow');
 });
 
 test('Files tab reports git status when workspace is a repo', async ({ request }) => {
@@ -167,4 +240,82 @@ test('Changes tab lists modified files with +/- stats and a working diff', async
 	await expect(diff.locator('.line.add').first()).toBeVisible();
 	await expect(diff.locator('.line.del').first()).toBeVisible();
 	await expect(diff.locator('.line.add .gutter').first()).not.toHaveText('');
+});
+
+test('Changes tab ignores stale diff responses after rapid selection changes', async ({
+	page,
+	request
+}) => {
+	const { id } = await createConversation(request);
+	const g = (args: string[]) => execFileSync('git', args, { cwd: workspaceRoot, stdio: 'pipe' });
+	g(['init', '-q', '-b', 'main']);
+	g(['config', 'user.email', 'e2e@example.com']);
+	g(['config', 'user.name', 'E2E']);
+	g(['config', 'commit.gpgsign', 'false']);
+	mkdirSync(join(workspaceRoot, 'pkg'), { recursive: true });
+	writeFileSync(join(workspaceRoot, 'tracked.txt'), 'one\ntwo\n');
+	writeFileSync(join(workspaceRoot, 'pkg', 'mod.txt'), 'alpha\nbeta\n');
+	g(['add', 'tracked.txt', 'pkg/mod.txt']);
+	g(['commit', '-q', '-m', 'baseline']);
+	writeFileSync(join(workspaceRoot, 'tracked.txt'), 'one\nTWO\n');
+	writeFileSync(join(workspaceRoot, 'pkg', 'mod.txt'), 'alpha\nbeta\ngamma\n');
+
+	const slowDiffStarted = deferred();
+	const releaseSlowDiff = deferred();
+	await page.route(`**/api/conversations/${id}/fs/diff?**`, async (route) => {
+		const url = new URL(route.request().url());
+		const path = url.searchParams.get('path');
+		if (url.searchParams.get('target') !== 'worktree-vs-head') {
+			await route.continue();
+			return;
+		}
+		if (path === 'tracked.txt') {
+			slowDiffStarted.resolve();
+			await releaseSlowDiff.promise;
+			await fulfillJson(route, {
+				diff: [
+					'diff --git a/tracked.txt b/tracked.txt',
+					'--- a/tracked.txt',
+					'+++ b/tracked.txt',
+					'@@ -1,2 +1,2 @@',
+					' one',
+					'-two',
+					'+STALE'
+				].join('\n')
+			});
+			return;
+		}
+		if (path === 'pkg/mod.txt') {
+			await fulfillJson(route, {
+				diff: [
+					'diff --git a/pkg/mod.txt b/pkg/mod.txt',
+					'--- a/pkg/mod.txt',
+					'+++ b/pkg/mod.txt',
+					'@@ -1,2 +1,3 @@',
+					' alpha',
+					' beta',
+					'+gamma'
+				].join('\n')
+			});
+			return;
+		}
+		await route.continue();
+	});
+
+	await page.goto(`/conversations/${id}`);
+	const changesTab = page.getByRole('tab', { name: 'Changes' });
+	await changesTab.click();
+	await expect(page.getByRole('button', { name: /tracked\.txt/ })).toBeVisible();
+
+	await page.getByRole('button', { name: /tracked\.txt/ }).click();
+	await slowDiffStarted.promise;
+	await page.getByRole('button', { name: /pkg\/mod\.txt/ }).click();
+	await expect(page.locator('.header code.path')).toHaveText('pkg/mod.txt');
+	await expect(page.locator('.diff code.path').first()).toHaveText('pkg/mod.txt');
+	await expect(page.locator('.diff')).toContainText('gamma');
+
+	releaseSlowDiff.resolve();
+	await expect(page.locator('.header code.path')).toHaveText('pkg/mod.txt');
+	await expect(page.locator('.diff')).toContainText('gamma');
+	await expect(page.locator('.diff')).not.toContainText('STALE');
 });
