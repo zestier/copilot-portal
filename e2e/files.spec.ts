@@ -1,36 +1,25 @@
 import { test, expect, type Route } from '@playwright/test';
-import { writeFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resetConversations } from './helpers/reset';
+import { uniqueTitle } from './helpers/conversations';
 
 // Server is launched with cwd=DATA_DIR (see playwright.config.ts) so the file
 // browser's workspace root is this directory.
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '.tmp-data');
 
-// File-browser endpoints operate on a shared workspace root. To keep tests
-// independent we clear the root before each test, preserving only the
-// SQLite DB and the per-conversation workspaces/ subdirectory that the
-// server manages.
-const PRESERVE = new Set([
-	'portal.db',
-	'portal.db-journal',
-	'portal.db-wal',
-	'portal.db-shm',
-	'workspaces'
-]);
+function createWorkdir() {
+	return mkdtempSync(join(workspaceRoot, 'test-workdir-'));
+}
 
-test.beforeEach(async ({ request }) => {
-	for (const name of readdirSync(workspaceRoot)) {
-		if (PRESERVE.has(name)) continue;
-		rmSync(join(workspaceRoot, name), { recursive: true, force: true });
-	}
-	await resetConversations(request);
-});
-
-async function createConversation(request: import('@playwright/test').APIRequestContext) {
-	const res = await request.post('/api/conversations', { data: { title: 'E2E files' } });
+async function createConversation(
+	request: import('@playwright/test').APIRequestContext,
+	workdir: string
+) {
+	const res = await request.post('/api/conversations', {
+		data: { title: uniqueTitle('E2E files'), workdir }
+	});
 	expect(res.ok()).toBeTruthy();
 	const body = await res.json();
 	return { id: body.conversation.id as string };
@@ -55,11 +44,12 @@ async function fulfillJson(route: Route, body: unknown) {
 }
 
 test('Files tab lists workspace contents and reads a file', async ({ page, request }) => {
-	const { id } = await createConversation(request);
+	const workdir = createWorkdir();
+	const { id } = await createConversation(request, workdir);
 	// Drop a file at the workspace root.
-	writeFileSync(join(workspaceRoot, 'hello.txt'), 'greetings\n');
-	mkdirSync(join(workspaceRoot, 'sub'), { recursive: true });
-	writeFileSync(join(workspaceRoot, 'sub', 'inner.txt'), 'nested\n');
+	writeFileSync(join(workdir, 'hello.txt'), 'greetings\n');
+	mkdirSync(join(workdir, 'sub'), { recursive: true });
+	writeFileSync(join(workdir, 'sub', 'inner.txt'), 'nested\n');
 
 	const tree = await request.get(`/api/conversations/${id}/fs/tree`);
 	expect(tree.ok()).toBeTruthy();
@@ -89,9 +79,10 @@ test('Files tab ignores stale content responses after rapid selection changes', 
 	page,
 	request
 }) => {
-	const { id } = await createConversation(request);
-	writeFileSync(join(workspaceRoot, 'slow.txt'), 'real slow\n');
-	writeFileSync(join(workspaceRoot, 'fresh.txt'), 'real fresh\n');
+	const workdir = createWorkdir();
+	const { id } = await createConversation(request, workdir);
+	writeFileSync(join(workdir, 'slow.txt'), 'real slow\n');
+	writeFileSync(join(workdir, 'fresh.txt'), 'real fresh\n');
 
 	const slowStarted = deferred();
 	const releaseSlow = deferred();
@@ -141,10 +132,11 @@ test('Files tab ignores stale content responses after rapid selection changes', 
 });
 
 test('Files tab reports git status when workspace is a repo', async ({ request }) => {
-	const { id } = await createConversation(request);
+	const workdir = createWorkdir();
+	const { id } = await createConversation(request, workdir);
 	// Init a fresh git repo in a subdirectory of the workspace root, then
 	// drive the FS endpoints by navigating into it via ?path=.
-	const repo = join(workspaceRoot, 'repo');
+	const repo = join(workdir, 'repo');
 	mkdirSync(repo, { recursive: true });
 	execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
 	execFileSync('git', ['config', 'user.email', 'e2e@example.com'], { cwd: repo });
@@ -171,24 +163,25 @@ test('Changes tab lists modified files with +/- stats and a working diff', async
 	page,
 	request
 }) => {
-	const { id } = await createConversation(request);
+	const workdir = createWorkdir();
+	const { id } = await createConversation(request, workdir);
 
-	// Initialise the workspace root itself as a repo so /git/changes
-	// (which runs against workspaceRoot) returns real data.
-	const g = (args: string[]) => execFileSync('git', args, { cwd: workspaceRoot, stdio: 'pipe' });
+	// Initialise this conversation's workdir as a repo so /git/changes
+	// returns real data.
+	const g = (args: string[]) => execFileSync('git', args, { cwd: workdir, stdio: 'pipe' });
 	g(['init', '-q', '-b', 'main']);
 	g(['config', 'user.email', 'e2e@example.com']);
 	g(['config', 'user.name', 'E2E']);
 	g(['config', 'commit.gpgsign', 'false']);
-	writeFileSync(join(workspaceRoot, 'tracked.txt'), 'one\ntwo\nthree\n');
-	mkdirSync(join(workspaceRoot, 'pkg'), { recursive: true });
-	writeFileSync(join(workspaceRoot, 'pkg', 'mod.txt'), 'alpha\nbeta\n');
+	writeFileSync(join(workdir, 'tracked.txt'), 'one\ntwo\nthree\n');
+	mkdirSync(join(workdir, 'pkg'), { recursive: true });
+	writeFileSync(join(workdir, 'pkg', 'mod.txt'), 'alpha\nbeta\n');
 	g(['add', 'tracked.txt', 'pkg/mod.txt']);
 	g(['commit', '-q', '-m', 'baseline']);
 	// Now make a working-tree change: 2 lines added, 1 removed in tracked.txt.
-	writeFileSync(join(workspaceRoot, 'tracked.txt'), 'one\nTWO\nthree\nfour\nfive\n');
+	writeFileSync(join(workdir, 'tracked.txt'), 'one\nTWO\nthree\nfour\nfive\n');
 	// And an addition deep inside a directory so we can check folder aggregation.
-	writeFileSync(join(workspaceRoot, 'pkg', 'mod.txt'), 'alpha\nbeta\ngamma\n');
+	writeFileSync(join(workdir, 'pkg', 'mod.txt'), 'alpha\nbeta\ngamma\n');
 
 	// --- API: /git/changes shape and line counts ------------------------
 	const changesRes = await request.get(`/api/conversations/${id}/git/changes`);
@@ -246,19 +239,20 @@ test('Changes tab ignores stale diff responses after rapid selection changes', a
 	page,
 	request
 }) => {
-	const { id } = await createConversation(request);
-	const g = (args: string[]) => execFileSync('git', args, { cwd: workspaceRoot, stdio: 'pipe' });
+	const workdir = createWorkdir();
+	const { id } = await createConversation(request, workdir);
+	const g = (args: string[]) => execFileSync('git', args, { cwd: workdir, stdio: 'pipe' });
 	g(['init', '-q', '-b', 'main']);
 	g(['config', 'user.email', 'e2e@example.com']);
 	g(['config', 'user.name', 'E2E']);
 	g(['config', 'commit.gpgsign', 'false']);
-	mkdirSync(join(workspaceRoot, 'pkg'), { recursive: true });
-	writeFileSync(join(workspaceRoot, 'tracked.txt'), 'one\ntwo\n');
-	writeFileSync(join(workspaceRoot, 'pkg', 'mod.txt'), 'alpha\nbeta\n');
+	mkdirSync(join(workdir, 'pkg'), { recursive: true });
+	writeFileSync(join(workdir, 'tracked.txt'), 'one\ntwo\n');
+	writeFileSync(join(workdir, 'pkg', 'mod.txt'), 'alpha\nbeta\n');
 	g(['add', 'tracked.txt', 'pkg/mod.txt']);
 	g(['commit', '-q', '-m', 'baseline']);
-	writeFileSync(join(workspaceRoot, 'tracked.txt'), 'one\nTWO\n');
-	writeFileSync(join(workspaceRoot, 'pkg', 'mod.txt'), 'alpha\nbeta\ngamma\n');
+	writeFileSync(join(workdir, 'tracked.txt'), 'one\nTWO\n');
+	writeFileSync(join(workdir, 'pkg', 'mod.txt'), 'alpha\nbeta\ngamma\n');
 
 	const slowDiffStarted = deferred();
 	const releaseSlowDiff = deferred();

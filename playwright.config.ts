@@ -10,6 +10,8 @@ const dataDir = resolve(__dirname, 'e2e/.tmp-data');
 
 const PORT = Number(process.env.E2E_PORT ?? 4173);
 const buildEntry = resolve(__dirname, 'build');
+const requestedWorkers = Number(process.env.E2E_WORKERS ?? 2);
+const workers = Number.isFinite(requestedWorkers) ? Math.max(1, requestedWorkers) : 2;
 
 // Synchronously probe whether something is already listening on PORT.
 // We need this at config-evaluation time so we can decide whether it's
@@ -40,10 +42,10 @@ if (!willReuseServer) {
 
 export default defineConfig({
 	testDir: './e2e',
-	fullyParallel: false,
+	fullyParallel: true,
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 1 : 0,
-	workers: 1,
+	workers,
 	reporter: process.env.CI ? [['html', { open: 'never' }], ['list']] : 'list',
 	timeout: 30_000,
 	expect: { timeout: 5_000 },

@@ -31,6 +31,7 @@ export default ts.config(
 			'dist/',
 			'data/',
 			'e2e/.tmp-data/',
+			'*.timestamp-*.mjs',
 			'playwright-report/',
 			'test-results/'
 		]

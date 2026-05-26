@@ -53,7 +53,7 @@ See [docs/deployment.md](docs/deployment.md) for the OAuth + tunnel setup.
 | `pnpm test`                     | Vitest unit tests.                                                                 |
 | `pnpm run test:e2e`             | Build + Playwright e2e (uses stubbed Copilot).                                     |
 | `pnpm run test:e2e:run`         | Playwright e2e only; expects `build/` to already exist.                            |
-| `pnpm run verify`               | Parallel lint/check/unit, then build, then e2e. Same gate redeploy/pre-commit run. |
+| `pnpm run verify`               | Parallel lint/unit/build, then check/e2e. Same gate redeploy/pre-commit run.       |
 | `pnpm run verify:sequential`    | Sequential benchmark of the same verify phases.                                    |
 | `pnpm run release:bump-actions` | Pin GitHub Actions in `.github/workflows/` to current SHAs.                        |
 
@@ -69,12 +69,12 @@ at `scripts/git-hooks/` (containing a `pre-commit` that runs
 check, unit tests, production build, and Playwright e2e. On this workspace
 (2026-05-23), the sequential phase baseline was lint 4.8s, check 3.5s,
 unit 3.9s, build 3.7s, and Playwright e2e 6.0s for a 22.0s total. The
-parallel runner overlaps only lint/check/unit, then runs build and e2e
-serially; that candidate completed in 15.1s. Build stays after check
-because both can write `.svelte-kit`, and e2e stays after build because it
-uses `build/`, `e2e/.tmp-data`, `playwright-report/`, and `test-results/`.
-Each child line is prefixed with its phase label so terminal, pre-commit,
-and redeploy logs identify failures clearly.
+parallel runner uses a small DAG: lint/unit/build have no dependencies, and
+check/e2e depend on build. e2e stays after build because it uses `build/`,
+`e2e/.tmp-data`, `playwright-report/`, and `test-results/`, while check is
+kept after build so both phases do not write `.svelte-kit` at the same time.
+Each child line is prefixed with its phase label so terminal, pre-commit, and
+redeploy logs identify failures clearly.
 
 ## Goals
 

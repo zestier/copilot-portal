@@ -1,4 +1,5 @@
 import { expect, type APIRequestContext } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 
 interface ConversationPayload {
 	activeTurnId: string | null;
@@ -6,9 +7,17 @@ interface ConversationPayload {
 	pendingInteractive: unknown[];
 }
 
-export async function createConversation(request: APIRequestContext, title: string) {
+export function uniqueTitle(prefix: string) {
+	return `${prefix} ${randomUUID().slice(0, 8)}`;
+}
+
+export async function createConversation(
+	request: APIRequestContext,
+	title: string,
+	options: { workdir?: string } = {}
+) {
 	const res = await request.post('/api/conversations', {
-		data: { title }
+		data: { title, ...options }
 	});
 	expect(res.ok()).toBeTruthy();
 	const body = await res.json();

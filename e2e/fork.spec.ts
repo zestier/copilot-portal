@@ -2,13 +2,9 @@ import { test, expect } from '@playwright/test';
 import {
 	createConversation,
 	getConversation,
+	uniqueTitle,
 	waitForAssistantMessage
 } from './helpers/conversations';
-import { resetConversations } from './helpers/reset';
-
-test.beforeEach(async ({ request }) => {
-	await resetConversations(request);
-});
 
 /**
  * End-to-end fork (edit-and-retry) flow:
@@ -23,7 +19,7 @@ test('fork by editing a user message produces a new conversation with the edited
 	page,
 	request
 }) => {
-	const sourceId = await createConversation(request, 'Source');
+	const sourceId = await createConversation(request, uniqueTitle('Source'));
 
 	// Drive the first turn through the UI so the server captures the
 	// pre-snapshot (the POST /turns endpoint is what calls snapshot()).
@@ -87,7 +83,7 @@ test('retry from an assistant message clones up to it without a new user prompt'
 	page,
 	request
 }) => {
-	const sourceId = await createConversation(request, 'Source');
+	const sourceId = await createConversation(request, uniqueTitle('Source'));
 
 	await page.goto(`/conversations/${sourceId}`);
 	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
@@ -122,7 +118,7 @@ test('inline edit replaces a user message, truncates later messages, and reruns 
 	page,
 	request
 }) => {
-	const sourceId = await createConversation(request, 'Inline Source');
+	const sourceId = await createConversation(request, uniqueTitle('Inline Source'));
 
 	await page.goto(`/conversations/${sourceId}`);
 	const composer = page.getByPlaceholder(/Message GitHub Copilot/);

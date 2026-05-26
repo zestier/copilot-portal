@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 import {
 	createConversation,
+	uniqueTitle,
 	waitForAssistantMessage,
 	waitForPendingInteractive
 } from './helpers/conversations';
-import { resetConversations } from './helpers/reset';
 
 // Exercises the new generic interactive-request pipeline end-to-end against
 // the stub bridge. Each scenario seeds a magic trigger token into the user
@@ -13,15 +13,11 @@ import { resetConversations } from './helpers/reset';
 // and verify the turn completes (stub reply renders) without the runner
 // hanging.
 
-test.beforeEach(async ({ request }) => {
-	await resetConversations(request);
-});
-
 test('auto-mode-switch dialog can be declined and the turn completes', async ({
 	page,
 	request
 }) => {
-	const id = await createConversation(request, 'E2E interactive');
+	const id = await createConversation(request, uniqueTitle('E2E interactive'));
 	await page.goto(`/conversations/${id}`);
 
 	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
@@ -46,7 +42,7 @@ test('auto-mode-switch dialog can be declined and the turn completes', async ({
 });
 
 test('exit-plan-mode dialog approves and unblocks the turn', async ({ page, request }) => {
-	const id = await createConversation(request, 'E2E interactive');
+	const id = await createConversation(request, uniqueTitle('E2E interactive'));
 	await page.goto(`/conversations/${id}`);
 
 	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
@@ -71,7 +67,7 @@ test('exit-plan-mode dialog approves and unblocks the turn', async ({ page, requ
 });
 
 test('elicitation form posts the user-supplied values', async ({ page, request }) => {
-	const id = await createConversation(request, 'E2E interactive');
+	const id = await createConversation(request, uniqueTitle('E2E interactive'));
 	await page.goto(`/conversations/${id}`);
 
 	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
@@ -96,7 +92,7 @@ test('elicitation form posts the user-supplied values', async ({ page, request }
 });
 
 test('permission flow still works via the new interactive endpoint', async ({ page, request }) => {
-	const id = await createConversation(request, 'E2E interactive');
+	const id = await createConversation(request, uniqueTitle('E2E interactive'));
 	await page.goto(`/conversations/${id}`);
 
 	const composer = page.getByPlaceholder(/Message GitHub Copilot/);

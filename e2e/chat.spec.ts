@@ -1,16 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { createConversation, waitForAssistantMessage } from './helpers/conversations';
-import { resetConversations } from './helpers/reset';
-
-test.beforeEach(async ({ request }) => {
-	await resetConversations(request);
-});
+import { createConversation, uniqueTitle, waitForAssistantMessage } from './helpers/conversations';
 
 test('streamed assistant reply (stubbed) appears and persists across reloads', async ({
 	page,
 	request
 }) => {
-	const id = await createConversation(request, 'E2E chat');
+	const id = await createConversation(request, uniqueTitle('E2E chat'));
 	await page.goto(`/conversations/${id}`);
 
 	const composer = page.getByPlaceholder(/Message GitHub Copilot/);
@@ -29,7 +24,7 @@ test('streamed assistant reply (stubbed) appears and persists across reloads', a
 });
 
 test('rejects empty messages on the server', async ({ request }) => {
-	const id = await createConversation(request, 'E2E chat');
+	const id = await createConversation(request, uniqueTitle('E2E chat'));
 	const res = await request.post(`/api/conversations/${id}/turns`, {
 		data: { content: '' }
 	});
