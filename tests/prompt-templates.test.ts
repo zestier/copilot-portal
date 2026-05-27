@@ -182,7 +182,7 @@ describe('prompt templates', () => {
 		);
 
 		promptTemplates.archive(custom.id, user.id);
-		expect(() =>
+		await expect(
 			load({
 				params: { id: conv.id },
 				locals: { userId: user.id },
@@ -190,14 +190,14 @@ describe('prompt templates', () => {
 					`http://localhost/conversations/${conv.id}?promptTemplateSource=custom&promptTemplateId=${custom.id}`
 				)
 			} as never)
-		).toThrow(expect.objectContaining({ status: 404 }));
+		).rejects.toMatchObject({ status: 404 });
 
 		const otherConv = convs.create(other.id, {
 			title: 'Other prompt draft',
 			workdir: '/tmp',
 			model: null
 		});
-		expect(() =>
+		await expect(
 			load({
 				params: { id: otherConv.id },
 				locals: { userId: other.id },
@@ -205,6 +205,6 @@ describe('prompt templates', () => {
 					`http://localhost/conversations/${otherConv.id}?promptTemplateSource=custom&promptTemplateId=${custom.id}`
 				)
 			} as never)
-		).toThrow(expect.objectContaining({ status: 404 }));
+		).rejects.toMatchObject({ status: 404 });
 	});
 });

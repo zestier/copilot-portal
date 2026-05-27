@@ -131,6 +131,7 @@ describe('provider registry', () => {
 			conversationId: 'conv-provider',
 			providerSessionId: 'conv-provider',
 			workingDirectory: '/tmp',
+			model: 'local-model',
 			lastUsed: 1,
 			send: async function* () {},
 			abort: async () => {},

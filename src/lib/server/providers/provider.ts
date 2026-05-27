@@ -83,6 +83,7 @@ export interface ProviderSession {
 	conversationId: string;
 	providerSessionId: string;
 	workingDirectory: string;
+	model: string;
 	lastUsed: number;
 	send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent>;
 	abort(): Promise<void>;

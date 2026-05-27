@@ -198,19 +198,23 @@ export function renameIfDefault(id: string, userId: string, title: string): bool
 }
 
 /**
- * Update per-conversation session settings (mode and/or approve-all bypass).
+ * Update per-conversation session settings (model, mode, and/or approve-all bypass).
  * Returns true iff a row was modified. The bridge reads these on each
  * `pool.acquire` so a recreated session inherits the latest values; the
  * /session PATCH endpoint additionally pushes them to the live SDK session
- * via `session.setMode` / `session.setApproveAll`.
+ * via `session.setMode` / `session.setApproveAll` when supported.
  */
 export function updateSessionSettings(
 	id: string,
 	userId: string,
-	patch: { mode?: SessionMode; approveAllTools?: boolean }
+	patch: { model?: string; mode?: SessionMode; approveAllTools?: boolean }
 ): boolean {
 	const sets: string[] = [];
 	const args: Array<string | number> = [];
+	if (patch.model !== undefined) {
+		sets.push('model = ?');
+		args.push(patch.model);
+	}
 	if (patch.mode !== undefined) {
 		sets.push('mode = ?');
 		args.push(patch.mode);

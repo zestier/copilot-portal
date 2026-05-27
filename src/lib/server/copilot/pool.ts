@@ -73,6 +73,7 @@ export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSessio
 			existing.session.providerSessionId ?? existing.session.conversationId;
 		if (
 			existing.session.workingDirectory === opts.workingDirectory &&
+			existing.session.model === opts.model &&
 			cachedProviderSessionId === requestedProviderSessionId &&
 			cachedProvider === requestedProvider
 		) {
@@ -85,6 +86,8 @@ export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSessio
 			requestedProvider,
 			cachedWorkdir: existing.session.workingDirectory,
 			requestedWorkdir: opts.workingDirectory,
+			cachedModel: existing.session.model,
+			requestedModel: opts.model,
 			cachedProviderSessionId,
 			requestedProviderSessionId
 		});

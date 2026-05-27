@@ -298,6 +298,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		conversationId: opts.conversationId,
 		providerSessionId,
 		workingDirectory: opts.workingDirectory,
+		model: opts.model,
 		lastUsed: Date.now(),
 		async *send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent> {
 			if (activeQueue) throw new Error('session busy: a turn is already in progress');

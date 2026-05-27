@@ -15,6 +15,7 @@ export function makeFakeSession(
 		conversationId,
 		providerSessionId: conversationId,
 		workingDirectory,
+		model: 'test-model',
 		async *send(): AsyncIterable<PortalEvent> {
 			for (const e of events) yield e;
 		},

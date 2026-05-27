@@ -1,8 +1,9 @@
-import { json } from '@sveltejs/kit';
+import { error, json } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as pool from '$lib/server/runtime/pool';
+import { getTurn } from '$lib/server/runtime/turn-runner';
 import { getProvider } from '$lib/server/providers';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 import { parseBody } from '$lib/server/validate';
@@ -13,14 +14,17 @@ import { log } from '$lib/server/log';
 // Persists to the conversations row so a future open() picks them up, AND
 // (when a live SDK session is cached in the pool) pushes the change to the
 // running session so the active turn / next message reflects the new setting
-// without needing the session to be recreated.
+// without needing the session to be recreated. Model changes recreate the
+// provider session before the next turn because providers do not expose a
+// cross-runtime live set-model control.
 
 const PatchBody = z
 	.object({
+		model: z.string().trim().min(1).optional(),
 		mode: z.enum(['interactive', 'plan', 'autopilot', 'best-effort']).optional(),
 		approveAllTools: z.boolean().optional()
 	})
-	.refine((b) => b.mode !== undefined || b.approveAllTools !== undefined, {
+	.refine((b) => b.model !== undefined || b.mode !== undefined || b.approveAllTools !== undefined, {
 		message: 'No fields to update'
 	});
 
@@ -28,10 +32,18 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	const conv = authorizeConversation(params.id, locals.userId);
 	const body = await parseBody(request, PatchBody);
 	const provider = getProvider(conv.provider);
+	const modelChanged = body.model !== undefined && body.model !== conv.model;
+	const turn = getTurn(conv.id);
+	if (modelChanged && turn?.status === 'running') {
+		throw error(409, 'Cannot change model while a turn is running.');
+	}
 
 	const persistedPatch = { ...body };
 	convs.updateSessionSettings(conv.id, conv.userId, body);
-	const live = pool.getActive(conv.id);
+	if (modelChanged) {
+		await pool.release(conv.id);
+	}
+	const live = modelChanged ? null : pool.getActive(conv.id);
 	if (live) {
 		// Best-effort: the bridge already logs detailed RPC failures, and
 		// the DB row is the source of truth for the next open(). Don't fail

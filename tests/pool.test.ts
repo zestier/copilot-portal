@@ -28,6 +28,7 @@ describe('copilot session pool', () => {
 		const session = {
 			conversationId: 'conv-1',
 			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
 			lastUsed: Date.now(),
 			send: vi.fn(),
 			abort: vi.fn(),
@@ -63,6 +64,7 @@ describe('copilot session pool', () => {
 		const firstSession = {
 			conversationId: 'conv-1',
 			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
 			lastUsed: Date.now(),
 			send: vi.fn(),
 			abort: vi.fn(),

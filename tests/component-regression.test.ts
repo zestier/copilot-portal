@@ -278,6 +278,9 @@ describe('Svelte component regression coverage', () => {
 				initialPendingInteractive: [pending],
 				providerCapabilities,
 				providerDisplayName: 'Copilot',
+				providerModels: [],
+				defaultModelPlaceholder: 'claude-sonnet-4.5',
+				effectiveModel: 'claude-sonnet-4.5',
 				chatPlaceholder: 'Ask Copilot'
 			}
 		}).body;

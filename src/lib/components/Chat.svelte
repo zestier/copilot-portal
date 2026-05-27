@@ -37,11 +37,19 @@
 		initialComposer = '',
 		providerCapabilities,
 		providerDisplayName,
+		providerModels,
+		providerModelsError = null,
+		defaultModelPlaceholder,
+		effectiveModel,
 		chatPlaceholder
 	}: {
 		conversation: Conversation;
 		providerCapabilities: ProviderCapabilities;
 		providerDisplayName: string;
+		providerModels: { id: string; name: string; maxContextWindowTokens?: number }[];
+		providerModelsError?: string | null;
+		defaultModelPlaceholder: string;
+		effectiveModel: string;
 		chatPlaceholder: string;
 		initialMessages: Message[];
 		initialUsage?: ConversationUsage | null;
@@ -58,6 +66,7 @@
 
 	let messages = $state<Message[]>([]);
 	let title = $state<string>(untrack(() => conversation.title));
+	let sessionModel = $state<string>(untrack(() => conversation.model ?? effectiveModel));
 	let sessionMode = $state<Conversation['mode']>(untrack(() => conversation.mode));
 	let approveAllTools = $state<boolean>(untrack(() => conversation.approveAllTools));
 	let usage = $state<ConversationUsage | null>(untrack(() => initialUsage));
@@ -118,6 +127,7 @@
 			closeStream();
 			messages = [...initialMessages];
 			title = conversation.title;
+			sessionModel = conversation.model ?? effectiveModel;
 			sessionMode = conversation.mode;
 			approveAllTools = conversation.approveAllTools;
 			usage = initialUsage;
@@ -772,12 +782,18 @@
 		{conversation}
 		{providerCapabilities}
 		{providerDisplayName}
+		model={sessionModel}
+		{providerModels}
+		{providerModelsError}
+		{defaultModelPlaceholder}
 		{parent}
 		{usage}
 		{recentCompaction}
 		mode={sessionMode}
 		{approveAllTools}
+		modelChangeDisabled={streaming}
 		onSettingsChange={(patch) => {
+			if (patch.model !== undefined) sessionModel = patch.model;
 			if (patch.mode !== undefined) sessionMode = patch.mode;
 			if (patch.approveAllTools !== undefined) approveAllTools = patch.approveAllTools;
 		}}
