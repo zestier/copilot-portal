@@ -33,6 +33,7 @@ import type {
 	PermissionPolicy,
 	PortalEvent
 } from '$lib/types';
+import { defaultInteractiveResponse } from '$lib/interactive/request-registry';
 import { isFilesystemPermissionKind } from '$lib/permissions/metadata';
 
 // Default = no timeout. We used to default to 10 minutes "so a forgotten
@@ -302,20 +303,7 @@ export function cancelConversation(conversationId: string, reason: string = 'tur
 	}
 }
 
-const interactiveKindDescriptors = {
-	permission: () => ({ kind: 'permission', decision: 'deny' }),
-	auto_mode_switch: () => ({ kind: 'auto_mode_switch', decision: 'no' }),
-	user_input: () => ({ kind: 'user_input', answer: '', wasFreeform: true }),
-	elicitation: () => ({ kind: 'elicitation', action: 'cancel' }),
-	exit_plan_mode: () => ({ kind: 'exit_plan_mode', approved: false }),
-	sampling: () => ({ kind: 'sampling', action: 'ack' }),
-	mcp_oauth: () => ({ kind: 'mcp_oauth', action: 'ack' }),
-	external_tool: () => ({ kind: 'external_tool', action: 'ack' })
-} satisfies Record<InteractiveKind, () => InteractiveResponse>;
-
-export function defaultInteractiveResponse(kind: InteractiveKind): InteractiveResponse {
-	return interactiveKindDescriptors[kind]();
-}
+export { defaultInteractiveResponse };
 
 function normalizeDenyFeedback(feedback: string | undefined): string | null {
 	const trimmed = feedback?.trim();

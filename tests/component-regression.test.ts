@@ -180,6 +180,86 @@ describe('Svelte component regression coverage', () => {
 		expect(body).toMatch(/<button[^>]+class="btn primary"[^>]+disabled/);
 	});
 
+	test('InteractiveRequestDialog renders non-permission request families through focused children', () => {
+		const requests: Array<[InteractiveRequestView, string[]]> = [
+			[
+				{
+					requestId: 'auto-1',
+					kind: 'auto_mode_switch',
+					errorCode: 'rate_limit',
+					retryAfterSeconds: 30
+				},
+				['Switch to auto mode?', 'rate_limit', 'Yes, once']
+			],
+			[
+				{
+					requestId: 'input-1',
+					kind: 'user_input',
+					question: 'Choose a branch',
+					choices: ['develop'],
+					allowFreeform: true
+				},
+				['The agent has a question', 'Choose a branch', 'develop']
+			],
+			[
+				{
+					requestId: 'elicitation-1',
+					kind: 'elicitation',
+					message: 'Provide deploy target',
+					mode: 'form',
+					requestedSchema: {
+						type: 'object',
+						properties: {
+							target: { type: 'string', title: 'Target', default: 'staging' }
+						}
+					}
+				},
+				['Agent needs information', 'Provide deploy target', 'Target']
+			],
+			[
+				{
+					requestId: 'plan-1',
+					kind: 'exit_plan_mode',
+					summary: 'Ready to implement',
+					actions: ['autopilot'],
+					recommendedAction: 'autopilot'
+				},
+				['Ready to exit plan mode?', 'Ready to implement', 'autopilot']
+			],
+			[
+				{ requestId: 'sampling-1', kind: 'sampling', summary: 'Sampling requested' },
+				['MCP sampling request', 'Sampling requested', 'Dismiss']
+			],
+			[
+				{
+					requestId: 'oauth-1',
+					kind: 'mcp_oauth',
+					summary: 'OAuth required',
+					authorizationUrl: 'https://example.com/auth'
+				},
+				['MCP server authentication', 'OAuth required', 'Open authorization URL']
+			],
+			[
+				{
+					requestId: 'external-1',
+					kind: 'external_tool',
+					toolName: 'deploy',
+					summary: 'External deploy requested'
+				},
+				['External tool: deploy', 'External deploy requested', 'Dismiss']
+			]
+		];
+
+		for (const [request, expected] of requests) {
+			const body = render(InteractiveRequestDialog, {
+				props: { request, onRespond: () => undefined }
+			}).body;
+			for (const text of expected) {
+				expect(body).toContain(text);
+			}
+		}
+	});
+
 	test('Chat composes pending interactive prompts into the initial transcript', () => {
 		const pending: InteractiveRequestView = {
 			requestId: 'perm-chat',
