@@ -20,6 +20,7 @@ export interface PortalTool {
 	name: string;
 	description: string;
 	parameters: Record<string, unknown>;
+	argsSchema?: z.ZodTypeAny;
 	permissionBehavior?: 'normal' | 'always-prompt';
 	handler(args: unknown): Promise<string>;
 }
@@ -123,6 +124,7 @@ export function buildGitTools(cwd: string): PortalTool[] {
 			name: 'git_status',
 			description:
 				'Structured replacement for `git status`. Reports repository head and changed files without allowing arbitrary git shell flags or mutating subcommands.',
+			argsSchema: GitStatusArgs,
 			parameters: {
 				type: 'object',
 				properties: {
@@ -157,6 +159,7 @@ export function buildGitTools(cwd: string): PortalTool[] {
 			name: 'git_diff',
 			description:
 				'Structured replacement for `git diff`. Returns a unified diff or structured read-only summary for worktree/index/commit comparisons, optionally limited to a workspace path.',
+			argsSchema: GitDiffArgs,
 			parameters: {
 				type: 'object',
 				properties: {
@@ -205,6 +208,7 @@ export function buildGitTools(cwd: string): PortalTool[] {
 			name: 'git_log',
 			description:
 				'Structured replacement for `git log`. Returns recent commits with author, timestamp, and subject, optionally filtered by ref or workspace path.',
+			argsSchema: GitLogArgs,
 			parameters: {
 				type: 'object',
 				properties: {
@@ -237,6 +241,7 @@ export function buildGitTools(cwd: string): PortalTool[] {
 			name: 'git_show_commit',
 			description:
 				'Structured replacement for `git show <sha>` metadata. Returns commit details and changed files, optionally including the patch, without executing arbitrary git shell arguments.',
+			argsSchema: GitShowCommitArgs,
 			parameters: {
 				type: 'object',
 				properties: {
@@ -263,6 +268,7 @@ export function buildGitTools(cwd: string): PortalTool[] {
 			name: 'git_show_file',
 			description:
 				'Structured replacement for `git show <ref>:<path>`. Reads one workspace file at a Git ref.',
+			argsSchema: GitShowFileArgs,
 			parameters: {
 				type: 'object',
 				properties: {
@@ -287,6 +293,7 @@ export function buildGitTools(cwd: string): PortalTool[] {
 			name: 'git_commit',
 			description:
 				'Structured replacement for `git add` plus `git commit`. Creates a normal commit from a deterministic structured message and either all current changes or explicitly named whole-file workspace paths.',
+			argsSchema: GitCommitArgs,
 			permissionBehavior: 'always-prompt',
 			parameters: {
 				type: 'object',

@@ -58,6 +58,7 @@ interface InteractiveAdapterOptions {
 	getMode(): SessionMode;
 	getSessionWorkspacePath(): string | null;
 	getPermissionBehavior(tool: string): 'normal' | 'always-prompt';
+	validateCustomToolArgs?(toolName: string, args: unknown): { feedback: string } | null;
 }
 
 export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
@@ -104,6 +105,18 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 		if (forcePermissionPrompt.kind === 'invalid') {
 			audit('auto-deny');
 			return { kind: 'reject', feedback: forcePermissionPrompt.feedback } as const;
+		}
+		// Schema-validate custom portal tool args before any permission
+		// dialog or grant matching. Args that don't match the tool's
+		// declared schema are an agent bug, not something the user
+		// should approve; rejecting here with the schema in the
+		// feedback lets the agent self-correct on the next turn.
+		if (req.toolName && opts.validateCustomToolArgs) {
+			const invalid = opts.validateCustomToolArgs(req.toolName, req.args);
+			if (invalid) {
+				audit('auto-deny');
+				return { kind: 'reject', feedback: invalid.feedback } as const;
+			}
 		}
 		const forceEscalationReason =
 			forcePermissionPrompt.kind === 'valid' ? forcePermissionPrompt.reason : null;

@@ -4,6 +4,7 @@ import { log } from '../log';
 import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 import { buildGitTools, type PortalTool } from '../tools/git';
 import { buildPermissionTools } from '../tools/permissions';
+import { validatePortalToolArgs } from '../tools/schema-error';
 import { buildTicketTools } from '../tools/tickets';
 import { fetchWithTimeout, jsonRequestHeaders, parseJson, streamSseData } from './provider-utils';
 import type { BackendProviderId, PortalEvent, SessionMode, ToolCallRecord } from '$lib/types';
@@ -512,6 +513,24 @@ export function openOpenAICompatibleSession(
 			const summary = toolCall.function.name
 				? `Unknown portal tool requested: ${toolCall.function.name}`
 				: 'Tool call did not include a function name.';
+			const result = { ok: false, summary, output: summary };
+			q.push({
+				type: 'tool.result',
+				toolCallId: toolCall.id,
+				ok: false,
+				summary,
+				output: summary
+			});
+			return result;
+		}
+		// Validate args against the tool's Zod schema *before* opening a
+		// permission request. Misuse of a tool's argument schema is the
+		// agent's bug, not something the user should be asked to
+		// approve. Returning the schema in the rejection lets the agent
+		// self-correct on the next turn without a permission round-trip.
+		const validation = validatePortalToolArgs(tool, parsedArgs.args);
+		if (!validation.ok) {
+			const summary = validation.feedback;
 			const result = { ok: false, summary, output: summary };
 			q.push({
 				type: 'tool.result',

@@ -25,6 +25,7 @@ import { StubCopilotClient, isStubMode } from './bridge-stub';
 import { buildGitTools } from '../tools/git';
 import { buildTicketTools } from '../tools/tickets';
 import { buildPermissionTools } from '../tools/permissions';
+import { buildToolArgsValidator } from '../tools/schema-error';
 import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 
 // One CopilotClient per portal user. Sharing a single process-wide
@@ -168,6 +169,21 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			messagesRepo.updateBackgroundAgentLifecycle(ev.toolCallId, ev.agentId, ev.status);
 		}
 	});
+	const portalTools = [
+		...buildGitTools(opts.workingDirectory),
+		...buildTicketTools({
+			userId: opts.userId,
+			workspaceKey: ticketWorkspaceFromConversation(opts.workingDirectory),
+			conversationId: opts.conversationId
+		}),
+		...buildPermissionTools({
+			userId: opts.userId,
+			conversationId: opts.conversationId,
+			policy: opts.policy,
+			getMode: () => currentMode
+		})
+	];
+	const validateCustomToolArgs = buildToolArgsValidator(portalTools);
 	const {
 		onPermissionRequest,
 		onUserInputRequest,
@@ -183,7 +199,8 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		getApproveAll: () => approveAllTools,
 		getMode: () => currentMode,
 		getSessionWorkspacePath: () => sessionWorkspacePath,
-		getPermissionBehavior: (tool) => toolPermissionBehavior.get(tool) ?? 'normal'
+		getPermissionBehavior: (tool) => toolPermissionBehavior.get(tool) ?? 'normal',
+		validateCustomToolArgs
 	});
 
 	let existingMetadata: unknown;
@@ -201,20 +218,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		model: opts.model,
 		workingDirectory: opts.workingDirectory,
 		streaming: true,
-		tools: [
-			...buildGitTools(opts.workingDirectory),
-			...buildTicketTools({
-				userId: opts.userId,
-				workspaceKey: ticketWorkspaceFromConversation(opts.workingDirectory),
-				conversationId: opts.conversationId
-			}),
-			...buildPermissionTools({
-				userId: opts.userId,
-				conversationId: opts.conversationId,
-				policy: opts.policy,
-				getMode: () => currentMode
-			})
-		],
+		tools: portalTools,
 		onPermissionRequest,
 		onUserInputRequest,
 		onElicitationRequest,

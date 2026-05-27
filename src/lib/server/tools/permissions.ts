@@ -46,6 +46,7 @@ export function buildPermissionTools(opts: {
 			name: 'permission_capabilities',
 			description:
 				'Read-only summary of currently allowed permission capabilities and recovery options. Use after a permission rejection to find allowed alternatives before escalating.',
+			argsSchema: CapabilitiesArgs,
 			parameters: {
 				type: 'object',
 				properties: {
