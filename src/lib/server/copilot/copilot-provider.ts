@@ -53,10 +53,15 @@ export async function getClient(
 	if (inflight) return inflight;
 	const p = (async () => {
 		const cliUrl = process.env.COPILOT_CLI_URL?.trim();
+		const tcpConnectionToken = process.env.COPILOT_CONNECTION_TOKEN?.trim();
 		const client = isStubMode()
 			? (new StubCopilotClient() as unknown as CopilotClient)
 			: cliUrl
-				? new CopilotClient({ cliUrl, autoStart: false })
+				? new CopilotClient({
+						cliUrl,
+						autoStart: false,
+						...(tcpConnectionToken ? { tcpConnectionToken } : {})
+					})
 				: new CopilotClient({
 						useStdio: true,
 						autoStart: false,
