@@ -2,14 +2,20 @@ import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
+import * as promptTemplates from '$lib/server/db/repos/prompt-templates';
 import * as tickets from '$lib/server/db/repos/tickets';
 import * as usage from '$lib/server/db/repos/usage';
-import { getTurn } from '$lib/server/copilot/turn-runner';
-import { listForConversation as listPendingInteractive } from '$lib/server/copilot/interactive-requests';
+import { getBuiltInPromptTemplate } from '$lib/prompt-templates';
+import { getTurn } from '$lib/server/runtime/turn-runner';
+import { listForConversation as listPendingInteractive } from '$lib/server/runtime/interactive-requests';
+import { fetchModels, getProvider } from '$lib/server/providers';
+import { providerAuthToken } from '$lib/server/providers/auth';
+import { loadConfig } from '$lib/server/config';
+import { log } from '$lib/server/log';
 import { ticketWorkspaceFromConversation } from '$lib/server/ticket-workspace';
 import { isTicketChatMode, ticketChatPrompt } from '$lib/tickets/chat';
 
-export const load: PageServerLoad = ({ params, locals, url }) => {
+export const load: PageServerLoad = async ({ params, locals, url }) => {
 	if (!locals.userId) throw error(401);
 	const conv = convs.get(params.id, locals.userId);
 	if (!conv) throw error(404);
@@ -26,6 +32,18 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 		const mode = isTicketChatMode(requestedMode) ? requestedMode : 'do';
 		initialComposer = ticketChatPrompt(ticket, mode);
 	}
+	const promptTemplateId = url.searchParams.get('promptTemplateId');
+	if (!initialComposer && promptTemplateId && msgs.length === 0) {
+		const source = url.searchParams.get('promptTemplateSource');
+		const template =
+			source === 'builtin'
+				? getBuiltInPromptTemplate(promptTemplateId)
+				: source === 'custom'
+					? promptTemplates.get(promptTemplateId, locals.userId)
+					: null;
+		if (!template || template.status !== 'open') throw error(404);
+		initialComposer = template.prompt;
+	}
 
 	// Surface any in-flight turn so the client can reattach its
 	// EventSource on page load. Only running turns count — finished but
@@ -37,6 +55,29 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 	// page load shows them immediately, without waiting for the SSE stream
 	// to (re-)emit the `interactive.request` event.
 	const pendingInteractive = listPendingInteractive(conv.id);
+	const provider = getProvider(conv.provider);
+	const cfg = loadConfig();
+	let providerModels: { id: string; name: string; maxContextWindowTokens?: number }[] = [];
+	let providerModelsError: string | null = null;
+	try {
+		const models = await fetchModels(
+			conv.userId,
+			providerAuthToken(conv.provider, conv.userId),
+			conv.provider
+		);
+		providerModels = models.map((m) => ({
+			id: m.id,
+			name: m.name,
+			maxContextWindowTokens: m.capabilities?.limits?.max_context_window_tokens
+		}));
+	} catch (e) {
+		providerModelsError = String(e);
+		log.warn('conversation.models.failed', {
+			conversationId: conv.id,
+			provider: conv.provider,
+			err: providerModelsError
+		});
+	}
 
 	// If this conversation was forked, surface parent info for a
 	// breadcrumb. Resolves silently to null if the parent was deleted or
@@ -67,6 +108,13 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 
 	return {
 		conversation: conv,
+		providerCapabilities: provider.capabilities,
+		providerDisplayName: provider.displayName,
+		providerModels,
+		providerModelsError,
+		defaultModelPlaceholder: provider.ui.defaultModelPlaceholder,
+		effectiveModel: conv.model ?? cfg.DEFAULT_MODEL,
+		chatPlaceholder: provider.ui.chatPlaceholder,
 		messages: msgs,
 		contextUsage,
 		parent,

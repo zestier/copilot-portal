@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AsyncQueue } from '../src/lib/server/copilot/async-queue';
+import { AsyncQueue } from '../src/lib/server/runtime/async-queue';
 
 describe('AsyncQueue', () => {
 	it('yields values in order then ends', async () => {

@@ -234,6 +234,68 @@ export function updateContentOnly(id: string, content: string) {
 	getDb().prepare('UPDATE messages SET content = ? WHERE id = ?').run(content, id);
 }
 
+export function truncateAfterAndUpdateUserMessage(
+	conversationId: string,
+	messageId: string,
+	content: string
+): Message | null {
+	const db = getDb();
+	ensureBackgroundAgentLifecycleTable(db);
+	const tx = db.transaction(() => {
+		const target = db
+			.prepare('SELECT * FROM messages WHERE conversation_id = ? AND id = ?')
+			.get(conversationId, messageId) as MsgRow | undefined;
+		if (!target) return null;
+
+		const later = db
+			.prepare(
+				`SELECT id FROM messages
+				  WHERE conversation_id = ?
+				    AND (created_at > ? OR (created_at = ? AND id > ?))`
+			)
+			.all(conversationId, target.created_at, target.created_at, target.id) as { id: string }[];
+		const laterIds = later.map((r) => r.id);
+		if (laterIds.length > 0) {
+			const msgPlaceholders = laterIds.map(() => '?').join(',');
+			const toolIds = db
+				.prepare(`SELECT id FROM tool_calls WHERE message_id IN (${msgPlaceholders})`)
+				.all(...laterIds) as { id: string }[];
+			if (toolIds.length > 0) {
+				const toolPlaceholders = toolIds.map(() => '?').join(',');
+				db.prepare(
+					`DELETE FROM background_agent_lifecycles WHERE tool_call_id IN (${toolPlaceholders})`
+				).run(...toolIds.map((r) => r.id));
+			}
+			db.prepare(`DELETE FROM reasoning_blocks WHERE message_id IN (${msgPlaceholders})`).run(
+				...laterIds
+			);
+			db.prepare(`DELETE FROM file_edits WHERE message_id IN (${msgPlaceholders})`).run(
+				...laterIds
+			);
+			db.prepare(`DELETE FROM tool_calls WHERE message_id IN (${msgPlaceholders})`).run(
+				...laterIds
+			);
+			db.prepare(`DELETE FROM messages WHERE id IN (${msgPlaceholders})`).run(...laterIds);
+		}
+
+		db.prepare(
+			`UPDATE messages
+			    SET content = ?,
+			        status = 'complete',
+			        error_code = NULL
+			  WHERE id = ?`
+		).run(content, messageId);
+
+		return rowToMessage({
+			...target,
+			content,
+			status: 'complete',
+			error_code: null
+		});
+	});
+	return tx();
+}
+
 export function insertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messageId'>) {
 	getDb()
 		.prepare(

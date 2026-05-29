@@ -14,7 +14,7 @@ async function freshImports() {
 	const users = await import('../src/lib/server/db/repos/users');
 	const convs = await import('../src/lib/server/db/repos/conversations');
 	const usage = await import('../src/lib/server/db/repos/usage');
-	const turnRunner = await import('../src/lib/server/copilot/turn-runner');
+	const turnRunner = await import('../src/lib/server/runtime/turn-runner');
 	return { users, convs, usage, turnRunner };
 }
 

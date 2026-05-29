@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 
 // Smoke tests for /settings. Specifically motivated by a regression
 // where a Svelte 5 reactivity bug (a `$state` write inside a `$derived`
@@ -45,7 +46,7 @@ test('creating a shell+workspace-paths grant adds a row to the list', async ({ p
 	// Default tool=shell. Use a unique argv0 so re-runs against the
 	// shared DB don't collide (the action dedups identical grants, but
 	// using a unique name keeps the post-create assertion unambiguous).
-	const argv0 = `e2e${Date.now().toString(36)}`;
+	const argv0 = `e2e${randomUUID().slice(0, 8)}`;
 	await page.getByLabel(/argv0/).fill(argv0);
 	await page.getByLabel(/Positional arguments/).selectOption('workspace-paths');
 
@@ -55,7 +56,7 @@ test('creating a shell+workspace-paths grant adds a row to the list', async ({ p
 	// should appear with the expected scope description.
 	const row = page
 		.locator('.grant-list .grant-row')
-		.filter({ has: page.locator(`code.pattern:has-text("argv0=${argv0}")`) });
+		.filter({ has: page.locator(`code.pattern:has-text("command=${argv0}")`) });
 	await expect(row).toBeVisible();
 	await expect(row.locator('code.tool')).toHaveText('shell');
 

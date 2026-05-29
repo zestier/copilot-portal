@@ -3,7 +3,7 @@ export type DeployMetadata = {
 };
 
 const processStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
-const deployedAt = readDeployTime(process.env.COPILOT_PORTAL_DEPLOYED_AT) ?? processStartedAt;
+const deployedAt = readDeployTime(process.env.ZAP_DEPLOYED_AT) ?? processStartedAt;
 
 export function getDeployMetadata(): DeployMetadata {
 	return { deployedAt };

@@ -17,6 +17,7 @@ export interface Conversation {
 	userId: string;
 	title: string;
 	workdir: string;
+	provider: BackendProviderId;
 	model: string | null;
 	/**
 	 * Agent mode for this conversation. Mostly mirrors the SDK's
@@ -48,6 +49,8 @@ export interface Conversation {
 	forkedFromConversationId: string | null;
 	/** The message in the source conversation whose edit produced this fork. */
 	forkedFromMessageId: string | null;
+	/** Backend runtime session id. May rotate when a conversation is destructively rewritten. */
+	providerSessionId: string;
 }
 
 export type WorkspaceTicketStatus = 'open' | 'done' | 'archived';
@@ -66,6 +69,23 @@ export interface WorkspaceTicket {
 	closedAt: number | null;
 }
 
+export type PromptTemplateStatus = 'open' | 'archived';
+
+export interface ChatPromptTemplate {
+	id: string;
+	/** Built-in templates are static and not owned by a user. */
+	userId: string | null;
+	title: string;
+	description: string;
+	prompt: string;
+	status: PromptTemplateStatus;
+	pinned: boolean;
+	orderIndex: number;
+	createdAt: number;
+	updatedAt: number;
+	archivedAt: number | null;
+}
+
 // Portal session modes. `best-effort` is the only portal-only extension; it
 // maps to the runtime's `autopilot` mode while keeping stricter permission
 // semantics in the bridge.
@@ -73,6 +93,94 @@ export type SessionMode = 'interactive' | 'plan' | 'autopilot' | 'best-effort';
 
 export function normalizeSessionMode(raw: string | null | undefined): SessionMode {
 	return raw === 'plan' || raw === 'autopilot' || raw === 'best-effort' ? raw : 'interactive';
+}
+
+export const BACKEND_PROVIDER_IDS = ['copilot', 'openai-compatible', 'lm-studio'] as const;
+export type BackendProviderId = (typeof BACKEND_PROVIDER_IDS)[number];
+
+export function normalizeBackendProvider(raw: string | null | undefined): BackendProviderId {
+	return BACKEND_PROVIDER_IDS.includes(raw as BackendProviderId)
+		? (raw as BackendProviderId)
+		: 'copilot';
+}
+
+export type ProviderRuntimeFeature =
+	| 'modes'
+	| 'approveAll'
+	| 'contextUsage'
+	| 'subagents'
+	| 'mcpInfoEvents'
+	| 'planExit'
+	| 'elicitation';
+
+export type ProviderRuntimeFeatureBehavior =
+	| 'supported'
+	| 'portal-enforced'
+	| 'no-op'
+	| 'unsupported';
+
+export interface ProviderRuntimeFeatureStatus {
+	supported: boolean;
+	behavior: ProviderRuntimeFeatureBehavior;
+	label: string;
+	description: string;
+}
+
+export type ProviderRuntimeFeatureMap = Record<
+	ProviderRuntimeFeature,
+	ProviderRuntimeFeatureStatus
+>;
+
+export interface ProviderCapabilities {
+	authStatus: boolean;
+	modelList: boolean;
+	session: {
+		open: true;
+		/** Resume by conversation id when the provider has durable session state. */
+		resume: boolean;
+		dispose: true;
+		abort: boolean;
+	};
+	stream: {
+		send: true;
+		/**
+		 * Providers must normalize their native streaming protocol into PortalEvent.
+		 * turn-runner consumes only this contract and should not depend on SDK-
+		 * specific event shapes.
+		 */
+		contract: 'PortalEvent';
+	};
+	controls: {
+		/** Supports live runtime modes such as plan/autopilot/best-effort. */
+		mode: boolean;
+		/** Supports live approve-all toggling for tool permission requests. */
+		approveAll: boolean;
+		/** Supports clearing provider/session-scoped approval grants. */
+		resetSessionApprovals: boolean;
+	};
+	/**
+	 * User-facing runtime capability contract. Providers must mark unsupported
+	 * runtime features explicitly so API clients and UI copy do not imply
+	 * unavailable behavior is active.
+	 */
+	features: ProviderRuntimeFeatureMap;
+	/**
+	 * Optional event families the portal can consume when present. Providers may
+	 * leave these false and still satisfy the core PortalEvent stream contract.
+	 */
+	optionalRuntimeFeatures: {
+		infiniteSessionMetadata: boolean;
+		permissionCallbacks: boolean;
+		userInputCallbacks: boolean;
+		elicitationCallbacks: boolean;
+		exitPlanModeCallbacks: boolean;
+		autoModeSwitchCallbacks: boolean;
+		contextWindowEvents: boolean;
+		contextCompactionEvents: boolean;
+		fileEditEvents: boolean;
+		reasoningEvents: boolean;
+		subagentLifecycleEvents: boolean;
+	};
 }
 
 export interface Message {
@@ -148,6 +256,7 @@ export interface FileEditRecord {
 }
 
 export interface UserSettings {
+	defaultProvider: BackendProviderId;
 	defaultModel: string | null;
 	defaultWorkdir: string | null;
 	defaultConversationMode: SessionMode;
@@ -518,18 +627,20 @@ export interface ConversationUsage {
 // dialog. The `auto-*` values are server-only audit records.
 export type InteractivePermissionDecision = 'allow-once' | 'allow-always' | 'deny' | 'deny-always';
 
-// `auto-allow` / `auto-deny` are recorded by the server when the user's
-// default policy (or a stored grant) settled the request without a
-// dialog. They never appear in `InteractiveResponse` — the dialog only
-// ever surfaces the four interactive decisions — but they show up in the
-// settings page audit so the user can see what got approved silently.
+// `auto-*` decisions are recorded by the server when the user's default policy
+// or stored grants settled the request without a dialog. They never appear in
+// `InteractiveResponse` — the dialog only ever surfaces the four interactive
+// decisions — but they show up in the settings page audit so the user can see
+// what got approved silently, hard-denied, or rejected because a prompt was
+// required in best-effort mode.
 export type PermissionDecision =
 	| 'allow-once'
 	| 'allow-always'
 	| 'deny'
 	| 'deny-always'
 	| 'auto-allow'
-	| 'auto-deny';
+	| 'auto-deny'
+	| 'auto-prompt-required';
 
 // --- File browser / git response shapes (shared by client & server) ---
 

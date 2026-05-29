@@ -3,13 +3,14 @@ import { setupLocalEnv } from './helpers/env';
 
 const openMock = vi.fn();
 
-vi.mock('../src/lib/server/copilot/bridge', () => ({
+vi.mock('../src/lib/server/providers', () => ({
+	getDefaultProviderId: () => 'copilot',
 	open: (...args: unknown[]) => openMock(...args)
 }));
 
 async function importPool() {
 	vi.resetModules();
-	return await import('../src/lib/server/copilot/pool');
+	return await import('../src/lib/server/runtime/pool');
 }
 
 describe('copilot session pool', () => {
@@ -27,6 +28,7 @@ describe('copilot session pool', () => {
 		const session = {
 			conversationId: 'conv-1',
 			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
 			lastUsed: Date.now(),
 			send: vi.fn(),
 			abort: vi.fn(),
@@ -62,6 +64,7 @@ describe('copilot session pool', () => {
 		const firstSession = {
 			conversationId: 'conv-1',
 			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
 			lastUsed: Date.now(),
 			send: vi.fn(),
 			abort: vi.fn(),
@@ -97,6 +100,50 @@ describe('copilot session pool', () => {
 		expect(firstSession.dispose).toHaveBeenCalledTimes(1);
 		expect(openMock).toHaveBeenCalledTimes(2);
 		expect(second.workingDirectory).toBe('/tmp/work-b');
+	});
+
+	it('treats legacy sessions without a provider as Copilot-only', async () => {
+		const legacyCopilotSession = {
+			conversationId: 'conv-1',
+			workingDirectory: '/tmp/work-a',
+			lastUsed: Date.now(),
+			send: vi.fn(),
+			abort: vi.fn(),
+			dispose: vi.fn().mockResolvedValue(undefined),
+			setMode: vi.fn(),
+			setApproveAll: vi.fn(),
+			resetSessionApprovals: vi.fn()
+		};
+		const openAICompatibleSession = {
+			...legacyCopilotSession,
+			provider: 'openai-compatible' as const,
+			dispose: vi.fn().mockResolvedValue(undefined)
+		};
+		openMock
+			.mockResolvedValueOnce(legacyCopilotSession)
+			.mockResolvedValueOnce(openAICompatibleSession);
+		const pool = await importPool();
+
+		const first = await pool.acquire({
+			conversationId: 'conv-1',
+			userId: 'user-1',
+			workingDirectory: '/tmp/work-a',
+			model: 'gpt-4',
+			policy: 'prompt'
+		});
+		const second = await pool.acquire({
+			provider: 'openai-compatible',
+			conversationId: 'conv-1',
+			userId: 'user-1',
+			workingDirectory: '/tmp/work-a',
+			model: 'local-model',
+			policy: 'prompt'
+		});
+
+		expect(first).not.toBe(second);
+		expect(legacyCopilotSession.dispose).toHaveBeenCalledTimes(1);
+		expect(openMock).toHaveBeenCalledTimes(2);
+		expect(second.provider).toBe('openai-compatible');
 	});
 
 	it('coalesces concurrent acquires for the same conversation into one open()', async () => {

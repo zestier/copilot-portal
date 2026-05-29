@@ -7,31 +7,6 @@ export interface MatchedShellOption {
 	valueIndex?: number;
 }
 
-const DEFAULT_PRE_SUBCOMMAND_OPTIONS: Readonly<Record<string, readonly ShellOptionSpec[]>> = {
-	git: [
-		{ name: '--paginate', kind: 'flag' },
-		{ name: '--no-pager', kind: 'flag' },
-		{ name: '--bare', kind: 'flag' },
-		{ name: '--no-replace-objects', kind: 'flag' },
-		{ name: '--literal-pathspecs', kind: 'flag' },
-		{ name: '--glob-pathspecs', kind: 'flag' },
-		{ name: '--noglob-pathspecs', kind: 'flag' },
-		{ name: '--icase-pathspecs', kind: 'flag' },
-		{ name: '--no-lazy-fetch', kind: 'flag' },
-		{ name: '--no-optional-locks', kind: 'flag' },
-		{ name: '-c', kind: 'option', value: { kind: 'any' } },
-		{ name: '-C', kind: 'option', value: { kind: 'any' } },
-		{ name: '--git-dir', kind: 'option', value: { kind: 'any' } },
-		{ name: '--work-tree', kind: 'option', value: { kind: 'any' } },
-		{ name: '--namespace', kind: 'option', value: { kind: 'any' } },
-		{ name: '--config-env', kind: 'option', value: { kind: 'any' } }
-	]
-};
-
-export function defaultPreSubcommandOptionsForArgv0(argv0: string): readonly ShellOptionSpec[] {
-	return DEFAULT_PRE_SUBCOMMAND_OPTIONS[argv0] ?? [];
-}
-
 export function looksLikeShellOptionToken(tok: string | undefined): boolean {
 	return typeof tok === 'string' && tok.startsWith('-') && tok !== '-';
 }

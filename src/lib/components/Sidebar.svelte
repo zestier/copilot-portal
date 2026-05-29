@@ -3,6 +3,7 @@
 	import { tick } from 'svelte';
 	import type { Conversation, User, WorkspaceTicket } from '$lib/types';
 	import Alert from '$lib/components/ui/Alert.svelte';
+	import PromptTemplateLauncher from '$lib/components/PromptTemplateLauncher.svelte';
 	import type { TicketChatMode } from '$lib/client/tickets';
 	import { ticketChatPrompt, ticketChatTitle } from '$lib/client/tickets';
 	import { createTicketDraftChat } from '$lib/client/ticket-chat-launch';
@@ -45,6 +46,8 @@
 
 	const active = $derived(conversations.filter((c) => c.archivedAt == null));
 	const archived = $derived(conversations.filter((c) => c.archivedAt != null));
+	const selectedActiveCount = $derived(active.filter((c) => selected.has(c.id)).length);
+	const allActiveSelected = $derived(active.length > 0 && selectedActiveCount === active.length);
 
 	function flashError(msg: string) {
 		errorMsg = msg;
@@ -68,22 +71,6 @@
 			flashError(`${errLabel} failed`);
 			return false;
 		}
-	}
-
-	async function newChat() {
-		const res = await fetch('/api/conversations', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ title: 'New chat' })
-		});
-		if (!res.ok) {
-			flashError(`Could not create chat (${res.status})`);
-			return;
-		}
-		const body = await res.json();
-		await invalidateAll();
-		onnavigate?.();
-		location.href = `/conversations/${body.conversation.id}`;
 	}
 
 	async function addTicket() {
@@ -320,6 +307,16 @@
 		selected = next;
 	}
 
+	function toggleSelectAllActive() {
+		const next = new Set(selected);
+		if (allActiveSelected) {
+			for (const c of active) next.delete(c.id);
+		} else {
+			for (const c of active) next.add(c.id);
+		}
+		selected = next;
+	}
+
 	async function bulk(action: 'archive' | 'unarchive' | 'delete') {
 		const ids = [...selected];
 		if (ids.length === 0) return;
@@ -392,7 +389,11 @@
 
 <div class="sidebar-inner">
 	<div class="top">
-		<button class="btn primary block" onclick={newChat}>+ New chat</button>
+		<PromptTemplateLauncher
+			variant="sidebar"
+			onNavigate={onnavigate}
+			onError={(message) => flashError(message)}
+		/>
 		<div class="top-meta">
 			<span class="count muted">
 				{active.length} chat{active.length === 1 ? '' : 's'}
@@ -720,6 +721,14 @@
 			<span class="bulk-count muted">{selected.size} selected</span>
 			<div class="bulk-actions">
 				<button
+					class="btn sm ghost"
+					disabled={bulkBusy || active.length === 0}
+					aria-pressed={allActiveSelected}
+					onclick={toggleSelectAllActive}
+				>
+					{allActiveSelected ? 'Clear active' : 'Select all'}
+				</button>
+				<button
 					class="btn sm"
 					disabled={bulkBusy ||
 						selected.size === 0 ||
@@ -918,10 +927,6 @@
 		font-size: var(--fs-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-	}
-	.block {
-		display: block;
-		width: 100%;
 	}
 	.select-toggle.active {
 		color: var(--accent);

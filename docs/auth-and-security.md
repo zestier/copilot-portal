@@ -16,7 +16,7 @@ accordingly: it is **never** safe to expose unauthenticated.
 
 ## Trust model
 
-Copilot Portal is a self-hosted control surface for a trusted operator, not a
+Zestier's AI Portal (ZAP) is a self-hosted control surface for a trusted operator, not a
 multi-tenant sandbox. Anyone who can use a conversation can ask an agent to read
 and edit the configured workdir, request shell commands, mutate git state, start
 long-running processes, and trigger whatever external side effects the host
@@ -30,8 +30,13 @@ The intended boundary is therefore **outside the portal**:
 - Only allow identities that you would also trust with a terminal on the host
   and the selected `PROJECT_ROOT`.
 - Treat features such as redeploy, global permission grants, arbitrary workdir
-  selection, and same-workdir concurrent conversations as capabilities of that
-  trusted operator model, not as isolation guarantees.
+   selection, and same-workdir concurrent conversations as capabilities of that
+   trusted operator model, not as isolation guarantees.
+- When `ENABLE_REDEPLOY=1` with GitHub auth, use
+  `REDEPLOY_ADMIN_GITHUB_LOGINS` to restrict the update/restart endpoint to a
+  subset of allowed operators. Single-user GitHub installs default that one
+  login to redeploy admin; shared-secret and local modes have no per-user
+  identity to split.
 - If you need isolation between users, repositories, or experiments, run
   separate portal instances with separate `DATA_DIR`s and `PROJECT_ROOT`s (or
   use OS/container isolation outside the app).
@@ -64,7 +69,8 @@ Standard GitHub OAuth App, web flow.
 
 Single password (the `SHARED_SECRET`) entered on `/login`. Useful for
 tunneling demos where you don't want to set up an OAuth app. Still issues
-a session cookie. Rate-limited (5 attempts / 15 min / IP).
+a session cookie. Put nginx, Cloudflare Access, or another edge control in
+front if you need rate limiting.
 
 ### `none`
 
@@ -89,10 +95,6 @@ authenticating reverse proxy in front.
   header (SvelteKit's built-in check + an explicit check for the JSON API).
 - The session cookie is `SameSite=Lax`, which blocks cross-site `POST` from
   classic forms and cross-site credentialed `fetch`.
-- When `TUNNEL_HOST` is set, both origin checks are skipped — the request's
-  `Host` won't match what the server thinks its origin is, so the checks
-  would reject every request. SameSite=Lax cookies still apply. Front with
-  an authenticating reverse proxy if you need stronger guarantees.
 
 ## Copilot token handling
 
@@ -128,7 +130,7 @@ Whatever token the SDK ends up using is never logged and never echoed
 back to the client.
 
 The portal keeps one Copilot SDK subprocess per portal user (see
-`src/lib/server/copilot/bridge.ts`). When `ALLOWED_GITHUB_LOGINS` lists
+`src/lib/server/copilot/copilot-provider.ts`). When `ALLOWED_GITHUB_LOGINS` lists
 multiple users, each gets their own client so Copilot API calls are
 attributed to the right GitHub identity instead of whoever logged in
 first after process boot.

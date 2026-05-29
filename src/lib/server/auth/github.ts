@@ -44,7 +44,7 @@ export async function fetchProfile(token: string): Promise<GithubProfile> {
 		headers: {
 			authorization: `Bearer ${token}`,
 			accept: 'application/vnd.github+json',
-			'user-agent': 'copilot-portal'
+			'user-agent': 'zap'
 		}
 	});
 	if (!res.ok) throw new Error(`GitHub profile fetch failed: ${res.status}`);

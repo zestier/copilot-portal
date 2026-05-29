@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
+	import PromptTemplateLauncher from '$lib/components/PromptTemplateLauncher.svelte';
 	import type { User } from '$lib/types';
 
 	let {
@@ -14,27 +14,6 @@
 		ontoggle: () => void;
 		onnavigate?: () => void;
 	} = $props();
-
-	let busy = $state(false);
-
-	async function newChat() {
-		if (busy) return;
-		busy = true;
-		try {
-			const res = await fetch('/api/conversations', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ title: 'New chat' })
-			});
-			if (!res.ok) return;
-			const body = await res.json();
-			await invalidateAll();
-			onnavigate?.();
-			location.href = `/conversations/${body.conversation.id}`;
-		} finally {
-			busy = false;
-		}
-	}
 
 	const isSettings = $derived($page.url.pathname.startsWith('/settings'));
 	const initials = $derived.by(() => {
@@ -77,31 +56,7 @@
 		</svg>
 	</button>
 
-	<button
-		type="button"
-		class="rail-btn"
-		title="New chat"
-		aria-label="New chat"
-		onclick={newChat}
-		disabled={busy}
-	>
-		<svg
-			width="16"
-			height="16"
-			viewBox="0 0 16 16"
-			fill="none"
-			stroke="currentColor"
-			stroke-width="1.6"
-			stroke-linecap="round"
-			stroke-linejoin="round"
-			aria-hidden="true"
-		>
-			<path d="M3.5 11.5l-1 2 2-1 6.5-6.5a1.06 1.06 0 0 0-1.5-1.5L3 11" />
-			<path d="M9 4.5l2 2" />
-			<path d="M11 11.5h3" />
-			<path d="M12.5 10v3" />
-		</svg>
-	</button>
+	<PromptTemplateLauncher variant="rail" onNavigate={onnavigate} />
 
 	<div class="spacer"></div>
 

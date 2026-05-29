@@ -7,31 +7,24 @@ const sequential = args.has('--sequential');
 const failureProbe = args.has('--failure-probe');
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 
-const taskDefinitions = {
-	lint: { label: 'lint', command: pnpm, args: ['lint'] },
-	check: { label: 'check', command: pnpm, args: ['check'] },
-	unit: { label: 'unit', command: pnpm, args: ['test'] },
-	build: { label: 'build', command: pnpm, args: ['build'] },
-	e2e: { label: 'e2e', command: pnpm, args: ['test:e2e:run'] }
-};
+const taskDefinitions = [
+	{ label: 'lint', command: pnpm, args: ['lint'], dependsOn: [] },
+	{ label: 'unit', command: pnpm, args: ['test'], dependsOn: [] },
+	{ label: 'build', command: pnpm, args: ['build'], dependsOn: [] },
+	{ label: 'check', command: pnpm, args: ['check'], dependsOn: ['build'] },
+	{ label: 'e2e', command: pnpm, args: ['test:e2e:run'], dependsOn: ['build'] }
+];
 
-const plannedGroups = sequential
+const tasks = failureProbe
 	? [
-			[taskDefinitions.lint],
-			[taskDefinitions.check],
-			[taskDefinitions.unit],
-			[taskDefinitions.build],
-			[taskDefinitions.e2e]
+			{
+				label: 'failure-probe',
+				command: process.execPath,
+				args: ['-e', 'process.exit(7)'],
+				dependsOn: []
+			}
 		]
-	: [
-			[taskDefinitions.lint, taskDefinitions.check, taskDefinitions.unit],
-			[taskDefinitions.build],
-			[taskDefinitions.e2e]
-		];
-
-const groups = failureProbe
-	? [[{ label: 'failure-probe', command: process.execPath, args: ['-e', 'process.exit(7)'] }]]
-	: plannedGroups;
+	: taskDefinitions;
 
 function formatCommand(task) {
 	return [task.command, ...task.args].join(' ');
@@ -90,32 +83,77 @@ function runTask(task) {
 	});
 }
 
+async function runDag(tasksToRun, maxConcurrency) {
+	const completed = new Set();
+	const scheduled = new Set();
+	const running = new Map();
+	const failures = [];
+	const allResults = [];
+
+	function scheduleReadyTasks() {
+		if (failures.length > 0) return;
+
+		const readyTasks = tasksToRun
+			.filter(
+				(task) =>
+					!scheduled.has(task.label) &&
+					task.dependsOn.every((dependency) => completed.has(dependency))
+			)
+			.slice(0, maxConcurrency - running.size);
+
+		if (readyTasks.length > 1) {
+			console.log(`[verify] parallel ready: ${readyTasks.map((task) => task.label).join(', ')}`);
+		}
+
+		for (const task of readyTasks) {
+			scheduled.add(task.label);
+			const run = runTask(task).then((result) => {
+				running.delete(task.label);
+				return result;
+			});
+			running.set(task.label, run);
+		}
+	}
+
+	while (allResults.length < tasksToRun.length) {
+		scheduleReadyTasks();
+		if (running.size === 0) break;
+
+		const result = await Promise.race(running.values());
+		allResults.push(result);
+		completed.add(result.task.label);
+		if (result.code !== 0) failures.push(result);
+	}
+
+	const skipped = tasksToRun.filter((task) => !scheduled.has(task.label));
+	return { allResults, failures, skipped };
+}
+
 const startedAt = performance.now();
-const failures = [];
-const allResults = [];
 
 console.log(
 	`[verify] mode: ${failureProbe ? 'failure probe' : sequential ? 'sequential benchmark' : 'parallel'}`
 );
 
-for (const group of groups) {
-	if (group.length > 1) {
-		console.log(`[verify] parallel group: ${group.map((task) => task.label).join(', ')}`);
-	}
-	const results = await Promise.all(group.map(runTask));
-	allResults.push(...results);
-	failures.push(...results.filter((result) => result.code !== 0));
-	if (failures.length > 0) break;
-}
+const { allResults, failures, skipped } = await runDag(
+	tasks,
+	sequential ? 1 : Number.POSITIVE_INFINITY
+);
 
 const totalMs = performance.now() - startedAt;
 console.log('[verify] summary:');
-for (const result of allResults) {
-	console.log(
-		`[verify]   ${result.task.label.padEnd(13)} ${formatDuration(result.durationMs).padStart(8)} exit ${
-			result.code
-		}`
-	);
+const resultsByLabel = new Map(allResults.map((result) => [result.task.label, result]));
+for (const task of tasks) {
+	const result = resultsByLabel.get(task.label);
+	if (result) {
+		console.log(
+			`[verify]   ${result.task.label.padEnd(13)} ${formatDuration(result.durationMs).padStart(
+				8
+			)} exit ${result.code}`
+		);
+	} else if (skipped.includes(task)) {
+		console.log(`[verify]   ${task.label.padEnd(13)} ${'skipped'.padStart(8)}`);
+	}
 }
 console.log(`[verify] total ${formatDuration(totalMs)}`);
 
@@ -124,6 +162,13 @@ if (failures.length > 0) {
 		`[verify] failed: ${failures
 			.map((result) => `${result.task.label} (exit ${result.code})`)
 			.join(', ')}`
+	);
+	process.exit(1);
+}
+
+if (skipped.length > 0) {
+	console.error(
+		`[verify] unsatisfied task dependencies: ${skipped.map((task) => task.label).join(', ')}`
 	);
 	process.exit(1);
 }

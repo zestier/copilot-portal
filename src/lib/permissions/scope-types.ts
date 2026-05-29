@@ -30,35 +30,23 @@ export type ShellOptionSpec =
 
 export type ShellOptionValueRule = { kind: 'any' } | { kind: 'workspace-path' };
 
-export interface ShellRule {
-	/** argv[0] — exact match, no globs. Required. */
-	argv0: string;
-	/**
-	 * If set, matches only when the invocation's resolved subcommand is in
-	 * this list. When `preSubcommandOptions.allow` is omitted, known global
-	 * options for supported command families (currently `git`) are skipped
-	 * heuristically first, so `git --no-pager status` still resolves to
-	 * subcommand `status`.
-	 */
-	subcommands?: string[];
-	/**
-	 * Option rules that apply before subcommand discovery. `allow` specs
-	 * consume known leading options so the matcher can locate the
-	 * subcommand and avoid misclassifying consumed values as positionals.
-	 * `deny` remains name-based because rejecting the option does not need
-	 * value-shape knowledge.
-	 */
-	preSubcommandOptions?: ShellOptionRules;
-	/**
-	 * Option rules that apply after the subcommand (or immediately after
-	 * argv0 when no subcommand constraint is present). `allow` specs are
-	 * value-aware; `deny` is name-based.
-	 */
+export interface ShellCommandStep {
+	token: string;
 	options?: ShellOptionRules;
+}
+
+export interface ShellRule {
+	/**
+	 * Ordered command path. The first step matches argv[0]; subsequent steps
+	 * match subcommand tokens. Each step owns the options allowed after that
+	 * token and before the next command-path token. Options on the final step
+	 * may be interleaved with positional arguments.
+	 */
+	command: ShellCommandStep[];
 	/**
 	 * What positional arguments (non-flag tokens other than argv[0], the
-	 * resolved subcommand when constrained, and values consumed by matched
-	 * option specs) are allowed.
+	 * command-path tokens, and values consumed by matched option specs) are
+	 * allowed.
 	 *   none             — every positional must be absent
 	 *   any              — anything goes
 	 *   workspace-paths          — every positional must resolve to a path
@@ -70,7 +58,7 @@ export interface ShellRule {
 	/**
 	 * Whether this segment must / must not be part of a shell pipeline
 	 * (i.e. connected to a neighboring command by `|`). Omitted = no
-	 * constraint. Used by the seed deny grants for commands like `cat`
+	 * constraint. Used by the seed prompt grants for commands like `cat`
 	 * / `grep` whose stdout is the human-visible output when run bare,
 	 * but which are legitimate inside `cmd | grep ...`.
 	 *   must    — this segment must be in a pipeline

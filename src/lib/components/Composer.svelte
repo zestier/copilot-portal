@@ -5,12 +5,14 @@
 		value = $bindable(''),
 		streaming = false,
 		inputDisabled = false,
+		placeholder = 'Message...',
 		onSend,
 		onStop
 	}: {
 		value?: string;
 		streaming?: boolean;
 		inputDisabled?: boolean;
+		placeholder?: string;
 		onSend: () => void;
 		onStop: () => void;
 	} = $props();
@@ -25,6 +27,12 @@
 		el.style.height = Math.min(el.scrollHeight, max) + 'px';
 	}
 
+	function reportAutoGrowError(error: unknown) {
+		queueMicrotask(() => {
+			throw error;
+		});
+	}
+
 	$effect(() => {
 		// Re-run autoGrow whenever the composer text changes. `tick()` waits
 		// for the DOM (including `bind:this`) to settle so the very first
@@ -33,7 +41,7 @@
 		// rendering, which differs across browsers and occasionally paints
 		// unusually tall.
 		void value;
-		tick().then(autoGrow);
+		void tick().then(autoGrow).catch(reportAutoGrowError);
 	});
 
 	function onKeydown(e: KeyboardEvent) {
@@ -65,7 +73,7 @@
 			bind:value
 			onkeydown={onKeydown}
 			oninput={autoGrow}
-			placeholder="Message Copilot…"
+			{placeholder}
 			rows="1"
 			disabled={inputDisabled}
 		></textarea>

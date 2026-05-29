@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { splitUnifiedDiffByFile } from '$lib/client/diff-synth';
-	import { parseUnifiedDiff, diffStats } from '$lib/client/diff-parser';
+	import {
+		MAX_RENDERABLE_DIFF_CHARS,
+		isRenderableDiff,
+		parseUnifiedDiff,
+		diffStats
+	} from '$lib/client/diff-parser';
 
 	let {
 		path = 'diff',
@@ -10,9 +15,11 @@
 	}: { path?: string; diff: string; showLineNumbers?: boolean; collapsible?: boolean } = $props();
 
 	const chunks = $derived.by(() => {
+		if (!isRenderableDiff(diff)) return [];
 		const split = splitUnifiedDiffByFile(diff, path);
 		return split.length > 0 ? split : [{ path, diff }];
 	});
+	const tooLarge = $derived(!isRenderableDiff(diff));
 	let collapsedFiles = $state<Record<string, boolean>>({});
 
 	function fmtNo(n: number | null): string {
@@ -29,6 +36,12 @@
 </script>
 
 <div class="diff-set">
+	{#if tooLarge}
+		<div class="diff-too-large">
+			Diff is too large to render safely ({diff.length.toLocaleString()} characters; limit
+			{MAX_RENDERABLE_DIFF_CHARS.toLocaleString()}).
+		</div>
+	{/if}
 	{#each chunks as chunk, chunkIndex (chunk.path + ':' + chunkIndex)}
 		{@const key = chunkKey(chunk.path, chunkIndex)}
 		{@const collapsed = collapsible && collapsedFiles[key] === true}
@@ -104,6 +117,13 @@
 		flex-direction: column;
 		gap: 0.5rem;
 		min-height: 0;
+	}
+	.diff-too-large {
+		padding: 0.75rem;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: var(--surface);
+		color: var(--text-muted);
 	}
 	.diff {
 		display: flex;

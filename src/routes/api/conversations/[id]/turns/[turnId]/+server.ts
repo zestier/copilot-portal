@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { getTurnById } from '$lib/server/copilot/turn-runner';
+import { getTurnById } from '$lib/server/runtime/turn-runner';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 
 /**

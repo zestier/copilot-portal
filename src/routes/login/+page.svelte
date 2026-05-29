@@ -4,7 +4,7 @@
 </script>
 
 <div class="login">
-	<h1>Copilot Portal</h1>
+	<h1>Zestier's AI Portal</h1>
 
 	{#if data.mode === 'github'}
 		<p>Sign in with GitHub to continue.</p>

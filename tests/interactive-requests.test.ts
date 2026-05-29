@@ -9,11 +9,13 @@ import {
 	cancel,
 	cancelConversation,
 	newRequestId,
-	get
-} from '../src/lib/server/copilot/interactive-requests';
+	get,
+	defaultInteractiveResponse
+} from '../src/lib/server/runtime/interactive-requests';
 import { createInteractiveCallbacks } from '../src/lib/server/copilot/interactive-adapter';
 import * as users from '../src/lib/server/db/repos/users';
 import * as convs from '../src/lib/server/db/repos/conversations';
+import * as settings from '../src/lib/server/db/repos/settings';
 import type {
 	InteractiveKind,
 	InteractiveResponse,
@@ -88,6 +90,24 @@ describe('interactive request registry', () => {
 		await setupLocalEnv('portal-interactive-test-');
 		userId = users.ensureLocalUser().id;
 		conversationId = convs.create(userId, { title: 't', workdir: '/tmp', model: null }).id;
+	});
+
+	it('defines default cancellations through the interactive-kind registry', () => {
+		const expected: Record<InteractiveKind, InteractiveResponse> = {
+			permission: { kind: 'permission', decision: 'deny' },
+			auto_mode_switch: { kind: 'auto_mode_switch', decision: 'no' },
+			user_input: { kind: 'user_input', answer: '', wasFreeform: true },
+			elicitation: { kind: 'elicitation', action: 'cancel' },
+			exit_plan_mode: { kind: 'exit_plan_mode', approved: false },
+			sampling: { kind: 'sampling', action: 'ack' },
+			mcp_oauth: { kind: 'mcp_oauth', action: 'ack' },
+			external_tool: { kind: 'external_tool', action: 'ack' }
+		};
+		for (const [kind, response] of Object.entries(expected) as Array<
+			[InteractiveKind, InteractiveResponse]
+		>) {
+			expect(defaultInteractiveResponse(kind)).toEqual(response);
+		}
 	});
 
 	function makePending(
@@ -226,6 +246,7 @@ describe('interactive request registry', () => {
 	it('refuses to persist an allow-always grant when policy is deny-all', async () => {
 		const settings = await import('../src/lib/server/db/repos/settings');
 		settings.save(userId, {
+			defaultProvider: 'copilot',
 			defaultModel: null,
 			defaultWorkdir: null,
 			defaultConversationMode: 'interactive',
@@ -236,25 +257,6 @@ describe('interactive request registry', () => {
 		makePending('permission', permView(requestId), undefined);
 		resolve(requestId, userId, { kind: 'permission', decision: 'allow-always' });
 		expect(settings.hasGrant(userId, conversationId, 'shell')).toBe(false);
-	});
-
-	it('does not persist always grants for non-persistable permission prompts', async () => {
-		const settings = await import('../src/lib/server/db/repos/settings');
-		const requestId = newRequestId();
-		const view = permView(requestId);
-		if (view.kind !== 'permission') throw new Error('expected permission view');
-		makePending(
-			'permission',
-			{
-				...view,
-				tool: 'request_mode_switch',
-				permissionKind: 'custom-tool',
-				canPersistDecision: false
-			},
-			undefined
-		);
-		resolve(requestId, userId, { kind: 'permission', decision: 'allow-always' });
-		expect(settings.hasGrant(userId, conversationId, 'request_mode_switch')).toBe(false);
 	});
 
 	it('lists recent permission decisions for the user', async () => {
@@ -347,6 +349,7 @@ describe('interactive request registry', () => {
 			settings.matchGrantDetailed(userId, conversationId, 'shell', 'shell', 'rm -rf /')
 		).toEqual({
 			outcome: 'deny',
+			feedback: 'Use structured file tools instead.',
 			denyReason: 'Use structured file tools instead.'
 		});
 	});
@@ -369,6 +372,7 @@ describe('interactive request registry', () => {
 	it('deny-always is allowed even when policy is deny-all', async () => {
 		const settings = await import('../src/lib/server/db/repos/settings');
 		settings.save(userId, {
+			defaultProvider: 'copilot',
 			defaultModel: null,
 			defaultWorkdir: null,
 			defaultConversationMode: 'interactive',
@@ -468,21 +472,24 @@ describe('interactive request registry', () => {
 			decision: 'allow-always',
 			scope: {
 				permissionKind: 'shell',
-				scope: { kind: 'shell', rule: { argv0: 'node', positionals: { kind: 'any' } } }
+				scope: {
+					kind: 'shell',
+					rule: { command: [{ token: 'node' }], positionals: { kind: 'any' } }
+				}
 			},
 			additionalScopes: [
 				{
 					permissionKind: 'shell',
-					scope: { kind: 'shell', rule: { argv0: 'rg', positionals: { kind: 'any' } } }
+					scope: {
+						kind: 'shell',
+						rule: { command: [{ token: 'rg' }], positionals: { kind: 'any' } }
+					}
 				}
 			]
 		});
 
-		// Each grant matches independently on its own argv0. Note that the
-		// default seed grants include `pipeline: 'forbid'` deny nudges for
-		// bare `rg` (steering toward the structured `grep` tool); to verify
-		// the user's rg allow actually persisted we exercise it in pipeline
-		// position, where the deny nudge intentionally doesn't fire.
+		// Each grant matches independently on its own argv0; exercise the
+		// `rg` grant in a pipeline to verify per-segment matching.
 		const nodeParsed = parseShellCommand('node --version');
 		const rgParsed = parseShellCommand('node --version | rg v');
 		const unrelated = parseShellCommand('curl https://example.com');
@@ -519,15 +526,21 @@ describe('interactive permission adapter feedback', () => {
 		conversationId = convs.create(userId, { title: 'adapter', workdir: '/tmp', model: null }).id;
 	});
 
-	function callbacks(events: PortalEvent[] = []) {
+	function callbacks(
+		events: PortalEvent[] = [],
+		opts: {
+			mode?: 'interactive' | 'best-effort';
+			policy?: 'prompt' | 'allow-all' | 'deny-all';
+		} = {}
+	) {
 		return createInteractiveCallbacks({
 			conversationId,
 			userId,
 			workingDirectory: '/tmp',
-			policy: 'prompt',
+			policy: opts.policy ?? 'prompt',
 			emit: (ev) => events.push(ev),
 			getApproveAll: () => false,
-			getMode: () => 'interactive',
+			getMode: () => opts.mode ?? 'interactive',
 			getSessionWorkspacePath: () => null,
 			getPermissionBehavior: () => 'normal'
 		});
@@ -576,5 +589,63 @@ describe('interactive permission adapter feedback', () => {
 		});
 
 		await expect(permission).resolves.toEqual({ kind: 'reject' });
+	});
+
+	it('matching allow grants override prompt grants before policy auto-approval', async () => {
+		settings.addGrant({
+			userId,
+			conversationId: null,
+			tool: 'url_fetcher',
+			permissionKind: 'url',
+			scope: { kind: 'url', rule: { kind: 'host', host: 'example.com' } },
+			decision: 'allow'
+		});
+		settings.addGrant({
+			userId,
+			conversationId: null,
+			tool: 'url_fetcher',
+			permissionKind: 'url',
+			scope: { kind: 'url', rule: { kind: 'host', host: 'example.com' } },
+			decision: 'prompt'
+		});
+		const events: PortalEvent[] = [];
+		const permission = callbacks(events, { policy: 'allow-all' }).onPermissionRequest({
+			kind: 'url',
+			toolName: 'url_fetcher',
+			url: 'https://example.com/',
+			args: { url: 'https://example.com/' }
+		});
+		await Promise.resolve();
+		expect(events.some((ev) => ev.type === 'interactive.request')).toBe(false);
+		await expect(permission).resolves.toEqual({ kind: 'approve-once' });
+		expect(settings.listRecentDecisionsForUser(userId, 5)[0]).toMatchObject({
+			tool: 'url_fetcher',
+			decision: 'auto-allow'
+		});
+	});
+
+	it('matching prompt grants reject clearly in best-effort mode', async () => {
+		settings.addGrant({
+			userId,
+			conversationId: null,
+			tool: 'url_fetcher',
+			permissionKind: 'url',
+			scope: { kind: 'url', rule: { kind: 'host', host: 'example.com' } },
+			decision: 'prompt'
+		});
+
+		await expect(
+			callbacks([], { mode: 'best-effort', policy: 'allow-all' }).onPermissionRequest({
+				kind: 'url',
+				toolName: 'url_fetcher',
+				url: 'https://example.com/',
+				args: { url: 'https://example.com/' }
+			})
+		).resolves.toEqual(
+			expect.objectContaining({
+				kind: 'reject',
+				feedback: expect.stringContaining('requires interactive approval')
+			})
+		);
 	});
 });

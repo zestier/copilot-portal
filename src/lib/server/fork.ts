@@ -31,7 +31,7 @@ import { ulid } from './db/ids';
 import { getDb } from './db';
 import * as convs from './db/repos/conversations';
 import * as messages from './db/repos/messages';
-import { getTurn } from './copilot/turn-runner';
+import { getTurn } from './runtime/turn-runner';
 import { log } from './log';
 import type { Conversation, Message } from '$lib/types';
 
@@ -67,6 +67,7 @@ export interface ForkInput {
 
 export interface ForkResult {
 	conversation: Conversation;
+	userMessage: Message | null;
 }
 
 /**
@@ -130,6 +131,7 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 		id: newId,
 		title: source.title,
 		workdir: source.workdir,
+		provider: source.provider,
 		model: source.model,
 		forkedFromConversationId: source.id,
 		forkedFromMessageId: target.id
@@ -142,8 +144,9 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 	const prefixEnd = mode === 'edit' ? targetIdx : targetIdx + 1;
 	const prefix = all.slice(0, prefixEnd);
 	cloneMessagePrefix(newConv.id, prefix);
+	let userMessage: Message | null = null;
 	if (mode === 'edit') {
-		messages.append(newConv.id, { role: 'user', content: input.newContent! });
+		userMessage = messages.append(newConv.id, { role: 'user', content: input.newContent! });
 	}
 
 	const refreshed = convs.get(newConv.id, input.userId);
@@ -155,7 +158,7 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 		messageId: target.id,
 		prefix: prefix.length
 	});
-	return { conversation: refreshed };
+	return { conversation: refreshed, userMessage };
 }
 
 function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {

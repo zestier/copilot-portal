@@ -6,6 +6,7 @@
 	import ActivityPanel from './ActivityPanel.svelte';
 	import GeneralSettings from './GeneralSettings.svelte';
 	import PermissionGrants from './PermissionGrants.svelte';
+	import PromptsSettings from './PromptsSettings.svelte';
 	import SettingsTabs from './SettingsTabs.svelte';
 	import UpdatePanel from './UpdatePanel.svelte';
 
@@ -13,8 +14,8 @@
 
 	const visibleTabs = $derived<SettingsTab[]>(
 		data.enableRedeploy
-			? ['general', 'permissions', 'activity', 'update']
-			: ['general', 'permissions', 'activity']
+			? ['general', 'prompts', 'permissions', 'activity', 'update']
+			: ['general', 'prompts', 'permissions', 'activity']
 	);
 
 	function readTab(value: string | null, allowedTabs: SettingsTab[]): SettingsTab {
@@ -23,6 +24,7 @@
 
 	function fallbackTab(form: FormResult | null): SettingsTab {
 		if (form?.formId === 'save') return 'general';
+		if (form?.formId?.includes('PromptTemplate')) return 'prompts';
 		if (
 			form?.formId === 'createGrant' ||
 			form?.formId === 'updateGrant' ||
@@ -50,7 +52,7 @@
 	}
 </script>
 
-<svelte:head><title>Settings — Copilot Portal</title></svelte:head>
+<svelte:head><title>Settings — Zestier's AI Portal</title></svelte:head>
 
 <div class="wrap">
 	<header class="settings-header">
@@ -58,8 +60,14 @@
 			<p class="eyebrow">Portal preferences</p>
 			<h1>Settings</h1>
 		</div>
-		<span class="auth-pill" class:ok={data.copilot.auth.isAuthenticated}>
-			Copilot: {authLabel(data.copilot.auth)}
+		<span
+			class="auth-pill"
+			class:ok={data.defaultProviderStatus.statusChecked &&
+				data.defaultProviderStatus.auth.isAuthenticated}
+		>
+			{data.defaultProviderStatus.displayName}: {data.defaultProviderStatus.statusChecked
+				? authLabel(data.defaultProviderStatus.auth)
+				: 'not selected'}
 		</span>
 	</header>
 
@@ -71,7 +79,13 @@
 	/>
 
 	{#if activeTab === 'general'}
-		<GeneralSettings settings={data.settings} copilot={data.copilot} {form} />
+		<GeneralSettings settings={data.settings} providers={data.providers} {form} />
+	{:else if activeTab === 'prompts'}
+		<PromptsSettings
+			builtInTemplates={data.builtInPromptTemplates}
+			promptTemplates={data.promptTemplates}
+			{form}
+		/>
 	{:else if activeTab === 'permissions'}
 		<PermissionGrants grants={data.grants} {form} />
 	{:else if activeTab === 'activity'}

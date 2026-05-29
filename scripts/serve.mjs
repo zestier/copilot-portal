@@ -89,7 +89,7 @@ function start() {
 	child = spawn(process.execPath, [liveDir], {
 		stdio: 'inherit',
 		cwd: root,
-		env: { ...process.env, COPILOT_PORTAL_DEPLOYED_AT: deployedAt }
+		env: { ...process.env, ZAP_DEPLOYED_AT: deployedAt }
 	});
 	child.on('exit', (code, signal) => {
 		log(`child exited code=${code} signal=${signal}`);

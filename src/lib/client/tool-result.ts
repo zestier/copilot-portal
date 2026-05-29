@@ -28,7 +28,6 @@ const markdownResultTools = new Set([
 	'exit_plan_mode',
 	'read_agent',
 	'report_intent',
-	'request_mode_switch',
 	'task_complete'
 ]);
 

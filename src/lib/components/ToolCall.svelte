@@ -3,7 +3,9 @@
 	import DiffView from './DiffView.svelte';
 	import TerminalBlock from './tool/TerminalBlock.svelte';
 	import ResultBlock from './tool/ResultBlock.svelte';
+	import GitToolResult from './tool/GitToolResult.svelte';
 	import { synthesizeDiffs } from '$lib/client/diff-synth';
+	import { parseGitToolResult } from '$lib/client/git-tool-result';
 	import { summarizeToolCall } from '$lib/client/tool-summary';
 	import { decodeToolResult, shouldRenderToolResultAsMarkdown } from '$lib/client/tool-result';
 
@@ -60,8 +62,15 @@
 	// rendering args that haven't been applied, and on error the result
 	// text usually explains the failure.
 	const renderedDiffs = $derived(toolCall.status === 'ok' ? synthesizeDiffs(toolCall) : []);
+	const gitRenderedResult = $derived(
+		toolCall.status === 'ok'
+			? parseGitToolResult(toolCall.tool, toolCall.argsJson, decoded.fallbackText)
+			: null
+	);
 	const gitDiffText = $derived(
-		toolCall.status === 'ok' && toolCall.tool === 'git_diff' ? decoded.fallbackText : null
+		toolCall.status === 'ok' && toolCall.tool === 'git_diff' && gitRenderedResult === null
+			? decoded.fallbackText
+			: null
 	);
 	const rerunDisabledReason = $derived.by(() => {
 		if (toolCall.status !== 'denied' && toolCall.status !== 'error') return null;
@@ -193,7 +202,9 @@
 				<div class="muted">Running…</div>
 			{/if}
 		{:else if toolCall.resultJson}
-			{#if gitDiffText}
+			{#if gitRenderedResult}
+				<GitToolResult result={gitRenderedResult} />
+			{:else if gitDiffText}
 				<DiffView diff={gitDiffText} collapsible />
 			{:else if renderedDiffs.length > 0}
 				{#each renderedDiffs as synthDiff, i (synthDiff.path + ':' + i)}

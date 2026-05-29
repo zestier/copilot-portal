@@ -10,6 +10,8 @@ const dataDir = resolve(__dirname, 'e2e/.tmp-data');
 
 const PORT = Number(process.env.E2E_PORT ?? 4173);
 const buildEntry = resolve(__dirname, 'build');
+const requestedWorkers = Number(process.env.E2E_WORKERS ?? 2);
+const workers = Number.isFinite(requestedWorkers) ? Math.max(1, requestedWorkers) : 2;
 
 // Synchronously probe whether something is already listening on PORT.
 // We need this at config-evaluation time so we can decide whether it's
@@ -40,10 +42,10 @@ if (!willReuseServer) {
 
 export default defineConfig({
 	testDir: './e2e',
-	fullyParallel: false,
+	fullyParallel: true,
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 1 : 0,
-	workers: 1,
+	workers,
 	reporter: process.env.CI ? [['html', { open: 'never' }], ['list']] : 'list',
 	timeout: 30_000,
 	expect: { timeout: 5_000 },
@@ -92,14 +94,11 @@ export default defineConfig({
 			// browser's `http://...` Origin header. Pin it explicitly.
 			ORIGIN: `http://127.0.0.1:${PORT}`,
 			// Each conversation's workdir lives under $DATA_DIR/workspaces/<id>.
-			// dataDir lives inside the copilot-portal source tree, which is itself a
+			// dataDir lives inside the ZAP source tree, which is itself a
 			// git repo. Without this, git commands run inside conversation workdirs
 			// would walk up into the outer repo. Tell git to stop at dataDir so each
 			// test sees an isolated workspace.
-			GIT_CEILING_DIRECTORIES: dataDir,
-			// Bump rate limit so test-only patterns (poll-for-idle,
-			// reset-all-conversations) don't trip the per-user limiter.
-			API_RATE_LIMIT_PER_MIN: '10000'
+			GIT_CEILING_DIRECTORIES: dataDir
 		}
 	}
 });

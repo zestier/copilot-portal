@@ -10,6 +10,12 @@ export interface DiffLine {
 	text: string;
 }
 
+export const MAX_RENDERABLE_DIFF_CHARS = 2_000_000;
+
+export function isRenderableDiff(diff: string): boolean {
+	return diff.length <= MAX_RENDERABLE_DIFF_CHARS;
+}
+
 export function parseUnifiedDiff(diff: string): DiffLine[] {
 	const out: DiffLine[] = [];
 	const lines = diff.split('\n');

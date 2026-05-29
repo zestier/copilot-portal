@@ -17,6 +17,8 @@
 		switch (tab) {
 			case 'general':
 				return 'General';
+			case 'prompts':
+				return 'Prompts';
 			case 'permissions':
 				return `Permissions (${grantCount})`;
 			case 'activity':

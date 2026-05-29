@@ -1,57 +1,58 @@
 import { test, expect } from '@playwright/test';
-import { resetConversations } from './helpers/reset';
-
-test.beforeEach(async ({ request }) => {
-	await resetConversations(request);
-});
+import { uniqueTitle } from './helpers/conversations';
 
 test('conversation CRUD via API matches sidebar state', async ({ page, request }) => {
+	const alpha = uniqueTitle('Alpha');
+	const beta = uniqueTitle('Beta');
+	const alphaRenamed = uniqueTitle('Alpha renamed');
 	const a = await request
-		.post('/api/conversations', { data: { title: 'Alpha' } })
+		.post('/api/conversations', { data: { title: alpha } })
 		.then((r) => r.json());
 	const b = await request
-		.post('/api/conversations', { data: { title: 'Beta' } })
+		.post('/api/conversations', { data: { title: beta } })
 		.then((r) => r.json());
 
 	await page.goto('/');
 	const sidebar = page.getByRole('navigation', { name: /Conversations/ });
-	await expect(sidebar.getByText('Alpha')).toBeVisible();
-	await expect(sidebar.getByText('Beta')).toBeVisible();
+	await expect(sidebar.getByText(alpha)).toBeVisible();
+	await expect(sidebar.getByText(beta)).toBeVisible();
 
 	const renameRes = await request.patch(`/api/conversations/${a.conversation.id}`, {
-		data: { title: 'Alpha renamed' }
+		data: { title: alphaRenamed }
 	});
 	expect(renameRes.ok()).toBeTruthy();
 	await page.reload();
-	await expect(sidebar.getByText('Alpha renamed')).toBeVisible();
+	await expect(sidebar.getByText(alphaRenamed)).toBeVisible();
 
 	const archiveRes = await request.patch(`/api/conversations/${b.conversation.id}`, {
 		data: { archived: true }
 	});
 	expect(archiveRes.ok()).toBeTruthy();
 	await page.reload();
-	await expect(sidebar.getByText('Beta')).not.toBeVisible();
+	await expect(sidebar.getByText(beta)).not.toBeVisible();
 	await sidebar.getByRole('button', { name: /Archived/ }).click();
-	await expect(sidebar.getByText('Beta')).toBeVisible();
+	await expect(sidebar.getByText(beta)).toBeVisible();
 
 	const delRes = await request.delete(`/api/conversations/${a.conversation.id}`);
 	expect(delRes.ok()).toBeTruthy();
 	await page.reload();
-	await expect(sidebar.getByText('Alpha renamed')).not.toBeVisible();
+	await expect(sidebar.getByText(alphaRenamed)).not.toBeVisible();
 
 	const getRes = await request.get(`/api/conversations/${a.conversation.id}`);
 	expect(getRes.status()).toBe(404);
 });
 
 test('rename via sidebar UI', async ({ page, request }) => {
+	const title = uniqueTitle('Rename me');
+	const renamed = uniqueTitle('Renamed via UI');
 	const created = await request
-		.post('/api/conversations', { data: { title: 'Rename me' } })
+		.post('/api/conversations', { data: { title } })
 		.then((r) => r.json());
 
 	await page.goto('/');
 	const sidebar = page.getByRole('navigation', { name: /Conversations/ });
-	const row = sidebar.locator('.conv', { hasText: 'Rename me' });
-	await row.getByRole('button', { name: /Actions for Rename me/ }).click();
+	const row = sidebar.locator('.conv', { hasText: title });
+	await row.getByRole('button', { name: `Actions for ${title}` }).click();
 	await page.getByRole('button', { name: 'Rename', exact: true }).click();
 
 	// Once the menu's Rename is clicked the title text is replaced by an
@@ -59,11 +60,11 @@ test('rename via sidebar UI', async ({ page, request }) => {
 	// the row by its (now-gone) text.
 	const input = sidebar.locator('input.rename-input');
 	await expect(input).toBeVisible();
-	await input.fill('Renamed via UI');
+	await input.fill(renamed);
 	await input.press('Enter');
 
-	await expect(sidebar.getByText('Renamed via UI')).toBeVisible();
+	await expect(sidebar.getByText(renamed)).toBeVisible();
 
 	const get = await request.get(`/api/conversations/${created.conversation.id}`);
-	expect((await get.json()).conversation.title).toBe('Renamed via UI');
+	expect((await get.json()).conversation.title).toBe(renamed);
 });

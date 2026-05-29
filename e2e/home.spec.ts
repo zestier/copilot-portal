@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('home page renders and creates a new conversation', async ({ page }) => {
 	await page.goto('/');
-	await expect(page.getByRole('heading', { name: 'Copilot Portal' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: "Zestier's AI Portal" })).toBeVisible();
 
 	const newChat = page.getByRole('button', { name: /\+ New chat/ }).first();
 	await expect(newChat).toBeEnabled();

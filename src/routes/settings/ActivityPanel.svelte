@@ -12,7 +12,9 @@
 >
 	<div class="section-heading">
 		<h2>Recent permission decisions</h2>
-		<p class="muted small">Audit what was allowed, denied, or auto-decided recently.</p>
+		<p class="muted small">
+			Audit what was allowed, hard-denied, prompt-denied, or auto-decided recently.
+		</p>
 	</div>
 	{#if decisions.length === 0}
 		<p class="muted small">No permission requests have been answered yet.</p>
@@ -111,6 +113,11 @@
 	}
 	.decision-tag.auto-deny {
 		color: var(--muted, var(--danger));
+		border-color: var(--border);
+		font-style: italic;
+	}
+	.decision-tag.auto-prompt-required {
+		color: var(--warning, var(--muted));
 		border-color: var(--border);
 		font-style: italic;
 	}

@@ -80,11 +80,30 @@ describe('matchGrants precedence', () => {
 		).toBe('deny');
 	});
 
-	it('exact-args short-lived allow grants override broader denies', () => {
+	it('allow beats prompt and deny beats both when grants match', () => {
+		expect(
+			matchGrants(
+				[grant({ decision: 'allow' }), grant({ decision: 'prompt', scopePattern: 'npm *' })],
+				{ tool: 'shell', permissionKind: 'shell', scopeKey: 'npm install', now: NOW }
+			)
+		).toBe('allow');
+		expect(
+			matchGrants(
+				[
+					grant({ decision: 'allow' }),
+					grant({ decision: 'prompt', scopePattern: 'npm *' }),
+					grant({ decision: 'deny', scopePattern: 'npm install' })
+				],
+				{ tool: 'shell', permissionKind: 'shell', scopeKey: 'npm install', now: NOW }
+			)
+		).toBe('deny');
+	});
+
+	it('force-allow grants override broader prompt-required grants', () => {
 		const rows = [
-			grant({ decision: 'deny', scopePattern: 'cat *' }),
+			grant({ decision: 'prompt', scopePattern: 'cat *' }),
 			grant({
-				decision: 'allow',
+				decision: 'force-allow',
 				scopePattern: null,
 				argsHash: 'rerun-hash',
 				expiresAt: NOW + 60_000
@@ -107,7 +126,28 @@ describe('matchGrants precedence', () => {
 				argsHash: 'other-hash',
 				now: NOW
 			})
-		).toBe('deny');
+		).toBe('prompt');
+	});
+
+	it('force-allow grants beat hard deny grants', () => {
+		const rows = [
+			grant({ decision: 'deny', scopePattern: 'cat *' }),
+			grant({
+				decision: 'force-allow',
+				scopePattern: null,
+				argsHash: 'rerun-hash',
+				expiresAt: NOW + 60_000
+			})
+		];
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'cat package.json',
+				argsHash: 'rerun-hash',
+				now: NOW
+			})
+		).toBe('allow');
 	});
 
 	it('non-matching deny does not block an allow', () => {
@@ -212,7 +252,7 @@ describe('matchGrants — shell segments (per-segment OR across grants)', () => 
 			tool: 'shell',
 			permissionKind: 'shell',
 			decision,
-			scope: { kind: 'shell', rule: { argv0 } }
+			scope: { kind: 'shell', rule: { command: [{ token: argv0 }] } }
 		});
 	}
 
@@ -259,6 +299,39 @@ describe('matchGrants — shell segments (per-segment OR across grants)', () => 
 				now: NOW
 			})
 		).toBe('deny');
+	});
+
+	it('allow on a segment wins over matching prompts', () => {
+		const rows = [shellGrant('cd'), shellGrant('git'), shellGrant('git', 'prompt')];
+		expect(
+			matchGrants(rows, {
+				tool: 'shell',
+				permissionKind: 'shell',
+				scopeKey: 'cd ./src && git diff',
+				shellSegments: parse('cd ./src && git diff'),
+				now: NOW
+			})
+		).toBe('allow');
+	});
+
+	it('prompt outcome carries prompt feedback without becoming a hard deny', () => {
+		const rows = [
+			{
+				...shellGrant('git', 'prompt'),
+				denyReason: 'Use structured Git tools unless no structured tool fits.'
+			}
+		];
+		const out = matchGrantsDetailed(rows, {
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopeKey: 'git commit -m x',
+			shellSegments: parse('git commit -m x'),
+			now: NOW
+		});
+		expect(out).toMatchObject({
+			outcome: 'prompt',
+			feedback: 'Use structured Git tools unless no structured tool fits.'
+		});
 	});
 
 	it('wildcard "any" grant covers every segment', () => {
@@ -350,20 +423,20 @@ describe('matchGrants — pipeline lever and denyReason', () => {
 	const allowAnyGrep = grant({
 		tool: 'shell',
 		permissionKind: 'shell',
-		scope: { kind: 'shell', rule: { argv0: 'grep', positionals: { kind: 'any' } } },
+		scope: { kind: 'shell', rule: { command: [{ token: 'grep' }], positionals: { kind: 'any' } } },
 		decision: 'allow'
 	});
 	const denyBareGrep = grant({
 		tool: 'shell',
 		permissionKind: 'shell',
-		scope: { kind: 'shell', rule: { argv0: 'grep', pipeline: 'forbid' } },
+		scope: { kind: 'shell', rule: { command: [{ token: 'grep' }], pipeline: 'forbid' } },
 		decision: 'deny',
 		denyReason: 'Use the structured `grep` tool instead of the shell binary.'
 	});
 	const allowCat = grant({
 		tool: 'shell',
 		permissionKind: 'shell',
-		scope: { kind: 'shell', rule: { argv0: 'cat', positionals: { kind: 'any' } } },
+		scope: { kind: 'shell', rule: { command: [{ token: 'cat' }], positionals: { kind: 'any' } } },
 		decision: 'allow'
 	});
 
@@ -393,11 +466,93 @@ describe('matchGrants — pipeline lever and denyReason', () => {
 		const denyNoReason = grant({
 			tool: 'shell',
 			permissionKind: 'shell',
-			scope: { kind: 'shell', rule: { argv0: 'rm' } },
+			scope: { kind: 'shell', rule: { command: [{ token: 'rm' }] } },
 			decision: 'deny'
 		});
 		const out = matchGrantsDetailed([denyNoReason], shellQuery('rm -rf /'));
 		expect(out.outcome).toBe('deny');
 		expect(out.denyReason).toBe(null);
+	});
+});
+
+describe('matchGrants — git pre-subcommand globals', () => {
+	function shellQuery(command: string): MatchQuery {
+		const parsed = parseShellCommand(command);
+		if (parsed.kind !== 'parsed') throw new Error(`parse failed: ${command}`);
+		return {
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopeKey: command,
+			shellSegments: parsed.segments,
+			workspaceRoot: '/workspaces/repo',
+			now: NOW
+		};
+	}
+
+	it('hard-deny grants can target risky Git globals in both equals and space forms', () => {
+		const denyDashC = grant({
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopePattern: 'git *-C *',
+			decision: 'deny',
+			denyReason: 'Use structured Git tools.'
+		});
+		const denyGitDir = grant({
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopePattern: 'git *--git-dir=*',
+			decision: 'deny',
+			denyReason: 'Use structured Git tools.'
+		});
+		const denyConfigEnv = grant({
+			tool: 'shell',
+			permissionKind: 'shell',
+			scopePattern: 'git *--config-env *',
+			decision: 'deny',
+			denyReason: 'Use structured Git tools.'
+		});
+		const denyGitStatus = grant({
+			tool: 'shell',
+			permissionKind: 'shell',
+			scope: {
+				kind: 'shell',
+				rule: { command: [{ token: 'git' }, { token: 'status' }], positionals: { kind: 'any' } }
+			},
+			decision: 'deny',
+			denyReason: 'Use git_status.'
+		});
+		const allowGit = grant({
+			tool: 'shell',
+			permissionKind: 'shell',
+			scope: { kind: 'shell', rule: { command: [{ token: 'git' }], positionals: { kind: 'any' } } },
+			decision: 'force-allow',
+			argsHash: 'exact'
+		});
+
+		expect(matchGrantsDetailed([allowGit, denyDashC], shellQuery('git status'))).toMatchObject({
+			outcome: 'none',
+			feedback: null
+		});
+		expect(
+			matchGrantsDetailed([allowGit, denyDashC], shellQuery('git -C /tmp status'))
+		).toMatchObject({ outcome: 'deny', feedback: 'Use structured Git tools.' });
+		expect(
+			matchGrantsDetailed([allowGit, denyGitDir], shellQuery('git --git-dir=/tmp/.git status'))
+		).toMatchObject({ outcome: 'deny', feedback: 'Use structured Git tools.' });
+		expect(
+			matchGrantsDetailed(
+				[allowGit, denyConfigEnv],
+				shellQuery('git --config-env core.sshCommand=GIT_SSH_COMMAND status')
+			)
+		).toMatchObject({ outcome: 'deny', feedback: 'Use structured Git tools.' });
+		expect(
+			matchGrantsDetailed([allowGit, denyDashC], {
+				...shellQuery('git -c core.pager=cat status'),
+				argsHash: 'exact'
+			})
+		).toMatchObject({ outcome: 'allow', feedback: null });
+		expect(
+			matchGrantsDetailed([denyDashC, denyGitStatus], shellQuery('git -C /tmp status'))
+		).toMatchObject({ outcome: 'deny', feedback: 'Use structured Git tools.' });
 	});
 });

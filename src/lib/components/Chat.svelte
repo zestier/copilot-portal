@@ -7,7 +7,8 @@
 		Message,
 		PortalEvent,
 		InteractiveRequestView,
-		InteractiveResponse
+		InteractiveResponse,
+		ProviderCapabilities
 	} from '$lib/types';
 	import Message_ from './Message.svelte';
 	import InteractiveRequestDialog from './InteractiveRequestDialog.svelte';
@@ -19,6 +20,12 @@
 		findToolCallRecord,
 		shouldRefreshTicketsAfterToolResult
 	} from '$lib/client/ticket-tool-refresh';
+	import {
+		CHAT_STREAM_STALL_TIMEOUT_MS,
+		streamRefreshAction
+	} from '$lib/client/chat-stream-recovery';
+
+	const INTERACTIVE_REVEAL_DELAY_MS = 150;
 
 	let {
 		conversation,
@@ -27,9 +34,23 @@
 		parent = null,
 		initialActiveTurnId = null,
 		initialPendingInteractive = [],
-		initialComposer = ''
+		initialComposer = '',
+		providerCapabilities,
+		providerDisplayName,
+		providerModels,
+		providerModelsError = null,
+		defaultModelPlaceholder,
+		effectiveModel,
+		chatPlaceholder
 	}: {
 		conversation: Conversation;
+		providerCapabilities: ProviderCapabilities;
+		providerDisplayName: string;
+		providerModels: { id: string; name: string; maxContextWindowTokens?: number }[];
+		providerModelsError?: string | null;
+		defaultModelPlaceholder: string;
+		effectiveModel: string;
+		chatPlaceholder: string;
 		initialMessages: Message[];
 		initialUsage?: ConversationUsage | null;
 		parent?: {
@@ -45,6 +66,7 @@
 
 	let messages = $state<Message[]>([]);
 	let title = $state<string>(untrack(() => conversation.title));
+	let sessionModel = $state<string>(untrack(() => conversation.model ?? effectiveModel));
 	let sessionMode = $state<Conversation['mode']>(untrack(() => conversation.mode));
 	let approveAllTools = $state<boolean>(untrack(() => conversation.approveAllTools));
 	let usage = $state<ConversationUsage | null>(untrack(() => initialUsage));
@@ -77,16 +99,35 @@
 			/* non-fatal */
 		}
 	}
+
+	function clearCompactionTimer() {
+		if (compactionTimer) {
+			clearTimeout(compactionTimer);
+			compactionTimer = null;
+		}
+	}
+
+	function clearInteractiveRevealTimers() {
+		for (const timer of interactiveRevealTimers.values()) clearTimeout(timer);
+		interactiveRevealTimers.clear();
+	}
+
+	function invalidateRefreshMessages() {
+		refreshMessagesRun++;
+	}
+
 	$effect(() => {
 		// Reset local message list when the conversation prop changes.
 		void conversation.id;
 		untrack(() => {
+			invalidateRefreshMessages();
 			// Tear down any stream attached to the previous conversation
 			// before we swap state — otherwise its events would land in
 			// the new conversation's `messages` array.
 			closeStream();
 			messages = [...initialMessages];
 			title = conversation.title;
+			sessionModel = conversation.model ?? effectiveModel;
 			sessionMode = conversation.mode;
 			approveAllTools = conversation.approveAllTools;
 			usage = initialUsage;
@@ -96,10 +137,9 @@
 			hasNewBelow = false;
 			forksByMessage = {};
 			pendingInteractive = [...initialPendingInteractive];
-			if (compactionTimer) {
-				clearTimeout(compactionTimer);
-				compactionTimer = null;
-			}
+			visibleInteractive = [...initialPendingInteractive];
+			clearInteractiveRevealTimers();
+			clearCompactionTimer();
 			// Reattach the EventSource to any in-progress turn so a
 			// refresh-mid-stream resumes seamlessly.
 			if (initialActiveTurnId) {
@@ -107,6 +147,11 @@
 			}
 			void refreshForks();
 		});
+		return () => {
+			closeStream();
+			clearCompactionTimer();
+			clearInteractiveRevealTimers();
+		};
 	});
 
 	let composer = $state(untrack(() => initialComposer));
@@ -118,6 +163,10 @@
 	let pendingInteractive = $state<InteractiveRequestView[]>(
 		untrack(() => [...initialPendingInteractive])
 	);
+	let visibleInteractive = $state<InteractiveRequestView[]>(
+		untrack(() => [...initialPendingInteractive])
+	);
+	const interactiveRevealTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	// Active EventSource for the in-flight turn (if any). null when idle.
 	// Holding a reference here lets `stop()` close it on user-cancel and
 	// lets the conversation-prop $effect tear it down on navigation.
@@ -125,6 +174,8 @@
 	// Id of the turn we're currently streaming. Tracked separately because
 	// EventSource owns its own URL; we need the id for DELETE on cancel.
 	let activeTurnId: string | null = null;
+	let streamStallTimer: ReturnType<typeof setTimeout> | null = null;
+	let refreshMessagesRun = 0;
 	let scrollEl: HTMLDivElement | undefined;
 	// Sticky-scroll: only auto-scroll if the user is pinned to the bottom.
 	// Otherwise, surface a "New messages" pill (Slack-style) so we don't
@@ -172,7 +223,13 @@
 	//     radio, proxy idle close).
 	//   - Sends `Last-Event-ID` on reconnect so the server replays only
 	//     events we haven't seen yet.
-	// We only need to handle two terminal cases ourselves:
+	// EventSource hides heartbeat comments from JS, so a live-but-stalled
+	// proxy can leave us waiting forever if a terminal data event is lost.
+	// We therefore also run an idle recovery timer keyed to visible stream
+	// activity. Recovery only refetches persisted state; it does not cancel
+	// a server-side turn that is still running.
+	//
+	// We only need to handle two terminal cases directly:
 	//   1. `done` portal event → turn finished cleanly. Close the stream.
 	//   2. Network error with `readyState === CLOSED` → server refused
 	//      reconnect (typically 410 Gone: turn no longer in registry).
@@ -185,6 +242,9 @@
 		const es = new EventSource(`/api/conversations/${conversation.id}/turns/${turnId}/stream`);
 		eventSource = es;
 
+		es.onopen = () => {
+			scheduleStreamStallTimeout();
+		};
 		es.onmessage = (msg) => {
 			let ev: PortalEvent;
 			try {
@@ -195,6 +255,8 @@
 			applyEvent(ev);
 			if (ev.type === 'done') {
 				closeStream();
+			} else {
+				scheduleStreamStallTimeout();
 			}
 		};
 		es.onerror = () => {
@@ -207,11 +269,15 @@
 			if (es.readyState === EventSource.CLOSED) {
 				closeStream();
 				void refreshMessages();
+			} else {
+				scheduleStreamStallTimeout();
 			}
 		};
+		scheduleStreamStallTimeout();
 	}
 
 	function closeStream() {
+		clearStreamStallTimeout();
 		if (eventSource) {
 			eventSource.close();
 			eventSource = null;
@@ -220,11 +286,37 @@
 		streaming = false;
 	}
 
+	function clearStreamStallTimeout() {
+		if (streamStallTimer) {
+			clearTimeout(streamStallTimer);
+			streamStallTimer = null;
+		}
+	}
+
+	function scheduleStreamStallTimeout() {
+		clearStreamStallTimeout();
+		if (!eventSource || !activeTurnId || pendingInteractive.length > 0) return;
+		const turnId = activeTurnId;
+		streamStallTimer = setTimeout(() => {
+			void recoverStalledStream(turnId);
+		}, CHAT_STREAM_STALL_TIMEOUT_MS);
+	}
+
+	async function recoverStalledStream(turnId: string) {
+		if (turnId !== activeTurnId || pendingInteractive.length > 0) {
+			return;
+		}
+		await refreshMessages();
+		if (turnId !== activeTurnId) return;
+		scheduleStreamStallTimeout();
+	}
+
 	// Pull the latest persisted messages for this conversation and replace
 	// local state. Used as a recovery path when the EventSource closes
 	// without a `done` (e.g. 410 Gone after grace expiry) so the UI
 	// doesn't strand mid-stream content forever.
 	async function refreshMessages() {
+		const run = ++refreshMessagesRun;
 		try {
 			const r = await fetch(`/api/conversations/${conversation.id}`);
 			if (!r.ok) return;
@@ -233,6 +325,7 @@
 				activeTurnId: string | null;
 				pendingInteractive?: InteractiveRequestView[];
 			};
+			if (run !== refreshMessagesRun) return;
 			messages = data.messages;
 			// Rehydrate outstanding prompts from the authoritative server
 			// list. Previously we cleared this unconditionally, which meant
@@ -241,11 +334,24 @@
 			// would only see a response after the (formerly 10-minute)
 			// timeout fired. Now we just snap to whatever the server says.
 			pendingInteractive = data.pendingInteractive ?? [];
+			visibleInteractive = data.pendingInteractive ?? [];
+			clearInteractiveRevealTimers();
 			await scrollToBottom();
-			// If a new turn became active between events (unlikely but
-			// possible from another tab), attach to it.
-			if (data.activeTurnId && !eventSource) {
+			if (run !== refreshMessagesRun) return;
+			const action = streamRefreshAction({
+				currentTurnId: activeTurnId,
+				refreshedActiveTurnId: data.activeTurnId,
+				hasEventSource: eventSource !== null
+			});
+			if (action === 'finish') {
+				closeStream();
+			} else if (action === 'reattach' && data.activeTurnId) {
+				// If a new turn became active between events (unlikely but
+				// possible from another tab), attach to it. This also repairs
+				// a locally closed stream when the server still has work.
 				attachStream(data.activeTurnId);
+			} else {
+				scheduleStreamStallTimeout();
 			}
 		} catch {
 			/* non-fatal */
@@ -256,6 +362,25 @@
 		streaming = true;
 		await refreshMessages();
 		if (!eventSource) attachStream(turnId);
+	}
+
+	function handleInlineEdited(messageId: string, content: string, turnId: string) {
+		const idx = messages.findIndex((m) => m.id === messageId);
+		if (idx >= 0) {
+			messages = messages.slice(0, idx + 1);
+			messages[idx] = {
+				...messages[idx],
+				content,
+				status: 'complete',
+				errorCode: null
+			};
+		} else {
+			void refreshMessages();
+		}
+		pendingInteractive = [];
+		usage = null;
+		streaming = true;
+		attachStream(turnId);
 	}
 
 	function applyEvent(ev: PortalEvent) {
@@ -393,7 +518,7 @@
 				break;
 			}
 			case 'interactive.request': {
-				pendingInteractive = addInteractive(pendingInteractive, ev.request);
+				addPendingInteractive(ev.request);
 				break;
 			}
 			case 'interactive.resolved': {
@@ -401,7 +526,7 @@
 				// `interactive.request` event lives forever in the turn's event
 				// log, so without this signal a refresh or a visibility-driven
 				// reconnect would resurrect a dialog the user already answered.
-				pendingInteractive = removeInteractive(pendingInteractive, ev.requestId);
+				removePendingInteractive(ev.requestId);
 				break;
 			}
 			case 'file.edit': {
@@ -495,24 +620,67 @@
 		}
 	}
 
+	function addPendingInteractive(
+		request: InteractiveRequestView,
+		opts: { revealImmediately?: boolean } = {}
+	) {
+		pendingInteractive = addInteractive(pendingInteractive, request);
+		if (visibleInteractive.some((p) => p.requestId === request.requestId)) return;
+		if (opts.revealImmediately) {
+			visibleInteractive = addInteractive(visibleInteractive, request);
+			return;
+		}
+		if (interactiveRevealTimers.has(request.requestId)) return;
+		const timer = setTimeout(() => {
+			interactiveRevealTimers.delete(request.requestId);
+			if (!pendingInteractive.some((p) => p.requestId === request.requestId)) return;
+			visibleInteractive = addInteractive(visibleInteractive, request);
+			void scrollToBottom();
+		}, INTERACTIVE_REVEAL_DELAY_MS);
+		interactiveRevealTimers.set(request.requestId, timer);
+	}
+
+	function removePendingInteractive(requestId: string) {
+		const timer = interactiveRevealTimers.get(requestId);
+		if (timer) {
+			clearTimeout(timer);
+			interactiveRevealTimers.delete(requestId);
+		}
+		pendingInteractive = removeInteractive(pendingInteractive, requestId);
+		visibleInteractive = removeInteractive(visibleInteractive, requestId);
+	}
+
 	async function respondInteractive(requestId: string, response: InteractiveResponse) {
-		if (!pendingInteractive.some((p) => p.requestId === requestId)) return;
+		const request = pendingInteractive.find((p) => p.requestId === requestId);
+		if (!request) return;
 		// Optimistically drop the prompt; the server will also emit an
 		// `interactive.resolved` which is a no-op once removed.
-		pendingInteractive = removeInteractive(pendingInteractive, requestId);
-		await fetch(`/api/conversations/${conversation.id}/interactive/${requestId}`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(response)
-		});
+		removePendingInteractive(requestId);
+		clearStreamStallTimeout();
+		try {
+			const r = await fetch(`/api/conversations/${conversation.id}/interactive/${requestId}`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(response)
+			});
+			if (r.ok) {
+				scheduleStreamStallTimeout();
+				return;
+			}
+		} catch {
+			/* restore below */
+		}
+		addPendingInteractive(request, { revealImmediately: true });
+		scheduleStreamStallTimeout();
 	}
 
 	async function send() {
 		const text = composer.trim();
 		if (!text || streaming) return;
 		composer = '';
+		const localMessageId = `local-${Date.now()}`;
 		messages.push({
-			id: `local-${Date.now()}`,
+			id: localMessageId,
 			conversationId: conversation.id,
 			role: 'user',
 			content: text,
@@ -544,7 +712,20 @@
 				applyEvent({ type: 'error', code: 'start_failed', message: msg });
 				return;
 			}
-			const { turnId } = (await r.json()) as { turnId: string };
+			const {
+				turnId,
+				userMessageId,
+				title: updatedTitle
+			} = (await r.json()) as {
+				turnId: string;
+				userMessageId: string;
+				title?: string | null;
+			};
+			messages = messages.map((m) => (m.id === localMessageId ? { ...m, id: userMessageId } : m));
+			if (updatedTitle && updatedTitle !== title) {
+				title = updatedTitle;
+				void invalidateAll();
+			}
 			attachStream(turnId);
 		} catch (e) {
 			streaming = false;
@@ -560,6 +741,7 @@
 		// Tell the server to actually cancel the turn (just closing the
 		// EventSource would only detach this client; the turn would keep
 		// running). Then close the stream locally.
+		clearStreamStallTimeout();
 		const turnId = activeTurnId;
 		if (turnId) {
 			try {
@@ -598,12 +780,20 @@
 	<ChatHeader
 		{title}
 		{conversation}
+		{providerCapabilities}
+		{providerDisplayName}
+		model={sessionModel}
+		{providerModels}
+		{providerModelsError}
+		{defaultModelPlaceholder}
 		{parent}
 		{usage}
 		{recentCompaction}
 		mode={sessionMode}
 		{approveAllTools}
+		modelChangeDisabled={streaming}
 		onSettingsChange={(patch) => {
+			if (patch.model !== undefined) sessionModel = patch.model;
 			if (patch.mode !== undefined) sessionMode = patch.mode;
 			if (patch.approveAllTools !== undefined) approveAllTools = patch.approveAllTools;
 		}}
@@ -616,11 +806,13 @@
 					message={m}
 					conversationId={conversation.id}
 					forks={forksByMessage[m.id] ?? []}
+					conversationIdle={!streaming}
 					onForked={refreshForks}
+					onInlineEdited={handleInlineEdited}
 					onToolRerunStarted={handleToolRerunStarted}
 				/>
 			{/each}
-			{#each pendingInteractive as p (p.requestId)}
+			{#each visibleInteractive as p (p.requestId)}
 				<InteractiveRequestDialog
 					request={p}
 					onRespond={(r) => respondInteractive(p.requestId, r)}
@@ -659,6 +851,7 @@
 		bind:value={composer}
 		{streaming}
 		inputDisabled={streaming && pendingInteractive.length === 0}
+		placeholder={chatPlaceholder}
 		onSend={send}
 		onStop={stop}
 	/>

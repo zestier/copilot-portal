@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import * as settings from '../src/lib/server/db/repos/settings';
 import {
 	ensureSeedGrantsForUser,
-	defaultSeedGrants
+	defaultSeedGrants,
+	restoreSeedGrantsForUser
 } from '../src/lib/server/permissions/seed-grants';
 import { parseShellCommand } from '../src/lib/server/permissions/shell-parser';
 import { setupLocalEnv } from './helpers/env';
@@ -24,8 +25,23 @@ describe('seed grants — installation', () => {
 		const reSettings = await import('../src/lib/server/db/repos/settings');
 		const all = reSettings.listGrantsForUser(userId);
 		expect(all.length).toBe(defaultSeedGrants().length);
-		// Every seed is structured (scope_json populated).
-		expect(all.every((g) => g.scope !== null)).toBe(true);
+		// Every seed has either structured scope_json or a legacy pattern.
+		expect(all.every((g) => g.scope !== null || g.scopePattern !== null)).toBe(true);
+		expect(all.every((g) => g.source === 'seed')).toBe(true);
+	});
+
+	it('installs hard-deny grants only for Git shell commands by default', () => {
+		const denies = defaultSeedGrants().filter((g) => g.decision === 'deny');
+		expect(denies.length).toBeGreaterThan(0);
+		expect(
+			denies.every(
+				(g) =>
+					g.tool === 'shell' &&
+					g.permissionKind === 'shell' &&
+					((g.scope?.kind === 'shell' && g.scope.rule.command?.[0]?.token === 'git') ||
+						g.scopePattern?.startsWith('git '))
+			)
+		).toBe(true);
 	});
 
 	it('is idempotent — re-running adds nothing', async () => {
@@ -35,6 +51,64 @@ describe('seed grants — installation', () => {
 		const after = reSettings.listGrantsForUser(userId).length;
 		expect(inserted).toBe(0);
 		expect(after).toBe(before);
+	});
+
+	it('restore replaces identifiable old hard-deny prompt seeds with current seeds', async () => {
+		const reSettings = await import('../src/lib/server/db/repos/settings');
+		reSettings.revokeAllGrantsForUser(userId);
+		reSettings.addGrant({
+			userId,
+			conversationId: null,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scope: { kind: 'shell', rule: { command: [{ token: 'cat' }], pipeline: 'forbid' } },
+			decision: 'deny',
+			denyReason: 'Bare `cat` is denied. Use `view` for file reads. Piped `cat` is allowed.'
+		});
+
+		const result = restoreSeedGrantsForUser(userId);
+		const all = reSettings.listGrantsForUser(userId);
+
+		expect(result).toEqual({ removed: 1, inserted: defaultSeedGrants().length });
+		expect(all.length).toBe(defaultSeedGrants().length);
+		expect(
+			all
+				.filter((g) => g.decision === 'deny')
+				.every(
+					(g) =>
+						(g.scope?.kind === 'shell' && g.scope.rule.command?.[0]?.token === 'git') ||
+						g.scopePattern?.startsWith('git ')
+				)
+		).toBe(true);
+		const parsed = parseShellCommand('cat README.md');
+		expect(
+			reSettings.matchGrant(userId, 'conv-x', 'shell', 'shell', 'cat README.md', {
+				shellSegments: parsed.kind === 'parsed' ? parsed.segments : null,
+				workspaceRoot: '/tmp'
+			})
+		).toBe('allow');
+	});
+
+	it('restore leaves user-created non-default grants alone', async () => {
+		const reSettings = await import('../src/lib/server/db/repos/settings');
+		reSettings.addGrant({
+			userId,
+			conversationId: null,
+			tool: 'shell',
+			permissionKind: 'shell',
+			scope: { kind: 'shell', rule: { command: [{ token: 'rm' }] } },
+			decision: 'deny',
+			denyReason: 'rm stays blocked'
+		});
+
+		const result = restoreSeedGrantsForUser(userId);
+		const all = reSettings.listGrantsForUser(userId);
+
+		expect(result.removed).toBe(defaultSeedGrants().length);
+		expect(result.inserted).toBe(defaultSeedGrants().length);
+		expect(all.some((g) => g.decision === 'deny' && g.denyReason === 'rm stays blocked')).toBe(
+			true
+		);
 	});
 });
 
@@ -46,6 +120,18 @@ describe('seed grants — runtime behaviour', () => {
 	) {
 		const parsed = parseShellCommand(command);
 		return settings.matchGrant(userId, 'conv-x', 'shell', 'shell', command, {
+			shellSegments: parsed.kind === 'parsed' ? parsed.segments : null,
+			workspaceRoot,
+			sessionWorkspaceRoot
+		});
+	}
+	function shellMatchDetailed(
+		command: string,
+		workspaceRoot: string | null = '/tmp',
+		sessionWorkspaceRoot: string | null = null
+	) {
+		const parsed = parseShellCommand(command);
+		return settings.matchGrantDetailed(userId, 'conv-x', 'shell', 'shell', command, {
 			shellSegments: parsed.kind === 'parsed' ? parsed.segments : null,
 			workspaceRoot,
 			sessionWorkspaceRoot
@@ -95,40 +181,53 @@ describe('seed grants — runtime behaviour', () => {
 		expect(fsMatch('read', '/tmp/other/plan.md', session)).toBe('none');
 	});
 
-	it('denies git commands with feedback to use structured tools by default', () => {
+	it('denies shell git commands covered by structured Git tools', () => {
 		expect(shellMatch('git status')).toBe('deny');
 		expect(shellMatch('git --no-pager status')).toBe('deny');
-		expect(shellMatch('git -c color.ui=always status')).toBe('deny');
 		expect(shellMatch('git log -n 5')).toBe('deny');
 		expect(shellMatch('git diff HEAD')).toBe('deny');
-	});
-
-	it('denies mutating git subcommands instead of auto-approving them', () => {
-		expect(shellMatch('git push')).toBe('deny');
+		expect(shellMatch('git show HEAD')).toBe('deny');
 		expect(shellMatch('git commit -m x')).toBe('deny');
-		expect(shellMatch('git config user.email test@example.com')).toBe('deny');
-		expect(shellMatch('git stash push')).toBe('deny');
-		expect(shellMatch('git branch -D feature')).toBe('deny');
-		expect(shellMatch('git tag -d v1')).toBe('deny');
-		expect(shellMatch('git remote set-url origin https://example.com/repo.git')).toBe('deny');
+		expect(shellMatchDetailed('git --no-pager status').feedback).toContain('git_status');
+		expect(shellMatchDetailed('git diff HEAD').feedback).toContain('git_diff');
+		expect(shellMatchDetailed('git log -n 5').feedback).toContain('git_log tool');
+		expect(shellMatchDetailed('git show HEAD').feedback).toContain('git_show_commit');
+		expect(shellMatchDetailed('git commit -m x').feedback).toContain('git_commit');
 	});
 
-	it('rejects --git-dir / -C escape attempts', () => {
+	it('requires prompts for mutating git subcommands instead of auto-approving them', () => {
+		expect(shellMatch('git push')).toBe('prompt');
+		expect(shellMatch('git config user.email test@example.com')).toBe('prompt');
+		expect(shellMatch('git stash push')).toBe('prompt');
+		expect(shellMatch('git branch -D feature')).toBe('prompt');
+		expect(shellMatch('git tag -d v1')).toBe('prompt');
+		expect(shellMatch('git remote set-url origin https://example.com/repo.git')).toBe('prompt');
+	});
+
+	it('denies risky Git global options with structured-tool feedback', () => {
 		expect(shellMatch('git --git-dir=/etc status')).toBe('deny');
 		expect(shellMatch('git --git-dir /etc status')).toBe('deny');
 		expect(shellMatch('git -C /etc status')).toBe('deny');
+		expect(shellMatch('cd . && git -C /etc status')).toBe('deny');
+		expect(shellMatch('git -c color.ui=always status')).toBe('deny');
+		expect(shellMatch('git --config-env core.sshCommand=GIT_SSH_COMMAND status')).toBe('deny');
+		expect(shellMatchDetailed('git -C /etc status').feedback).toContain(
+			'change repository, worktree, config, namespace, or execution context'
+		);
+		expect(shellMatchDetailed('git -C /etc status').feedback).toContain(
+			'git_status/git_diff/git_log/git_show_commit/git_show_file/git_commit tools'
+		);
 	});
 
-	it('bare cat is denied (nudges toward structured read), but pipelined cat still works', () => {
+	it('bare cat is allowed when it matches the filesystem read allow seed', () => {
 		// Workspace is /tmp; cat README.md resolves to /tmp/README.md.
-		// The structured `view` tool is preferred for bare reads, so cat is denied.
-		expect(shellMatch('cat README.md', '/tmp')).toBe('deny');
-		// As part of a pipeline, cat is fine — the deny seed is `pipeline: 'forbid'`.
+		expect(shellMatch('cat README.md', '/tmp')).toBe('allow');
+		// As part of a pipeline, cat is fine too.
 		expect(shellMatch('cat README.md | grep foo', '/tmp')).toBe('allow');
 		expect(shellMatch('cat /tmp/session/plan.md | grep foo', '/tmp', '/tmp/session')).toBe('allow');
-		// Escapes still fail to match the allow seed.
-		expect(shellMatch('cat /etc/passwd', '/tmp')).toBe('deny');
-		expect(shellMatch('cat ../etc/passwd', '/tmp')).toBe('deny');
+		// Escapes still fail to match the allow seed but remain promptable.
+		expect(shellMatch('cat /etc/passwd', '/tmp')).toBe('prompt');
+		expect(shellMatch('cat ../etc/passwd', '/tmp')).toBe('prompt');
 	});
 
 	it('rejects unsafe shell features even for safe-named tools', () => {
@@ -144,11 +243,11 @@ describe('seed grants — runtime behaviour', () => {
 		expect(shellMatch('curl https://example.com')).toBe('none');
 	});
 
-	it('bare find is denied (use the glob tool); pipelined find still passes', () => {
-		expect(shellMatch('find . -name foo')).toBe('deny');
+	it('bare find is allowed when it matches the find allow seed', () => {
+		expect(shellMatch('find . -name foo')).toBe('allow');
 		expect(shellMatch('find . -name foo | grep bar', '/tmp')).toBe('allow');
 		// `;` in -exec makes the parser bail (multi-segment with empty tail),
-		// so nothing matches — same as before deny seeds existed.
+		// so nothing matches — same as before prompt-nudge seeds existed.
 		expect(shellMatch('find . -exec rm {} ;')).toBe('none');
 	});
 });

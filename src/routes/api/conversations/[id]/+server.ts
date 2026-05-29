@@ -3,9 +3,9 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
-import * as pool from '$lib/server/copilot/pool';
-import { getTurn } from '$lib/server/copilot/turn-runner';
-import { listForConversation as listPendingInteractive } from '$lib/server/copilot/interactive-requests';
+import * as pool from '$lib/server/runtime/pool';
+import { getTurn } from '$lib/server/runtime/turn-runner';
+import { listForConversation as listPendingInteractive } from '$lib/server/runtime/interactive-requests';
 import { parseBody } from '$lib/server/validate';
 import { authorizeConversation } from '$lib/server/conversation-auth';
 

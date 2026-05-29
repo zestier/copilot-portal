@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { forkAtMessage, ForkRejected } from '$lib/server/fork';
+import { startTurnFromUserMessage } from '$lib/server/turn-start';
 import { parseBody } from '$lib/server/validate';
 import { requireUserId } from '$lib/server/auth/require';
 
@@ -36,13 +37,17 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const parsed = await parseBody(request, Body, { allowEmpty: true });
 
 	try {
-		const { conversation } = await forkAtMessage({
+		const { conversation, userMessage } = await forkAtMessage({
 			userId,
 			sourceConversationId: sourceId,
 			messageId,
 			newContent: parsed.content ?? null
 		});
-		return json({ ok: true, conversationId: conversation.id });
+		if (!userMessage) return json({ ok: true, conversationId: conversation.id });
+		const turn = await startTurnFromUserMessage(conversation, userMessage, {
+			includePriorMessages: true
+		});
+		return json({ ok: true, conversationId: conversation.id, turnId: turn.id });
 	} catch (e) {
 		if (e instanceof ForkRejected) {
 			throw error(REJECT_STATUS[e.reason] ?? 400, e.message);

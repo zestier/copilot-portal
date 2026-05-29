@@ -1,9 +1,16 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
-import { normalizeSessionMode, type UserSettings, type PermissionPolicy } from '$lib/types';
+import { loadConfig } from '../../config';
+import {
+	normalizeBackendProvider,
+	normalizeSessionMode,
+	type UserSettings,
+	type PermissionPolicy
+} from '$lib/types';
 
 interface SettingsRow {
 	user_id: string;
+	default_provider: string | null;
 	default_model: string | null;
 	default_workdir: string | null;
 	default_mode: string | null;
@@ -19,6 +26,7 @@ function rowToSettings(r: SettingsRow): UserSettings {
 	// migration ran in dev HMR).
 	const policy: PermissionPolicy = raw === 'allow-all' || raw === 'deny-all' ? raw : 'prompt';
 	return {
+		defaultProvider: normalizeBackendProvider(r.default_provider),
 		defaultModel: r.default_model,
 		defaultWorkdir: r.default_workdir,
 		defaultConversationMode: normalizeSessionMode(r.default_mode),
@@ -41,6 +49,7 @@ export function get(userId: string): UserSettings | null {
  */
 export function defaults(): UserSettings {
 	return {
+		defaultProvider: normalizeBackendProvider(loadConfig().DEFAULT_BACKEND_PROVIDER),
 		defaultModel: null,
 		defaultWorkdir: null,
 		defaultConversationMode: 'interactive',
@@ -53,10 +62,11 @@ export function save(userId: string, s: UserSettings) {
 	getDb()
 		.prepare(
 			`INSERT INTO user_settings(
-			   user_id, default_model, default_workdir, default_mode, default_policy, theme, updated_at
+			   user_id, default_provider, default_model, default_workdir, default_mode, default_policy, theme, updated_at
 			 )
-			 VALUES (?, ?, ?, ?, ?, ?, ?)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(user_id) DO UPDATE SET
+			   default_provider = excluded.default_provider,
 			   default_model = excluded.default_model,
 			   default_workdir = excluded.default_workdir,
 			   default_mode = excluded.default_mode,
@@ -66,6 +76,7 @@ export function save(userId: string, s: UserSettings) {
 		)
 		.run(
 			userId,
+			s.defaultProvider,
 			s.defaultModel,
 			s.defaultWorkdir,
 			s.defaultConversationMode,
@@ -80,8 +91,8 @@ export function save(userId: string, s: UserSettings) {
 // Schema is `permission_grants(user_id, conversation_id, tool,
 // permission_kind, scope_pattern, decision, expires_at, granted_at)`
 // after migration 009. `conversation_id` NULL means a user-global grant.
-// All the matching precedence (deny beats allow, expiry, wildcards) lives
-// in the pure matcher module so it's testable without a DB.
+// Matching precedence (force-allow, deny, allow, prompt, expiry, wildcards)
+// lives in the pure matcher module so it's testable without a DB.
 
 import {
 	matchGrantsDetailed,
@@ -93,6 +104,8 @@ import {
 import { decodeScope, encodeScope } from '$lib/permissions/scope-codec';
 import type { GrantScope } from '$lib/permissions/scope-types';
 import type { ParsedSegment } from '../../permissions/shell-parser';
+
+export type GrantSource = 'seed' | 'prompt' | 'settings' | 'legacy';
 
 interface GrantDbRow {
 	user_id: string;
@@ -106,20 +119,36 @@ interface GrantDbRow {
 	granted_at: number;
 	deny_reason: string | null;
 	args_hash: string | null;
+	source: string | null;
 }
 
 function dbRowToGrant(r: GrantDbRow): GrantRow {
+	const scope = decodeScope(r.scope_json);
 	return {
 		tool: r.tool,
 		permissionKind: r.permission_kind,
-		scopePattern: r.scope_pattern,
-		scope: decodeScope(r.scope_json),
-		decision: r.decision === 'deny' ? 'deny' : 'allow',
+		// A non-null structured scope that fails to decode must fail closed;
+		// only true legacy rows with scope_json=NULL may fall back to scope_pattern.
+		scopePattern: r.scope_json === null ? r.scope_pattern : scope ? r.scope_pattern : '\0',
+		scope,
+		decision: normalizeGrantDecision(r.decision),
 		expiresAt: r.expires_at,
 		denyReason: r.deny_reason,
 		conversationId: r.conversation_id,
 		argsHash: r.args_hash
 	};
+}
+
+function normalizeGrantDecision(decision: string): GrantDecision {
+	if (
+		decision === 'allow' ||
+		decision === 'force-allow' ||
+		decision === 'deny' ||
+		decision === 'prompt'
+	) {
+		return decision;
+	}
+	return 'deny';
 }
 
 /**
@@ -136,7 +165,8 @@ function loadCandidateGrants(userId: string, conversationId: string, tool: strin
 			 FROM permission_grants
 			 WHERE user_id = ?
 			   AND (conversation_id = ? OR conversation_id IS NULL)
-			   AND (tool = ? OR tool = '*')`
+			   AND (tool = ? OR tool = '*')
+			 ORDER BY granted_at ASC, rowid ASC`
 		)
 		.all(userId, conversationId, tool) as GrantDbRow[];
 	return rows.map(dbRowToGrant);
@@ -160,7 +190,7 @@ export interface MatchGrantContext {
 
 /**
  * Resolve a permission request against the user's stored grants.
- * Returns 'allow' / 'deny' / 'none'; callers fall back to the policy
+ * Returns 'allow' / hard 'deny' / 'prompt' / 'none'; callers fall back to the policy
  * table when 'none'. Drops any deny-feedback the matched row carried;
  * callers that need it should use `matchGrantDetailed`.
  */
@@ -178,10 +208,10 @@ export function matchGrant(
 }
 
 /**
- * Same as `matchGrant`, but additionally returns the matched deny
- * grant's `denyReason` (when one fired). Used by the bridge so it can
- * forward the reason to the SDK as `{kind:'reject', feedback}` and the
- * agent's tool-failure payload explains *why* the call was rejected.
+ * Same as `matchGrant`, but additionally returns matched grant feedback.
+ * Hard-deny feedback is forwarded to the SDK as `{kind:'reject', feedback}`;
+ * prompt feedback is used when best-effort mode rejects a prompt-required
+ * request without human escalation.
  */
 export function matchGrantDetailed(
 	userId: string,
@@ -233,11 +263,11 @@ export interface AddGrantOptions {
 	decision?: GrantDecision;
 	/** Unix ms; NULL/undefined = never expires. */
 	expiresAt?: number | null;
-	/** Optional deny-feedback surfaced to the agent (only meaningful when
-	 * `decision === 'deny'`). */
+	/** Optional feedback surfaced to the agent for deny or prompt-required grants. */
 	denyReason?: string | null;
 	/** Optional exact-invocation constraint. When set, request args must hash to this value. */
 	argsHash?: string | null;
+	source?: GrantSource;
 }
 
 export function addGrant(opts: AddGrantOptions) {
@@ -245,8 +275,8 @@ export function addGrant(opts: AddGrantOptions) {
 		.prepare(
 			`INSERT INTO permission_grants(
 			   user_id, conversation_id, tool, permission_kind,
-			   scope_pattern, scope_json, decision, expires_at, granted_at, deny_reason, args_hash
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			   scope_pattern, scope_json, decision, expires_at, granted_at, deny_reason, args_hash, source
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			opts.userId,
@@ -259,7 +289,8 @@ export function addGrant(opts: AddGrantOptions) {
 			opts.expiresAt ?? null,
 			Date.now(),
 			opts.denyReason ?? null,
-			opts.argsHash ?? null
+			opts.argsHash ?? null,
+			opts.source ?? (opts.conversationId === null ? 'settings' : 'prompt')
 		);
 }
 
@@ -271,6 +302,7 @@ export interface UpdateGrantOptions {
 	decision: GrantDecision;
 	expiresAt?: number | null;
 	denyReason?: string | null;
+	source?: GrantSource;
 }
 
 /**
@@ -283,7 +315,7 @@ export function updateGrant(userId: string, id: number, opts: UpdateGrantOptions
 		.prepare(
 			`UPDATE permission_grants
 			    SET tool = ?, permission_kind = ?, scope_pattern = ?, scope_json = ?,
-			        decision = ?, expires_at = ?, deny_reason = ?
+			        decision = ?, expires_at = ?, deny_reason = ?, source = ?
 			  WHERE rowid = ? AND user_id = ?`
 		)
 		.run(
@@ -294,6 +326,7 @@ export function updateGrant(userId: string, id: number, opts: UpdateGrantOptions
 			opts.decision,
 			opts.expiresAt ?? null,
 			opts.denyReason ?? null,
+			opts.source ?? 'settings',
 			id,
 			userId
 		);
@@ -313,6 +346,7 @@ export interface GrantSummary {
 	grantedAt: number;
 	denyReason: string | null;
 	argsHash: string | null;
+	source: GrantSource;
 }
 
 /**
@@ -329,7 +363,7 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		.prepare(
 			`SELECT pg.rowid AS id, pg.conversation_id, c.title AS conversation_title,
 			        pg.tool, pg.permission_kind, pg.scope_pattern, pg.scope_json, pg.decision,
-			        pg.expires_at, pg.granted_at, pg.deny_reason, pg.args_hash
+			        pg.expires_at, pg.granted_at, pg.deny_reason, pg.args_hash, pg.source
 			 FROM permission_grants pg
 			 LEFT JOIN conversations c ON c.id = pg.conversation_id
 			 WHERE pg.user_id = ?
@@ -348,6 +382,7 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		granted_at: number;
 		deny_reason: string | null;
 		args_hash: string | null;
+		source: string | null;
 	}>;
 	return rows.map((r) => ({
 		id: r.id,
@@ -357,12 +392,20 @@ export function listGrantsForUser(userId: string): GrantSummary[] {
 		permissionKind: r.permission_kind,
 		scopePattern: r.scope_pattern,
 		scope: decodeScope(r.scope_json),
-		decision: r.decision === 'deny' ? 'deny' : 'allow',
+		decision: normalizeGrantDecision(r.decision),
 		expiresAt: r.expires_at,
 		grantedAt: r.granted_at,
 		denyReason: r.deny_reason,
-		argsHash: r.args_hash
+		argsHash: r.args_hash,
+		source: normalizeGrantSource(r.source)
 	}));
+}
+
+function normalizeGrantSource(source: string | null): GrantSource {
+	if (source === 'seed' || source === 'prompt' || source === 'settings' || source === 'legacy') {
+		return source;
+	}
+	return 'legacy';
 }
 
 /**
@@ -419,7 +462,14 @@ export interface PermissionDecisionRecord {
 	conversationTitle: string | null;
 	tool: string;
 	argsSummary: string | null;
-	decision: 'allow-once' | 'allow-always' | 'deny' | 'deny-always' | 'auto-allow' | 'auto-deny';
+	decision:
+		| 'allow-once'
+		| 'allow-always'
+		| 'deny'
+		| 'deny-always'
+		| 'auto-allow'
+		| 'auto-deny'
+		| 'auto-prompt-required';
 	decidedAt: number;
 }
 

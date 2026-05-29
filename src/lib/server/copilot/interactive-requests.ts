@@ -33,7 +33,8 @@ import type {
 	PermissionPolicy,
 	PortalEvent
 } from '$lib/types';
-import { FS_PERMISSIONS } from '$lib/permissions/scope-types';
+import { defaultInteractiveResponse } from '$lib/interactive/request-registry';
+import { isFilesystemPermissionKind } from '$lib/permissions/metadata';
 
 // Default = no timeout. We used to default to 10 minutes "so a forgotten
 // dialog doesn't pin the session forever", but in headless mode (where
@@ -199,7 +200,8 @@ export function resolve(requestId: string, userId: string, response: Interactive
 								scopePattern: scope?.pattern ?? null,
 								scope: scope?.scope ?? null,
 								decision: 'allow',
-								expiresAt
+								expiresAt,
+								source: 'prompt'
 							});
 						}
 					}
@@ -215,7 +217,8 @@ export function resolve(requestId: string, userId: string, response: Interactive
 							scope: scope?.scope ?? null,
 							decision: 'deny',
 							denyReason,
-							expiresAt
+							expiresAt,
+							source: 'prompt'
 						});
 					}
 				}
@@ -260,7 +263,7 @@ export function cancel(requestId: string, reason: string = 'cancelled') {
 	pending.delete(requestId);
 	if (p.timeoutHandle) clearTimeout(p.timeoutHandle);
 
-	const fallback = defaultDenial(p.kind);
+	const fallback = defaultInteractiveResponse(p.kind);
 	try {
 		p.emit?.({
 			type: 'interactive.resolved',
@@ -300,26 +303,7 @@ export function cancelConversation(conversationId: string, reason: string = 'tur
 	}
 }
 
-function defaultDenial(kind: InteractiveKind): InteractiveResponse {
-	switch (kind) {
-		case 'permission':
-			return { kind: 'permission', decision: 'deny' };
-		case 'auto_mode_switch':
-			return { kind: 'auto_mode_switch', decision: 'no' };
-		case 'user_input':
-			return { kind: 'user_input', answer: '', wasFreeform: true };
-		case 'elicitation':
-			return { kind: 'elicitation', action: 'cancel' };
-		case 'exit_plan_mode':
-			return { kind: 'exit_plan_mode', approved: false };
-		case 'sampling':
-			return { kind: 'sampling', action: 'ack' };
-		case 'mcp_oauth':
-			return { kind: 'mcp_oauth', action: 'ack' };
-		case 'external_tool':
-			return { kind: 'external_tool', action: 'ack' };
-	}
-}
+export { defaultInteractiveResponse };
 
 function normalizeDenyFeedback(feedback: string | undefined): string | null {
 	const trimmed = feedback?.trim();
@@ -360,8 +344,6 @@ function normalizeResponse(response: InteractiveResponse): InteractiveResponse {
 
 import { isPathInWorkspace } from '../permissions/workspace';
 
-const FILESYSTEM_PERMISSION_KINDS = new Set<string>(FS_PERMISSIONS);
-
 export interface PolicyContext {
 	/** The runtime scope key (file path / command / URL) for this request. */
 	scopeKey?: string | null;
@@ -384,7 +366,7 @@ export function decideByPolicy(
 			return 'denied';
 		case 'prompt':
 		default:
-			if (FILESYSTEM_PERMISSION_KINDS.has(pk)) {
+			if (isFilesystemPermissionKind(pk)) {
 				const root = ctx?.workspaceRoot;
 				const target = ctx?.scopeKey;
 				if (root && target && isPathInWorkspace(target, root)) return 'approved';

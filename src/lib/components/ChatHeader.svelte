@@ -1,19 +1,38 @@
 <script lang="ts">
-	import type { Conversation, ConversationUsage, SessionMode } from '$lib/types';
+	import type {
+		Conversation,
+		ConversationUsage,
+		ProviderRuntimeFeatureStatus,
+		ProviderCapabilities,
+		SessionMode
+	} from '$lib/types';
 	import ContextMeter from './ContextMeter.svelte';
 
 	let {
 		title,
 		conversation,
+		providerCapabilities,
+		providerDisplayName,
+		model,
+		providerModels,
+		providerModelsError = null,
+		defaultModelPlaceholder,
 		parent = null,
 		usage = null,
 		recentCompaction = null,
 		mode,
 		approveAllTools,
+		modelChangeDisabled = false,
 		onSettingsChange
 	}: {
 		title: string;
 		conversation: Conversation;
+		providerCapabilities: ProviderCapabilities;
+		providerDisplayName: string;
+		model: string;
+		providerModels: { id: string; name: string; maxContextWindowTokens?: number }[];
+		providerModelsError?: string | null;
+		defaultModelPlaceholder: string;
 		parent?: {
 			id: string;
 			title: string;
@@ -24,17 +43,26 @@
 		recentCompaction?: { tokensRemoved?: number; messagesRemoved?: number } | null;
 		mode: SessionMode;
 		approveAllTools: boolean;
+		modelChangeDisabled?: boolean;
 		// Fires with the optimistic patch right before the PATCH request,
 		// so the parent can mirror state without waiting for the SSE echo.
-		onSettingsChange?: (patch: { mode?: SessionMode; approveAllTools?: boolean }) => void;
+		onSettingsChange?: (patch: {
+			model?: string;
+			mode?: SessionMode;
+			approveAllTools?: boolean;
+		}) => void;
 	} = $props();
 
 	let expanded = $state(false);
+	let savingModel = $state(false);
 	let savingMode = $state(false);
 	let savingApprove = $state(false);
 	let resetting = $state(false);
 	let resetFlash = $state<'ok' | 'err' | null>(null);
 	let resetTimer: ReturnType<typeof setTimeout> | null = null;
+	let selectedModelChoice = $state('');
+	let customModel = $state('');
+	const CUSTOM_MODEL_OPTION = '__custom__';
 
 	const MODES: { value: SessionMode; label: string; hint: string }[] = [
 		{
@@ -59,13 +87,81 @@
 		}
 	];
 
-	async function patchSession(body: { mode?: SessionMode; approveAllTools?: boolean }) {
+	const modeFeature = $derived(providerCapabilities.features.modes);
+	const approveAllFeature = $derived(providerCapabilities.features.approveAll);
+	const supportsRuntimeModes = $derived(
+		modeFeature.supported && modeFeature.behavior === 'supported'
+	);
+	const showContextMeter = $derived(
+		providerCapabilities.features.contextUsage.supported || usage !== null
+	);
+	const unavailableRuntimeFeatures = $derived.by(() =>
+		Object.values(providerCapabilities.features).filter(
+			(feature): feature is ProviderRuntimeFeatureStatus =>
+				!feature.supported || feature.behavior === 'no-op'
+		)
+	);
+	const currentModeLabel = $derived(MODES.find((opt) => opt.value === mode)?.label ?? mode);
+	const selectedCustomModel = $derived(customModel.trim());
+	const customModelUnchanged = $derived(selectedCustomModel === model);
+	const customModelInvalid = $derived(selectedCustomModel.length === 0 || customModelUnchanged);
+
+	$effect(() => {
+		const modelIds = new Set(providerModels.map((providerModel) => providerModel.id));
+		if (modelIds.has(model)) {
+			selectedModelChoice = model;
+			customModel = '';
+		} else {
+			selectedModelChoice = CUSTOM_MODEL_OPTION;
+			customModel = model;
+		}
+	});
+
+	function formatContextWindow(tokens: number | undefined): string {
+		if (!tokens || !Number.isFinite(tokens)) return 'context size unknown';
+		if (tokens >= 1_000_000) {
+			const m = tokens / 1_000_000;
+			const str = m >= 10 ? m.toFixed(0) : m.toFixed(1).replace(/\.0$/, '');
+			return `${str}M ctx`;
+		}
+		if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K ctx`;
+		return `${tokens} ctx`;
+	}
+
+	async function patchSession(body: {
+		model?: string;
+		mode?: SessionMode;
+		approveAllTools?: boolean;
+	}) {
 		const res = await fetch(`/api/conversations/${conversation.id}/session`, {
 			method: 'PATCH',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify(body)
 		});
 		if (!res.ok) throw new Error(`session patch failed: ${res.status}`);
+	}
+
+	async function chooseModel(next: string) {
+		const trimmed = next.trim();
+		if (!trimmed || trimmed === model || savingModel || modelChangeDisabled) return;
+		savingModel = true;
+		const prev = model;
+		onSettingsChange?.({ model: trimmed });
+		try {
+			await patchSession({ model: trimmed });
+		} catch {
+			onSettingsChange?.({ model: prev });
+		} finally {
+			savingModel = false;
+		}
+	}
+
+	function selectModel(e: Event) {
+		const next = (e.currentTarget as HTMLSelectElement).value;
+		selectedModelChoice = next;
+		if (next !== CUSTOM_MODEL_OPTION) {
+			void chooseModel(next);
+		}
 	}
 
 	async function chooseMode(next: SessionMode) {
@@ -163,10 +259,10 @@
 		<div class="details-inner">
 			<div class="details-body">
 				<dl class="header-meta">
-					{#if conversation.model}
-						<dt>Model</dt>
-						<dd>{conversation.model}</dd>
-					{/if}
+					<dt>Provider</dt>
+					<dd>{providerDisplayName}</dd>
+					<dt>Model</dt>
+					<dd>{model}</dd>
 					<dt>Workdir</dt>
 					<dd class="mono">{conversation.workdir}</dd>
 					<dt>ID</dt>
@@ -195,46 +291,141 @@
 						{/if}
 					</div>
 				{/if}
-				<ContextMeter {usage} {recentCompaction} />
+				{#if showContextMeter}
+					<ContextMeter {usage} {recentCompaction} />
+				{/if}
+				{#if unavailableRuntimeFeatures.length > 0}
+					<div class="capability-notes" aria-label="Provider capability notes">
+						<strong>Provider capability limits</strong>
+						<ul>
+							{#each unavailableRuntimeFeatures as feature (feature.label)}
+								<li>
+									<span>{feature.label}</span>
+									<small>{feature.description}</small>
+								</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
 				<div class="session-settings" role="group" aria-label="Session settings">
-					<div class="setting-row">
-						<span class="setting-label">Mode</span>
-						<div class="seg" role="radiogroup" aria-label="Session mode" aria-busy={savingMode}>
-							{#each MODES as opt (opt.value)}
+					<div class="setting-row model-row">
+						<span class="setting-label">Model</span>
+						{#if providerModels.length > 0}
+							<select
+								class="model-select"
+								aria-label="Session model"
+								bind:value={selectedModelChoice}
+								disabled={savingModel || modelChangeDisabled}
+								onchange={selectModel}
+							>
+								{#each providerModels as providerModel (providerModel.id)}
+									<option value={providerModel.id}>
+										{providerModel.name} — {providerModel.id} ({formatContextWindow(
+											providerModel.maxContextWindowTokens
+										)})
+									</option>
+								{/each}
+								<option value={CUSTOM_MODEL_OPTION}>Enter a custom model id…</option>
+							</select>
+						{:else}
+							<input
+								class="model-input"
+								bind:value={customModel}
+								placeholder={defaultModelPlaceholder}
+								disabled={savingModel || modelChangeDisabled}
+								aria-label="Custom session model id"
+								onkeydown={(e) => {
+									if (e.key === 'Enter' && !customModelInvalid)
+										void chooseModel(selectedCustomModel);
+								}}
+							/>
+						{/if}
+						{#if selectedModelChoice === CUSTOM_MODEL_OPTION}
+							<div class="model-custom">
+								{#if providerModels.length > 0}
+									<input
+										class="model-input"
+										bind:value={customModel}
+										placeholder={defaultModelPlaceholder}
+										disabled={savingModel || modelChangeDisabled}
+										aria-label="Custom session model id"
+										onkeydown={(e) => {
+											if (e.key === 'Enter' && !customModelInvalid)
+												void chooseModel(selectedCustomModel);
+										}}
+									/>
+								{/if}
 								<button
 									type="button"
-									role="radio"
-									aria-checked={mode === opt.value}
-									class="seg-btn"
-									class:active={mode === opt.value}
-									title={opt.hint}
-									disabled={savingMode}
-									onclick={() => chooseMode(opt.value)}
+									class="save-model-btn"
+									disabled={savingModel || modelChangeDisabled || customModelInvalid}
+									onclick={() => chooseModel(selectedCustomModel)}
 								>
-									{opt.label}
+									{savingModel ? 'Saving…' : 'Save model'}
 								</button>
-							{/each}
-						</div>
+							</div>
+						{/if}
+						{#if modelChangeDisabled}
+							<span class="unsupported-chip">model locked during turn</span>
+						{:else if providerModelsError}
+							<span class="unsupported-chip" title={providerModelsError}
+								>model list unavailable</span
+							>
+						{/if}
+					</div>
+					<div class="setting-row">
+						<span class="setting-label">Mode</span>
+						{#if supportsRuntimeModes}
+							<div class="seg" role="radiogroup" aria-label="Session mode" aria-busy={savingMode}>
+								{#each MODES as opt (opt.value)}
+									<button
+										type="button"
+										role="radio"
+										aria-checked={mode === opt.value}
+										class="seg-btn"
+										class:active={mode === opt.value}
+										title={opt.hint}
+										disabled={savingMode}
+										onclick={() => chooseMode(opt.value)}
+									>
+										{opt.label}
+									</button>
+								{/each}
+							</div>
+						{:else}
+							<span class="unsupported-chip" title={modeFeature.description}>
+								{currentModeLabel} · provider no-op
+							</span>
+						{/if}
 					</div>
 					<div class="setting-row">
 						<label class="approve-toggle">
 							<input
 								type="checkbox"
 								checked={approveAllTools}
-								disabled={savingApprove}
+								disabled={savingApprove || !approveAllFeature.supported}
 								onchange={toggleApproveAll}
 							/>
 							<span>Approve all tool calls</span>
 						</label>
-						<button
-							type="button"
-							class="reset-btn"
-							disabled={resetting}
-							onclick={resetApprovals}
-							title="Clear the runtime's session-scoped approvals."
-						>
-							{resetting ? 'Resetting…' : 'Reset session approvals'}
-						</button>
+						{#if providerCapabilities.controls.resetSessionApprovals}
+							<button
+								type="button"
+								class="reset-btn"
+								disabled={resetting}
+								onclick={resetApprovals}
+								title="Clear the runtime's session-scoped approvals."
+							>
+								{resetting ? 'Resetting…' : 'Reset session approvals'}
+							</button>
+						{:else}
+							<span
+								class="unsupported-chip"
+								title="This provider has no session approval cache to clear."
+							>
+								approval reset unavailable
+							</span>
+						{/if}
 						{#if resetFlash === 'ok'}
 							<span class="reset-flash ok" aria-live="polite">Cleared</span>
 						{:else if resetFlash === 'err'}
@@ -243,8 +434,8 @@
 					</div>
 					{#if approveAllTools}
 						<p class="approve-warning" role="note">
-							Every tool call is auto-approved for this conversation. Audit entries still record
-							each one as <code>auto-allow</code>.
+							{approveAllFeature.description} Audit entries still record each auto-approved portal tool
+							as <code>auto-allow</code>.
 						</p>
 					{:else if mode === 'best-effort'}
 						<p class="approve-warning" role="note">
@@ -375,6 +566,30 @@
 	.parent-crumb a:hover {
 		text-decoration-color: currentColor;
 	}
+	.capability-notes {
+		padding: var(--space-2);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		background: var(--surface-2);
+	}
+	.capability-notes strong {
+		display: block;
+		margin-bottom: var(--space-1);
+	}
+	.capability-notes ul {
+		margin: 0;
+		padding-left: 1.1rem;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.capability-notes li span {
+		font-weight: 600;
+	}
+	.capability-notes li small {
+		display: block;
+		opacity: 0.75;
+	}
 	@media (prefers-reduced-motion: reduce) {
 		.chat-header-details,
 		.chevron,
@@ -398,6 +613,27 @@
 	.setting-label {
 		opacity: 0.6;
 		min-width: 3.5rem;
+	}
+	.model-row {
+		align-items: flex-start;
+	}
+	.model-select,
+	.model-input {
+		min-width: min(26rem, 100%);
+		max-width: 100%;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		color: inherit;
+		font: inherit;
+		font-size: var(--fs-xs);
+		padding: 2px 8px;
+	}
+	.model-custom {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+		flex-wrap: wrap;
 	}
 	.seg {
 		display: inline-flex;
@@ -451,6 +687,22 @@
 	.reset-btn:hover:not(:disabled) {
 		background: var(--surface-3, var(--surface-2));
 	}
+	.save-model-btn {
+		background: var(--surface-2);
+		border: 1px solid var(--border);
+		color: inherit;
+		font: inherit;
+		font-size: var(--fs-xs);
+		padding: 2px 8px;
+		border-radius: 4px;
+		cursor: pointer;
+	}
+	.save-model-btn:hover:not(:disabled) {
+		background: var(--surface-3, var(--surface-2));
+	}
+	.model-select:disabled,
+	.model-input:disabled,
+	.save-model-btn:disabled,
 	.reset-btn:disabled {
 		opacity: 0.5;
 		cursor: progress;
@@ -463,6 +715,15 @@
 	}
 	.reset-flash.err {
 		color: var(--danger);
+	}
+	.unsupported-chip {
+		display: inline-flex;
+		align-items: center;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: var(--surface-2);
+		padding: 2px 8px;
+		opacity: 0.78;
 	}
 	.approve-warning {
 		margin: 0;

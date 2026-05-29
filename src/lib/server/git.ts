@@ -6,7 +6,12 @@
 // `--` separator so they can't be interpreted as flags.
 
 import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { safeResolve } from './files';
+import { log as logger } from './log';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024; // 8 MiB
@@ -44,7 +49,7 @@ function runGit(args: string[], opts: RunOptions): Promise<GitRunResult> {
 			shell: false,
 			env: {
 				...process.env,
-				// Disable interactive prompts / pagers / hooks.
+				// Disable interactive prompts and pagers. Git hooks still run for commits.
 				GIT_TERMINAL_PROMPT: '0',
 				GIT_PAGER: 'cat',
 				PAGER: 'cat',
@@ -118,6 +123,11 @@ export interface RepoInitState {
 export async function isGitRepo(cwd: string): Promise<boolean> {
 	const r = await runGit(['rev-parse', '--is-inside-work-tree'], { cwd });
 	return r.code === 0 && r.stdout.trim() === 'true';
+}
+
+export async function repositoryRoot(cwd: string): Promise<string> {
+	if (!(await isGitRepo(cwd))) throw new GitError('not a git repository', emptyResult());
+	return (await runGitOk(['rev-parse', '--show-toplevel'], { cwd })).trim();
 }
 
 export interface HeadInfo {
@@ -314,10 +324,15 @@ export interface LogEntry {
 const LOG_SEP = '\x1f';
 const LOG_REC = '\x1e';
 const LOG_FORMAT = ['%H', '%h', '%an', '%ae', '%at', '%s'].join(LOG_SEP) + LOG_REC;
+const REF_RE = /^[A-Za-z0-9._\-/@^~]+$/;
+
+function isSafeRef(ref: string): boolean {
+	return REF_RE.test(ref) && !ref.startsWith('-');
+}
 
 export async function log(
 	cwd: string,
-	opts: { limit?: number; skip?: number; ref?: string } = {}
+	opts: { limit?: number; skip?: number; ref?: string; path?: string } = {}
 ): Promise<LogEntry[]> {
 	const limit = Math.min(opts.limit ?? 20, 200);
 	const skip = Math.max(opts.skip ?? 0, 0);
@@ -325,7 +340,7 @@ export async function log(
 	if (opts.ref) {
 		// Only allow refs matching a conservative pattern (no spaces, no
 		// flags, no shell metacharacters).
-		if (!/^[A-Za-z0-9._\-/@]+$/.test(opts.ref)) {
+		if (!isSafeRef(opts.ref)) {
 			throw new GitError('invalid ref', {
 				stdout: '',
 				stderr: 'invalid ref',
@@ -336,10 +351,15 @@ export async function log(
 		}
 		args.push(opts.ref);
 	}
+	if (opts.path !== undefined && opts.path !== '') {
+		const r = safeResolve(cwd, opts.path);
+		if (!r.ok) throw new GitError(`invalid path: ${r.reason}`, emptyResult());
+		args.push('--', r.rel);
+	}
 	const out = await runGitOk(args, { cwd });
 	const records = out.split(LOG_REC).filter((s) => s.length > 0);
 	return records.map((rec) => {
-		const [sha, shortSha, author, email, ts, ...subjectParts] = rec.split(LOG_SEP);
+		const [sha, shortSha, author, email, ts, ...subjectParts] = rec.trim().split(LOG_SEP);
 		return {
 			sha,
 			shortSha,
@@ -369,9 +389,14 @@ export interface CommitDetail {
 	body: string;
 	parents: string[];
 	files: CommitFile[];
+	patch?: string;
 }
 
-export async function showCommit(cwd: string, sha: string): Promise<CommitDetail> {
+export async function showCommit(
+	cwd: string,
+	sha: string,
+	opts: { includePatch?: boolean } = {}
+): Promise<CommitDetail> {
 	if (!SHA_RE.test(sha)) throw new GitError('invalid sha', emptyResult());
 	const SEP = '\x1f';
 	const fmt = ['%H', '%h', '%an', '%ae', '%at', '%P', '%s', '%b'].join(SEP);
@@ -403,7 +428,7 @@ export async function showCommit(cwd: string, sha: string): Promise<CommitDetail
 			});
 		}
 	}
-	return {
+	const detail: CommitDetail = {
 		sha: full,
 		shortSha,
 		author,
@@ -414,6 +439,16 @@ export async function showCommit(cwd: string, sha: string): Promise<CommitDetail
 		parents,
 		files
 	};
+	if (opts.includePatch) {
+		detail.patch = await runGitOk(
+			['show', '--no-color', '--no-ext-diff', '--format=', '--patch', sha],
+			{
+				cwd,
+				maxBytes: DEFAULT_MAX_BYTES
+			}
+		);
+	}
+	return detail;
 }
 
 export type DiffTarget =
@@ -423,49 +458,226 @@ export type DiffTarget =
 	| { kind: 'commit'; sha: string }
 	| { kind: 'commit-vs-parent'; sha: string };
 
+function diffPathArgs(cwd: string, relPath?: string): string[] {
+	if (relPath !== undefined && relPath !== '') {
+		const r = safeResolve(cwd, relPath);
+		if (!r.ok) throw new GitError(`invalid path: ${r.reason}`, emptyResult());
+		return ['--', r.rel];
+	}
+	return [];
+}
+
+function diffArgs(
+	cwd: string,
+	target: DiffTarget,
+	extraArgs: string[] = [],
+	relPath?: string
+): string[] {
+	const pathArgs = diffPathArgs(cwd, relPath);
+	const baseArgs = ['diff', '--no-color', '--no-ext-diff', ...extraArgs];
+	switch (target.kind) {
+		case 'worktree-vs-head':
+			return [...baseArgs, 'HEAD', ...pathArgs];
+		case 'worktree-vs-index':
+			return [...baseArgs, ...pathArgs];
+		case 'index-vs-head':
+			return [...baseArgs, '--cached', ...pathArgs];
+		case 'commit': {
+			if (!SHA_RE.test(target.sha)) throw new GitError('invalid sha', emptyResult());
+			return [...baseArgs, `${target.sha}^!`, ...pathArgs];
+		}
+		case 'commit-vs-parent': {
+			if (!SHA_RE.test(target.sha)) throw new GitError('invalid sha', emptyResult());
+			return [...baseArgs, `${target.sha}^`, target.sha, ...pathArgs];
+		}
+	}
+}
+
 /**
  * Returns a unified diff for an optional path. If `relPath` is provided it
  * must be resolvable inside `cwd`.
  */
 export async function diff(cwd: string, target: DiffTarget, relPath?: string): Promise<string> {
-	let pathArgs: string[] = [];
-	if (relPath !== undefined && relPath !== '') {
-		const r = safeResolve(cwd, relPath);
-		if (!r.ok) throw new GitError(`invalid path: ${r.reason}`, emptyResult());
-		pathArgs = ['--', r.rel];
-	}
-	const baseArgs = ['diff', '--no-color', '--no-ext-diff'];
-	let args: string[];
-	switch (target.kind) {
-		case 'worktree-vs-head':
-			args = [...baseArgs, 'HEAD', ...pathArgs];
-			break;
-		case 'worktree-vs-index':
-			args = [...baseArgs, ...pathArgs];
-			break;
-		case 'index-vs-head':
-			args = [...baseArgs, '--cached', ...pathArgs];
-			break;
-		case 'commit': {
-			if (!SHA_RE.test(target.sha)) throw new GitError('invalid sha', emptyResult());
-			args = [...baseArgs, `${target.sha}^!`, ...pathArgs];
-			break;
-		}
-		case 'commit-vs-parent': {
-			if (!SHA_RE.test(target.sha)) throw new GitError('invalid sha', emptyResult());
-			args = [...baseArgs, `${target.sha}^`, target.sha, ...pathArgs];
-			break;
-		}
-	}
+	const args = diffArgs(cwd, target, [], relPath);
 	return await runGitOk(args, { cwd, maxBytes: DEFAULT_MAX_BYTES });
 }
 
 /** Read a file at a specific revision. */
 export async function showFile(cwd: string, ref: string, relPath: string): Promise<string> {
-	if (!/^[A-Za-z0-9._\-/@^~]+$/.test(ref)) throw new GitError('invalid ref', emptyResult());
+	if (!isSafeRef(ref)) throw new GitError('invalid ref', emptyResult());
 	const r = safeResolve(cwd, relPath);
 	if (!r.ok) throw new GitError(`invalid path: ${r.reason}`, emptyResult());
 	return await runGitOk(['show', `${ref}:${r.rel}`], { cwd });
+}
+
+export interface CommitTrailer {
+	token: string;
+	value: string;
+}
+
+export interface CommitChangesOptions {
+	paths: 'all' | string[];
+	subject: string;
+	body?: string;
+	trailers?: CommitTrailer[];
+}
+
+export interface CommitChangesResult {
+	sha: string;
+	shortSha: string;
+	subject: string;
+	body: string;
+	trailers: CommitTrailer[];
+	files: NameStatusEntry[];
+	fileStats: NumstatEntry[];
+	diffStat: DiffStat['total'];
+	remainingDirtyFiles: Array<StatusEntry & { status: ReturnType<typeof aggregateStatus> }>;
+}
+
+const TRAILER_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
+
+export function formatCommitMessage(opts: {
+	subject: string;
+	body?: string;
+	trailers?: CommitTrailer[];
+}): string {
+	if (!opts.subject.trim()) throw new GitError('commit subject is required', emptyResult());
+	if (hasControlCharacter(opts.subject)) {
+		throw new GitError(
+			'commit subject must be a single line without control characters',
+			emptyResult()
+		);
+	}
+	const lines = [opts.subject];
+	const body = opts.body;
+	if (body !== undefined && body.length > 0) {
+		if (body.includes('\0'))
+			throw new GitError('commit body must not contain NUL bytes', emptyResult());
+		lines.push('', body.trimEnd());
+	}
+	if (opts.trailers?.length) {
+		lines.push('');
+		for (const trailer of opts.trailers) {
+			if (
+				!TRAILER_TOKEN_RE.test(trailer.token) ||
+				trailer.token.includes('\n') ||
+				trailer.token.includes('\r') ||
+				hasControlCharacter(trailer.token)
+			) {
+				throw new GitError(`invalid trailer token: ${trailer.token}`, emptyResult());
+			}
+			if (
+				trailer.value.includes('\n') ||
+				trailer.value.includes('\r') ||
+				hasControlCharacter(trailer.value)
+			) {
+				throw new GitError(`invalid trailer value for ${trailer.token}`, emptyResult());
+			}
+			lines.push(`${trailer.token}: ${trailer.value}`);
+		}
+	}
+	return lines.join('\n') + '\n';
+}
+
+export async function commitChanges(
+	cwd: string,
+	opts: CommitChangesOptions
+): Promise<CommitChangesResult> {
+	const repoRoot = await repositoryRoot(cwd);
+	const commitMessage = formatCommitMessage(opts);
+	const entries = await status(repoRoot);
+	const conflicts = entries.filter((e) => e.index === 'conflicted' || e.worktree === 'conflicted');
+	if (conflicts.length > 0) {
+		throw new GitError(
+			`cannot commit while conflicted files are present: ${conflicts.map((e) => e.path).join(', ')}`,
+			emptyResult()
+		);
+	}
+
+	const selectedPaths = opts.paths === 'all' ? null : validateCommitPaths(repoRoot, opts.paths);
+	const selectedEntries =
+		selectedPaths === null
+			? entries
+			: entries.filter((entry) => statusEntryMatches(entry, selectedPaths));
+	if (selectedEntries.length === 0) {
+		throw new GitError('no selected changes to commit', emptyResult());
+	}
+
+	if (selectedPaths !== null) {
+		const unrelatedStaged = entries.filter(
+			(entry) => hasIndexChange(entry) && !statusEntryMatches(entry, selectedPaths)
+		);
+		if (unrelatedStaged.length > 0) {
+			throw new GitError(
+				`cannot commit selected paths while unrelated changes are staged: ${unrelatedStaged.map((e) => e.path).join(', ')}`,
+				emptyResult()
+			);
+		}
+	}
+
+	const snapshot = await snapshotIndex(repoRoot);
+	let messageDir: string | null = null;
+
+	try {
+		messageDir = await mkdtemp(join(tmpdir(), 'portal-git-commit-'));
+		const messagePath = join(messageDir, 'message.txt');
+		writeFileSync(messagePath, commitMessage, 'utf8');
+		if (selectedPaths === null) {
+			await runGitOk(['add', '-A', '--', '.'], { cwd: repoRoot });
+		} else {
+			await runGitOk(['--literal-pathspecs', 'add', '-A', '--', ...selectedPaths], {
+				cwd: repoRoot
+			});
+		}
+		const stagedFiles = await nameStatus(repoRoot, { kind: 'index-vs-head' });
+		if (stagedFiles.length === 0) {
+			throw new GitError('no selected changes to commit', emptyResult());
+		}
+		await runGitOk(['commit', '-F', messagePath], { cwd: repoRoot, timeoutMs: 60_000 });
+	} catch (err) {
+		try {
+			restoreIndex(snapshot);
+		} catch (restoreErr) {
+			logger.warn('git.commit.index_restore_failed', {
+				err: String(restoreErr),
+				originalErr: String(err)
+			});
+		}
+		throw err;
+	} finally {
+		if (messageDir) rmSync(messageDir, { recursive: true, force: true });
+	}
+
+	const sha = (await runGitOk(['rev-parse', 'HEAD'], { cwd: repoRoot })).trim();
+	const [files, fileStats, remaining] = await Promise.all([
+		nameStatus(repoRoot, { kind: 'commit', sha }),
+		numstat(repoRoot, { kind: 'commit', sha }),
+		status(repoRoot)
+	]);
+	const diffStatTotal = fileStats.reduce(
+		(acc, file) => {
+			acc.filesChanged += 1;
+			acc.added += file.added ?? 0;
+			acc.removed += file.removed ?? 0;
+			return acc;
+		},
+		{ filesChanged: 0, added: 0, removed: 0 }
+	);
+
+	return {
+		sha,
+		shortSha: sha.slice(0, 8),
+		subject: opts.subject,
+		body: opts.body?.trimEnd() ?? '',
+		trailers: opts.trailers ?? [],
+		files,
+		fileStats,
+		diffStat: diffStatTotal,
+		remainingDirtyFiles: remaining.map((entry) => ({
+			...entry,
+			status: aggregateStatus(entry)
+		}))
+	};
 }
 
 export interface NumstatEntry {
@@ -479,32 +691,33 @@ export interface NumstatEntry {
 	removed: number | null;
 }
 
+export interface DiffStat {
+	files: NumstatEntry[];
+	total: {
+		filesChanged: number;
+		added: number;
+		removed: number;
+	};
+}
+
+export interface NameStatusEntry {
+	/** Raw git status code, e.g. M, A, D, R100. */
+	statusCode: string;
+	status: StatusCode;
+	path: string;
+	origPath: string | null;
+}
+
 /**
  * Returns per-file added/removed line counts. Uses `git diff --numstat -z`
  * so paths are unambiguous. Binary files report `null` for both counts.
  */
-export async function numstat(cwd: string, target: DiffTarget): Promise<NumstatEntry[]> {
-	const baseArgs = ['diff', '--no-color', '--no-ext-diff', '--numstat', '-z'];
-	let args: string[];
-	switch (target.kind) {
-		case 'worktree-vs-head':
-			args = [...baseArgs, 'HEAD'];
-			break;
-		case 'worktree-vs-index':
-			args = [...baseArgs];
-			break;
-		case 'index-vs-head':
-			args = [...baseArgs, '--cached'];
-			break;
-		case 'commit':
-			if (!SHA_RE.test(target.sha)) throw new GitError('invalid sha', emptyResult());
-			args = [...baseArgs, `${target.sha}^!`];
-			break;
-		case 'commit-vs-parent':
-			if (!SHA_RE.test(target.sha)) throw new GitError('invalid sha', emptyResult());
-			args = [...baseArgs, `${target.sha}^`, target.sha];
-			break;
-	}
+export async function numstat(
+	cwd: string,
+	target: DiffTarget,
+	relPath?: string
+): Promise<NumstatEntry[]> {
+	const args = diffArgs(cwd, target, ['--numstat', '-z'], relPath);
 	const out = await runGitOk(args, { cwd });
 	// With -z, each record is "added\tremoved\tpath\0" except for renames,
 	// which are "added\tremoved\t\0origPath\0newPath\0".
@@ -534,6 +747,133 @@ export async function numstat(cwd: string, target: DiffTarget): Promise<NumstatE
 	return entries;
 }
 
+export async function diffStat(
+	cwd: string,
+	target: DiffTarget,
+	relPath?: string
+): Promise<DiffStat> {
+	const files = await numstat(cwd, target, relPath);
+	const total = files.reduce(
+		(acc, file) => {
+			acc.filesChanged += 1;
+			acc.added += file.added ?? 0;
+			acc.removed += file.removed ?? 0;
+			return acc;
+		},
+		{ filesChanged: 0, added: 0, removed: 0 }
+	);
+	return { files, total };
+}
+
+export async function nameOnly(
+	cwd: string,
+	target: DiffTarget,
+	relPath?: string
+): Promise<string[]> {
+	const out = await runGitOk(diffArgs(cwd, target, ['--name-only', '-z'], relPath), { cwd });
+	return out.split('\0').filter(Boolean);
+}
+
+export async function nameStatus(
+	cwd: string,
+	target: DiffTarget,
+	relPath?: string
+): Promise<NameStatusEntry[]> {
+	const out = await runGitOk(diffArgs(cwd, target, ['--name-status', '-z'], relPath), { cwd });
+	const entries: NameStatusEntry[] = [];
+	const parts = out.split('\0').filter(Boolean);
+	for (let i = 0; i < parts.length; i++) {
+		const statusCode = parts[i];
+		const head = statusCode[0];
+		if (head === 'R' || head === 'C') {
+			const origPath = parts[++i] ?? '';
+			const path = parts[++i] ?? '';
+			entries.push({
+				statusCode,
+				status: head === 'R' ? 'renamed' : 'copied',
+				path,
+				origPath: origPath || null
+			});
+		} else {
+			entries.push({
+				statusCode,
+				status: decodeStatusChar(head),
+				path: parts[++i] ?? '',
+				origPath: null
+			});
+		}
+	}
+	return entries;
+}
+
 function emptyResult(): GitRunResult {
 	return { stdout: '', stderr: '', code: -1, timedOut: false, truncated: false };
+}
+
+function validateCommitPaths(repoRoot: string, paths: string[]): string[] {
+	if (paths.length === 0)
+		throw new GitError('paths must be "all" or a non-empty array', emptyResult());
+	const validated: string[] = [];
+	const seen = new Set<string>();
+	for (const path of paths) {
+		if (path.length === 0) throw new GitError('commit paths must not be empty', emptyResult());
+		if (hasControlCharacter(path)) {
+			throw new GitError(
+				`invalid path: control characters are not allowed: ${path}`,
+				emptyResult()
+			);
+		}
+		const r = safeResolve(repoRoot, path);
+		if (!r.ok) throw new GitError(`invalid path: ${r.reason}`, emptyResult());
+		if (!r.rel)
+			throw new GitError('use paths: "all" to commit the entire repository', emptyResult());
+		if (!seen.has(r.rel)) {
+			seen.add(r.rel);
+			validated.push(r.rel);
+		}
+	}
+	return validated;
+}
+
+function statusEntryMatches(entry: StatusEntry, selectedPaths: string[]): boolean {
+	return selectedPaths.some((path) => entry.path === path || entry.origPath === path);
+}
+
+function hasIndexChange(entry: StatusEntry): boolean {
+	return entry.index !== 'unmodified' && entry.index !== 'untracked' && entry.index !== 'ignored';
+}
+
+interface IndexSnapshot {
+	path: string;
+	existed: boolean;
+	data: Buffer | null;
+}
+
+async function snapshotIndex(repoRoot: string): Promise<IndexSnapshot> {
+	const gitIndexPath = (
+		await runGitOk(['rev-parse', '--git-path', 'index'], { cwd: repoRoot })
+	).trim();
+	const indexPath = isAbsolute(gitIndexPath) ? gitIndexPath : resolve(repoRoot, gitIndexPath);
+	return {
+		path: indexPath,
+		existed: existsSync(indexPath),
+		data: existsSync(indexPath) ? readFileSync(indexPath) : null
+	};
+}
+
+function restoreIndex(snapshot: IndexSnapshot): void {
+	if (snapshot.existed && snapshot.data) {
+		mkdirSync(dirname(snapshot.path), { recursive: true });
+		writeFileSync(snapshot.path, snapshot.data);
+		return;
+	}
+	rmSync(snapshot.path, { force: true });
+}
+
+function hasControlCharacter(value: string): boolean {
+	for (const char of value) {
+		const code = char.charCodeAt(0);
+		if (code <= 0x1f || code === 0x7f) return true;
+	}
+	return false;
 }

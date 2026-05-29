@@ -1,6 +1,6 @@
 import { ulid } from 'ulid';
 import { z } from 'zod';
-import type { AsyncQueue } from './async-queue';
+import type { AsyncQueue } from '../runtime/async-queue';
 import type {
 	InteractiveRequestView,
 	InteractiveRequestViewBody,

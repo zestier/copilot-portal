@@ -12,12 +12,23 @@
 // through validated workdirs and shell:false.
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, existsSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { getDb } from './db';
 
 const SNAP_TIMEOUT_MS = 30_000;
 const SNAP_MAX_BYTES = 8 * 1024 * 1024;
+const SNAPSHOT_IDENTITY = {
+	GIT_AUTHOR_NAME: "Zestier's AI Portal",
+	GIT_AUTHOR_EMAIL: 'portal@localhost',
+	GIT_COMMITTER_NAME: "Zestier's AI Portal",
+	GIT_COMMITTER_EMAIL: 'portal@localhost',
+	GIT_CONFIG_GLOBAL: '/dev/null',
+	GIT_CONFIG_NOSYSTEM: '1',
+	GIT_CONFIG_COUNT: '1',
+	GIT_CONFIG_KEY_0: 'commit.gpgsign',
+	GIT_CONFIG_VALUE_0: 'false'
+};
 
 export type SnapshotKind = 'pre' | 'post';
 
@@ -66,6 +77,7 @@ function run(args: string[], opts: RunOpts): Promise<RunResult> {
 			timedOut = true;
 			child.kill('SIGKILL');
 		}, timeoutMs);
+		timer.unref?.();
 		child.stdout.on('data', (c: Buffer) => {
 			if (stdout.length < SNAP_MAX_BYTES) {
 				stdout = Buffer.concat([stdout, c.subarray(0, SNAP_MAX_BYTES - stdout.length)]);
@@ -143,28 +155,11 @@ function refFor(messageId: string, kind: SnapshotKind): string {
 	return `${REF_PREFIX}/${kind}/${messageId}`;
 }
 
-/**
- * Ensure the given workdir is a git repository. Returns silently if it
- * already is one. Created repos use a default branch of `portal` so we
- * don't pollute the user's branch namespace and the choice survives any
- * future change in git's `init.defaultBranch` default.
- */
-export async function ensureRepo(workdir: string): Promise<void> {
-	mkdirSync(workdir, { recursive: true });
-	// Check for the workdir's *own* .git, not git's discovery from cwd: the
-	// portal checkout itself is a git repo, so `git rev-parse
-	// --is-inside-work-tree` would happily walk up the tree and report
-	// true even when this workspace has no repo of its own. That left
-	// follow-up operations (which assume `<workdir>/.git` exists) failing
-	// with "Unable to create .../.git/portal-index-...lock: No such file
-	// or directory".
-	if (existsSync(join(workdir, '.git'))) return;
-	await runOk(['init', '-q', '-b', 'portal'], { cwd: workdir });
-	// Make sure commit-tree has an identity, even if the user has no
-	// git config set globally. These are local-only.
-	await runOk(['config', 'user.email', 'portal@localhost'], { cwd: workdir });
-	await runOk(['config', 'user.name', 'Copilot Portal'], { cwd: workdir });
-	await runOk(['config', 'commit.gpgsign', 'false'], { cwd: workdir });
+async function isSnapshotRepo(workdir: string): Promise<boolean> {
+	if (!existsSync(workdir)) return false;
+	const r = await run(['rev-parse', '--show-toplevel'], { cwd: workdir });
+	if (r.code !== 0) return false;
+	return realpathSync(r.stdout.trim()) === realpathSync(workdir);
 }
 
 /**
@@ -179,7 +174,7 @@ export async function snapshot(
 	workdir: string,
 	messageId: string,
 	kind: SnapshotKind
-): Promise<SnapshotRow> {
+): Promise<SnapshotRow | null> {
 	const db = getDb();
 	const existing = db
 		.prepare('SELECT * FROM turn_snapshots WHERE message_id = ? AND kind = ?')
@@ -205,7 +200,7 @@ export async function snapshot(
 	}
 
 	return withLock(workdir, async () => {
-		await ensureRepo(workdir);
+		if (!(await isSnapshotRepo(workdir))) return null;
 		const ref = refFor(messageId, kind);
 		// Use a private index file so the user's staging area (if any) is
 		// not disturbed. We pick a path inside .git so concurrent processes
@@ -218,7 +213,8 @@ export async function snapshot(
 			).trim();
 			const commit = (
 				await runOk(['commit-tree', tree, '-m', `portal: ${kind} snapshot for ${messageId}`], {
-					cwd: workdir
+					cwd: workdir,
+					env: SNAPSHOT_IDENTITY
 				})
 			).trim();
 			await runOk(['update-ref', ref, commit], { cwd: workdir });
@@ -305,7 +301,7 @@ export async function materializeFromCommit(
 	await withLock(dstWorkdir, async () => {
 		await runOk(['init', '-q', '-b', 'portal'], { cwd: dstWorkdir });
 		await runOk(['config', 'user.email', 'portal@localhost'], { cwd: dstWorkdir });
-		await runOk(['config', 'user.name', 'Copilot Portal'], { cwd: dstWorkdir });
+		await runOk(['config', 'user.name', "Zestier's AI Portal"], { cwd: dstWorkdir });
 		await runOk(['config', 'commit.gpgsign', 'false'], { cwd: dstWorkdir });
 		// Use `fetch` from a local path so we only transfer the snapshot
 		// commit and its tree, not the whole history graph. `--depth=1`
@@ -319,7 +315,10 @@ export async function materializeFromCommit(
 		await runOk(['read-tree', '-u', '--reset', 'refs/portal/seed'], { cwd: dstWorkdir });
 		const tree = (await runOk(['write-tree'], { cwd: dstWorkdir })).trim();
 		const newHead = (
-			await runOk(['commit-tree', tree, '-m', 'portal: fork seed'], { cwd: dstWorkdir })
+			await runOk(['commit-tree', tree, '-m', 'portal: fork seed'], {
+				cwd: dstWorkdir,
+				env: SNAPSHOT_IDENTITY
+			})
 		).trim();
 		await runOk(['update-ref', 'refs/heads/portal', newHead], { cwd: dstWorkdir });
 		await runOk(['symbolic-ref', 'HEAD', 'refs/heads/portal'], { cwd: dstWorkdir });

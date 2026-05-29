@@ -26,7 +26,7 @@
 </script>
 
 <svelte:head>
-	<title>{data.conversation.title} — Copilot Portal</title>
+	<title>{data.conversation.title} — Zestier's AI Portal</title>
 </svelte:head>
 
 <div class="conversation">
@@ -70,6 +70,13 @@
 	<div class="tab-body" class:hidden={tab !== 'chat'}>
 		<Chat
 			conversation={data.conversation}
+			providerCapabilities={data.providerCapabilities}
+			providerDisplayName={data.providerDisplayName}
+			providerModels={data.providerModels}
+			providerModelsError={data.providerModelsError}
+			defaultModelPlaceholder={data.defaultModelPlaceholder}
+			effectiveModel={data.effectiveModel}
+			chatPlaceholder={data.chatPlaceholder}
 			initialMessages={data.messages}
 			initialUsage={data.contextUsage}
 			parent={data.parent}

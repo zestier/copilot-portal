@@ -7,9 +7,47 @@ agent sessions.
 > The exact SDK surface is in public preview and may shift. Treat the type
 > names below as illustrative; pin to a known-good version and adapt.
 
-## Module: `$lib/server/copilot/bridge.ts`
+## Provider boundary
 
-A thin wrapper that:
+The turn runner and pool depend on the provider interfaces in
+`$lib/server/copilot/provider.ts`, not on Copilot-specific SDK objects. Copilot
+is registered as the default provider via `$lib/server/copilot/providers.ts`;
+OpenAI-compatible backends use the same registry behind the
+`openai-compatible` provider id.
+
+Provider capabilities are explicit so UI/server code can distinguish core
+requirements from Copilot-only enhancements:
+
+| Capability | Required? | Notes |
+| ---------- | --------- | ----- |
+| Auth status | Yes | `fetchAuthStatus(userId, authToken?)` returns provider-neutral auth state. |
+| Model list | Yes | `listModels(userId, authToken?)` returns provider-neutral model metadata. Settings falls back to manual model-id entry when discovery returns no models. |
+| Session open | Yes | `openSession(opts)` opens a conversation-scoped backend session. |
+| Session resume | Optional | Copilot resumes by `conversationId`; OpenAI-compatible providers may open a fresh backend session and rely on the portal's SQLite transcript. |
+| Session dispose | Yes | Idle reaping and conversation deletion must release provider resources. |
+| Send stream | Yes | `session.send(prompt, signal)` must yield normalized `PortalEvent` objects. |
+| Abort | Yes | Turn cancellation calls `session.abort()` and also aborts the send signal. |
+| Mode support | Optional | Copilot supports live `interactive` / `plan` / `autopilot` / `best-effort` mode hints; other providers may ignore `mode` and omit `setMode`. |
+| Approve-all support | Optional | Copilot can mirror approve-all into the SDK runtime; other providers may omit `setApproveAll` while the portal still persists the setting. |
+| Reset session approvals | Optional | Copilot can clear SDK session-scoped grants; providers without an approval cache omit it. |
+
+`PortalEvent` remains the stream contract consumed by `turn-runner.ts` and the
+SSE layer. A provider may translate any native streaming format into that union,
+but turn persistence, replay, and frontend rendering must not depend on
+provider-native events.
+
+Copilot-only features are modeled as optional provider capabilities:
+permission/user-input/elicitation/exit-plan/auto-mode-switch callbacks,
+infinite-session metadata, context-window usage and compaction events, file-edit
+events, reasoning events, and subagent lifecycle events. OpenAI-compatible
+providers currently emit message/tool/error/done events and can add richer
+`PortalEvent` variants as their native APIs support them. See
+`docs/openai-compatible-backends.md` for operator setup and expected feature
+differences.
+
+## Module: `$lib/server/copilot/copilot-provider.ts`
+
+A concrete Copilot provider implementation that:
 
 1. Owns one `CopilotClient` (the SDK's child process) **per portal
    user**, kept in a `Map<userId, CopilotClient>` and started lazily on
@@ -27,7 +65,7 @@ A thin wrapper that:
 ### Sketch
 
 ```ts
-// $lib/server/copilot/bridge.ts
+// $lib/server/copilot/copilot-provider.ts
 import { CopilotClient } from '@github/copilot-sdk';
 import type { PortalEvent } from '$lib/types';
 
@@ -47,7 +85,7 @@ async function getClient(userId: string, authToken?: string): Promise<CopilotCli
   return client;
 }
 
-export interface BridgeOpenOptions {
+export interface ProviderOpenOptions {
   conversationId: string;
   userId: string;
   workingDirectory: string;
@@ -57,16 +95,17 @@ export interface BridgeOpenOptions {
   onEvent?: (e: PortalEvent) => void;
 }
 
-export async function open(opts: BridgeOpenOptions): Promise<ConversationSession> {
+export async function open(opts: ProviderOpenOptions): Promise<ProviderSession> {
   const client = await getClient(opts.authToken);
   // … returns a per-conversation Session that wraps client.openSession(…)
   // and exposes send(prompt) -> AsyncIterable<PortalEvent>.
 }
 ```
 
-The SDK event → `PortalEvent` mapping is a pure function inside the same
-module. It is the single point of coupling to the SDK's wire format; when
-the SDK changes, this is the only file that needs updating (plus tests).
+The SDK event -> `PortalEvent` mapping is isolated in the Copilot provider and
+its sibling adapters. It is the single point of coupling to the SDK's wire
+format; when the SDK changes, this is the only provider implementation that
+needs updating (plus tests).
 
 ### Context-window usage events
 
@@ -92,10 +131,10 @@ view is needed.
 
 ```ts
 // Singleton, per-process. Tracks per-conversation sessions on top of
-// the bridge's per-user CopilotClient pool.
-const sessions = new Map<string, { session: ConversationSession; lastUsed: number }>();
+// the default provider's per-user client pool.
+const sessions = new Map<string, { session: ProviderSession; lastUsed: number }>();
 
-export async function acquire(opts: BridgeOpenOptions): Promise<ConversationSession> { ... }
+export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSession> { ... }
 export function touch(convId: string): void { ... }
 export async function release(convId: string): Promise<void> { ... }
 
@@ -222,8 +261,8 @@ Three modes, in priority order:
 
 ## Testing
 
-- **Unit tests** of `normalize()` in `bridge.ts` against captured SDK event
-  fixtures. The single most important set of tests in the project.
+- **Unit tests** of the Copilot provider and SDK event adapter against captured
+  SDK event fixtures. The single most important set of tests in the project.
 - **Bridge integration tests** with a stub Copilot CLI binary (a tiny Node
   script that speaks the SDK's JSON-RPC and emits scripted events). Keeps
   CI fast and offline.

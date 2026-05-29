@@ -4,12 +4,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import * as git from '../src/lib/server/git';
+import { buildGitTools } from '../src/lib/server/tools/git';
 
 let repo: string;
 let firstSha = '';
 
 function g(args: string[], cwd = repo) {
 	execFileSync('git', args, { cwd, stdio: 'pipe' });
+}
+
+function initRepo(prefix = 'gitwrap-commit-') {
+	const tmp = mkdtempSync(join(tmpdir(), prefix));
+	const run = (args: string[]) => execFileSync('git', args, { cwd: tmp, stdio: 'pipe' });
+	run(['init', '-q', '-b', 'main']);
+	run(['config', 'user.email', 't@example.com']);
+	run(['config', 'user.name', 'T']);
+	run(['config', 'commit.gpgsign', 'false']);
+	writeFileSync(join(tmp, 'a.txt'), 'one\n');
+	writeFileSync(join(tmp, 'b.txt'), 'two\n');
+	run(['add', '.']);
+	run(['commit', '-q', '-m', 'init']);
+	return { tmp, run };
 }
 
 beforeAll(() => {
@@ -124,6 +139,36 @@ describe('log', () => {
 		expect(entries.length).toBeGreaterThanOrEqual(1);
 		expect(entries[0].subject).toBe('initial');
 		expect(entries[0].sha).toMatch(/^[0-9a-f]{40}$/);
+		expect(entries[0].sha).toBe(entries[0].sha.trim());
+	});
+
+	it('filters history by workspace path', async () => {
+		const tmp = mkdtempSync(join(tmpdir(), 'gitwrap-log-path-'));
+		try {
+			const run = (args: string[]) => execFileSync('git', args, { cwd: tmp, stdio: 'pipe' });
+			run(['init', '-q', '-b', 'main']);
+			run(['config', 'user.email', 't@example.com']);
+			run(['config', 'user.name', 'T']);
+			run(['config', 'commit.gpgsign', 'false']);
+			mkdirSync(join(tmp, 'sub'));
+			writeFileSync(join(tmp, 'sub', 'b.txt'), 'one\n');
+			run(['add', '.']);
+			run(['commit', '-q', '-m', 'add b']);
+			writeFileSync(join(tmp, 'a.txt'), 'two\n');
+			run(['add', '.']);
+			run(['commit', '-q', '-m', 'add a']);
+
+			const entries = await git.log(tmp, { limit: 5, path: 'sub/b.txt' });
+			expect(entries.map((e) => e.subject)).toEqual(['add b']);
+			expect(entries[0].sha).toBe(entries[0].sha.trim());
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('rejects invalid refs and path escapes', async () => {
+		await expect(git.log(repo, { ref: '--all' })).rejects.toThrow('invalid ref');
+		await expect(git.log(repo, { path: '../escape' })).rejects.toThrow('invalid path');
 	});
 });
 
@@ -141,6 +186,20 @@ describe('diff', () => {
 	it('rejects path escape', async () => {
 		await expect(git.diff(repo, { kind: 'worktree-vs-head' }, '../escape')).rejects.toThrow();
 	});
+
+	it('returns structured stat and path-filtered name outputs', async () => {
+		const stat = await git.diffStat(repo, { kind: 'worktree-vs-head' });
+		expect(stat.total).toEqual({ filesChanged: 1, added: 1, removed: 0 });
+		expect(stat.files[0]).toMatchObject({ path: 'a.txt', added: 1, removed: 0 });
+
+		await expect(git.nameOnly(repo, { kind: 'worktree-vs-head' }, 'sub/b.txt')).resolves.toEqual(
+			[]
+		);
+		await expect(git.nameOnly(repo, { kind: 'worktree-vs-head' })).resolves.toEqual(['a.txt']);
+		await expect(git.nameStatus(repo, { kind: 'worktree-vs-head' })).resolves.toEqual([
+			{ statusCode: 'M', status: 'modified', path: 'a.txt', origPath: null }
+		]);
+	});
 });
 
 describe('showCommit / showFile', () => {
@@ -157,6 +216,11 @@ describe('showCommit / showFile', () => {
 	});
 	it('rejects invalid sha', async () => {
 		await expect(git.showCommit(repo, 'not-a-sha!!')).rejects.toThrow();
+	});
+	it('optionally includes a commit patch', async () => {
+		const c = await git.showCommit(repo, firstSha, { includePatch: true });
+		expect(c.patch).toContain('diff --git');
+		expect(c.patch).toContain('a.txt');
 	});
 });
 
@@ -213,6 +277,187 @@ describe('numstat', () => {
 			expect(bin).toBeDefined();
 			expect(bin?.added).toBeNull();
 			expect(bin?.removed).toBeNull();
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+});
+
+describe('structured git tools', () => {
+	it('returns JSON for non-patch git_diff outputs', async () => {
+		const tool = buildGitTools(repo).find((t) => t.name === 'git_diff');
+		expect(tool).toBeDefined();
+
+		const out = await tool!.handler({ output: 'name-status' });
+		expect(JSON.parse(out)).toEqual({
+			files: [{ statusCode: 'M', status: 'modified', path: 'a.txt', origPath: null }]
+		});
+	});
+
+	it('rejects unknown structured git tool properties', async () => {
+		const tool = buildGitTools(repo).find((t) => t.name === 'git_log');
+		expect(tool).toBeDefined();
+
+		await expect(tool!.handler({ limit: 1, flags: ['--all'] })).rejects.toThrow('Unrecognized key');
+	});
+
+	it('wires git_commit as an always-prompt structured tool', async () => {
+		const tool = buildGitTools(repo).find((t) => t.name === 'git_commit');
+		expect(tool).toBeDefined();
+		expect(tool?.permissionBehavior).toBe('always-prompt');
+		await expect(tool!.handler({ paths: [], subject: 'empty' })).rejects.toThrow();
+		await expect(tool!.handler({ paths: 'all', subject: 'bad\nsubject' })).rejects.toThrow();
+		await expect(
+			tool!.handler({ paths: 'all', subject: 'ok', trailers: [{ token: 'Bad Token', value: 'x' }] })
+		).rejects.toThrow();
+	});
+});
+
+describe('commitChanges', () => {
+	it('rejects path escapes and no-change commits', async () => {
+		const { tmp } = initRepo();
+		try {
+			await expect(
+				git.commitChanges(tmp, { paths: ['../escape.txt'], subject: 'escape' })
+			).rejects.toThrow('invalid path');
+			await expect(git.commitChanges(tmp, { paths: 'all', subject: 'noop' })).rejects.toThrow(
+				'no selected changes'
+			);
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('commits all tracked, deleted, and untracked changes', async () => {
+		const { tmp, run } = initRepo();
+		try {
+			writeFileSync(join(tmp, 'a.txt'), 'one\nchanged\n');
+			rmSync(join(tmp, 'b.txt'));
+			writeFileSync(join(tmp, 'new.txt'), 'new\n');
+
+			const result = await git.commitChanges(tmp, { paths: 'all', subject: 'commit all' });
+			expect(result.sha).toMatch(/^[0-9a-f]{40}$/);
+			expect(result.shortSha).toHaveLength(8);
+			expect(result.subject).toBe('commit all');
+			expect(result.files.map((f) => f.path).sort()).toEqual(['a.txt', 'b.txt', 'new.txt']);
+			expect(result.diffStat.filesChanged).toBe(3);
+			expect(result.remainingDirtyFiles).toEqual([]);
+			expect(execFileSync('git', ['status', '--porcelain'], { cwd: tmp }).toString()).toBe('');
+			expect(
+				execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: tmp }).toString().trim()
+			).toBe('commit all');
+			run(['rev-parse', '--verify', 'HEAD']);
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('commits only explicitly selected tracked paths', async () => {
+		const { tmp } = initRepo();
+		try {
+			writeFileSync(join(tmp, 'a.txt'), 'one\nselected\n');
+			writeFileSync(join(tmp, 'b.txt'), 'two\nleft dirty\n');
+
+			const result = await git.commitChanges(tmp, { paths: ['a.txt'], subject: 'commit a' });
+			expect(result.files.map((f) => f.path)).toEqual(['a.txt']);
+			expect(result.remainingDirtyFiles.map((f) => f.path)).toEqual(['b.txt']);
+			expect(
+				execFileSync('git', ['show', '--name-only', '--format=', 'HEAD'], { cwd: tmp })
+					.toString()
+					.trim()
+			).toBe('a.txt');
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('commits explicitly selected untracked files', async () => {
+		const { tmp } = initRepo();
+		try {
+			writeFileSync(join(tmp, 'new.txt'), 'new\n');
+
+			const result = await git.commitChanges(tmp, {
+				paths: ['new.txt'],
+				subject: 'add new file'
+			});
+			expect(result.files).toEqual([
+				{ statusCode: 'A', status: 'added', path: 'new.txt', origPath: null }
+			]);
+			expect(result.remainingDirtyFiles).toEqual([]);
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('treats explicitly selected paths as literal filenames, not git globs', async () => {
+		const { tmp } = initRepo();
+		try {
+			writeFileSync(join(tmp, '*.txt'), 'literal star\n');
+			writeFileSync(join(tmp, 'a.txt'), 'one\nleft dirty\n');
+
+			const result = await git.commitChanges(tmp, {
+				paths: ['*.txt'],
+				subject: 'add literal wildcard'
+			});
+
+			expect(result.files).toEqual([
+				{ statusCode: 'A', status: 'added', path: '*.txt', origPath: null }
+			]);
+			expect(result.remainingDirtyFiles.map((f) => f.path)).toEqual(['a.txt']);
+			expect(
+				execFileSync('git', ['show', '--name-only', '--format=', 'HEAD'], { cwd: tmp })
+					.toString()
+					.trim()
+			).toBe('*.txt');
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('rejects selected commits when unrelated staged changes exist', async () => {
+		const { tmp, run } = initRepo();
+		try {
+			writeFileSync(join(tmp, 'a.txt'), 'one\nselected\n');
+			writeFileSync(join(tmp, 'b.txt'), 'two\nstaged\n');
+			run(['add', 'b.txt']);
+			const before = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmp }).toString().trim();
+
+			await expect(
+				git.commitChanges(tmp, { paths: ['a.txt'], subject: 'commit a' })
+			).rejects.toThrow('unrelated changes are staged');
+			expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmp }).toString().trim()).toBe(
+				before
+			);
+			expect(execFileSync('git', ['status', '--porcelain'], { cwd: tmp }).toString()).toBe(
+				' M a.txt\nM  b.txt\n'
+			);
+		} finally {
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it('formats body and structured trailers deterministically', async () => {
+		const { tmp } = initRepo();
+		try {
+			writeFileSync(join(tmp, 'a.txt'), 'one\nchanged\n');
+
+			const result = await git.commitChanges(tmp, {
+				paths: ['a.txt'],
+				subject: 'structured message',
+				body: 'Body line\n',
+				trailers: [{ token: 'Reviewed-by', value: 'Tester <t@example.com>' }]
+			});
+			expect(result.body).toBe('Body line');
+			expect(result.trailers).toEqual([{ token: 'Reviewed-by', value: 'Tester <t@example.com>' }]);
+			expect(execFileSync('git', ['log', '-1', '--pretty=%B'], { cwd: tmp }).toString()).toBe(
+				'structured message\n\nBody line\n\nReviewed-by: Tester <t@example.com>\n\n'
+			);
+			expect(() =>
+				git.formatCommitMessage({
+					subject: 'bad trailer',
+					trailers: [{ token: 'Bad Token', value: 'x' }]
+				})
+			).toThrow('invalid trailer token');
 		} finally {
 			rmSync(tmp, { recursive: true, force: true });
 		}

@@ -1,7 +1,25 @@
 import { describe, it, expect } from 'vitest';
-import { GrantInputSchema, permissionKindForTool } from '../src/lib/permissions/scope-schema';
+import {
+	GrantInputSchema,
+	expectedScopeKind,
+	permissionKindForTool
+} from '../src/lib/permissions/scope-schema';
+import { GRANT_TOOLS, grantToolLabel } from '../src/lib/permissions/metadata';
+import {
+	buildGrantScopeJson,
+	defaultGrantScopeFormFields,
+	grantScopeToFormFields
+} from '../src/lib/permissions/grant-form';
+import {
+	capabilityRuleKindForScope,
+	describeGrantScope
+} from '../src/lib/permissions/scope-summary';
 
 const future = Date.now() + 60_000;
+const shell = (token: string, rest: Record<string, unknown> = {}) => ({
+	command: [{ token }],
+	...rest
+});
 
 describe('GrantInputSchema — valid shapes', () => {
 	it('shell with workspace-paths positionals', () => {
@@ -10,12 +28,12 @@ describe('GrantInputSchema — valid shapes', () => {
 			decision: 'allow',
 			scope: {
 				kind: 'shell',
-				rule: { argv0: 'cd', positionals: { kind: 'workspace-paths' } }
+				rule: shell('cd', { positionals: { kind: 'workspace-paths' } })
 			}
 		});
 		expect(parsed.scope.kind).toBe('shell');
 		if (parsed.scope.kind === 'shell') {
-			expect(parsed.scope.rule.argv0).toBe('cd');
+			expect(parsed.scope.rule.command?.[0]?.token).toBe('cd');
 		}
 		expect(parsed.expiresAt).toBeNull();
 	});
@@ -26,7 +44,7 @@ describe('GrantInputSchema — valid shapes', () => {
 			decision: 'allow',
 			scope: {
 				kind: 'shell',
-				rule: { argv0: 'cat', positionals: { kind: 'session-workspace-paths' } }
+				rule: shell('cat', { positionals: { kind: 'session-workspace-paths' } })
 			}
 		});
 		expect(parsed.scope.kind).toBe('shell');
@@ -39,16 +57,22 @@ describe('GrantInputSchema — valid shapes', () => {
 			scope: {
 				kind: 'shell',
 				rule: {
-					argv0: 'git',
-					subcommands: ['status', 'log'],
-					preSubcommandOptions: {
-						allow: [{ name: '-C', kind: 'option', value: { kind: 'any' } }],
-						deny: ['--git-dir']
-					},
-					options: {
-						allow: [{ name: '--oneline', kind: 'flag' }],
-						deny: ['--format']
-					}
+					command: [
+						{
+							token: 'git',
+							options: {
+								allow: [{ name: '-C', kind: 'option', value: { kind: 'any' } }],
+								deny: ['--git-dir']
+							}
+						},
+						{
+							token: 'log',
+							options: {
+								allow: [{ name: '--oneline', kind: 'flag' }],
+								deny: ['--format']
+							}
+						}
+					]
 				}
 			}
 		});
@@ -116,10 +140,20 @@ describe('GrantInputSchema — valid shapes', () => {
 		const parsed = GrantInputSchema.parse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'ls' } },
+			scope: { kind: 'shell', rule: shell('ls') },
 			expiresAt: future
 		});
 		expect(parsed.expiresAt).toBe(future);
+	});
+
+	it('accepts prompt grants without denyReason', () => {
+		const parsed = GrantInputSchema.parse({
+			tool: 'shell',
+			decision: 'prompt',
+			scope: { kind: 'shell', rule: shell('npm') }
+		});
+		expect(parsed.decision).toBe('prompt');
+		expect(parsed.denyReason).toBeNull();
 	});
 });
 
@@ -149,7 +183,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'read',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'ls' } }
+			scope: { kind: 'shell', rule: shell('ls') }
 		});
 		expect(r.success).toBe(false);
 	});
@@ -158,7 +192,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: '/usr/bin/ls' } }
+			scope: { kind: 'shell', rule: shell('/usr/bin/ls') }
 		});
 		expect(r.success).toBe(false);
 	});
@@ -206,7 +240,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'ls' } },
+			scope: { kind: 'shell', rule: shell('ls') },
 			expiresAt: Date.now() - 1000
 		});
 		expect(r.success).toBe(false);
@@ -218,7 +252,7 @@ describe('GrantInputSchema — rejections', () => {
 			decision: 'allow',
 			scope: {
 				kind: 'shell',
-				rule: { argv0: 'git', options: { deny: ['foo'] } }
+				rule: { command: [{ token: 'git', options: { deny: ['foo'] } }] }
 			}
 		});
 		expect(r.success).toBe(false);
@@ -228,8 +262,18 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'ls' } },
+			scope: { kind: 'shell', rule: shell('ls') },
 			denyReason: 'this should not be settable on an allow'
+		});
+		expect(r.success).toBe(false);
+	});
+
+	it('rejects denyReason on a prompt grant', () => {
+		const r = GrantInputSchema.safeParse({
+			tool: 'shell',
+			decision: 'prompt',
+			scope: { kind: 'shell', rule: shell('npm') },
+			denyReason: 'prompt grants should not reject directly'
 		});
 		expect(r.success).toBe(false);
 	});
@@ -238,7 +282,7 @@ describe('GrantInputSchema — rejections', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'grep', pipeline: 'sometimes' } }
+			scope: { kind: 'shell', rule: shell('grep', { pipeline: 'sometimes' }) }
 		});
 		expect(r.success).toBe(false);
 	});
@@ -249,7 +293,7 @@ describe('GrantInputSchema — denyReason + pipeline', () => {
 		const r = GrantInputSchema.parse({
 			tool: 'shell',
 			decision: 'deny',
-			scope: { kind: 'shell', rule: { argv0: 'cat', pipeline: 'forbid' } },
+			scope: { kind: 'shell', rule: shell('cat', { pipeline: 'forbid' }) },
 			denyReason: '  prefer the view tool  '
 		});
 		expect(r.denyReason).toBe('prefer the view tool');
@@ -263,7 +307,7 @@ describe('GrantInputSchema — denyReason + pipeline', () => {
 			const r = GrantInputSchema.parse({
 				tool: 'shell',
 				decision: 'deny',
-				scope: { kind: 'shell', rule: { argv0: 'rm' } },
+				scope: { kind: 'shell', rule: shell('rm') },
 				denyReason: reason
 			});
 			expect(r.denyReason).toBeNull();
@@ -274,7 +318,7 @@ describe('GrantInputSchema — denyReason + pipeline', () => {
 		const r = GrantInputSchema.safeParse({
 			tool: 'shell',
 			decision: 'deny',
-			scope: { kind: 'shell', rule: { argv0: 'rm' } },
+			scope: { kind: 'shell', rule: shell('rm') },
 			denyReason: 'x'.repeat(501)
 		});
 		expect(r.success).toBe(false);
@@ -284,7 +328,7 @@ describe('GrantInputSchema — denyReason + pipeline', () => {
 		const r = GrantInputSchema.parse({
 			tool: 'shell',
 			decision: 'allow',
-			scope: { kind: 'shell', rule: { argv0: 'grep', pipeline: 'must' } }
+			scope: { kind: 'shell', rule: shell('grep', { pipeline: 'must' }) }
 		});
 		if (r.scope.kind === 'shell') {
 			expect(r.scope.rule.pipeline).toBe('must');
@@ -294,10 +338,105 @@ describe('GrantInputSchema — denyReason + pipeline', () => {
 
 describe('permissionKindForTool', () => {
 	it('maps tool to permission kind 1:1', () => {
-		expect(permissionKindForTool('shell')).toBe('shell');
-		expect(permissionKindForTool('read')).toBe('read');
-		expect(permissionKindForTool('write')).toBe('write');
-		expect(permissionKindForTool('edit')).toBe('edit');
-		expect(permissionKindForTool('url')).toBe('url');
+		for (const tool of GRANT_TOOLS) {
+			expect(permissionKindForTool(tool)).toBe(tool);
+		}
+	});
+
+	it('centralizes grant tool metadata used by schema and settings forms', () => {
+		expect(GRANT_TOOLS).toEqual(['shell', 'read', 'write', 'edit', 'url']);
+		expect(expectedScopeKind('shell')).toBe('shell');
+		expect(expectedScopeKind('url')).toBe('url');
+		expect(expectedScopeKind('read')).toBe('fs');
+		expect(expectedScopeKind('write')).toBe('fs');
+		expect(expectedScopeKind('edit')).toBe('fs');
+		expect(grantToolLabel('shell')).toBe('shell (run a command)');
+		expect(grantToolLabel('read')).toBe('read (file read)');
+	});
+});
+
+describe('grant form metadata helpers', () => {
+	it('builds shell, fs, and url scope JSON through shared form helpers', () => {
+		const shellFields = {
+			...defaultGrantScopeFormFields(),
+			shellArgv0: 'git',
+			shellSubcommands: 'status',
+			shellPositionals: 'any' as const,
+			shellStepOptions: [
+				{ allow: '--no-pager', deny: '--git-dir' },
+				{ allow: '', deny: '' }
+			]
+		};
+		expect(JSON.parse(buildGrantScopeJson('shell', shellFields).json ?? '')).toEqual({
+			kind: 'shell',
+			rule: {
+				command: [
+					{
+						token: 'git',
+						options: { allow: [{ name: '--no-pager', kind: 'flag' }], deny: ['--git-dir'] }
+					},
+					{ token: 'status' }
+				],
+				positionals: { kind: 'any' }
+			}
+		});
+
+		const fsFields = {
+			...defaultGrantScopeFormFields(),
+			fsRoot: 'workspace' as const,
+			fsBehavior: 'glob' as const,
+			fsValue: 'src/**/*.ts'
+		};
+		expect(JSON.parse(buildGrantScopeJson('read', fsFields).json ?? '')).toEqual({
+			kind: 'fs',
+			perms: ['read'],
+			rule: { kind: 'path', root: 'workspace', behavior: 'glob', value: 'src/**/*.ts' }
+		});
+
+		const urlFields = {
+			...defaultGrantScopeFormFields(),
+			urlRuleKind: 'host-suffix' as const,
+			urlSuffix: 'github.com'
+		};
+		expect(JSON.parse(buildGrantScopeJson('url', urlFields).json ?? '')).toEqual({
+			kind: 'url',
+			rule: { kind: 'host-suffix', suffix: 'github.com' }
+		});
+	});
+
+	it('initializes edit form fields from existing grant scopes', () => {
+		const { fields, originalShellCommand } = grantScopeToFormFields({
+			kind: 'shell',
+			rule: {
+				command: [
+					{
+						token: 'git',
+						options: { allow: [{ name: '-C', kind: 'option', value: { kind: 'any' } }] }
+					},
+					{ token: 'log' }
+				],
+				pipeline: 'forbid'
+			}
+		});
+		expect(fields.shellArgv0).toBe('git');
+		expect(fields.shellSubcommands).toBe('log');
+		expect(fields.shellPipeline).toBe('forbid');
+		expect(fields.shellStepOptions[0].allow).toBe('-C=any');
+		expect(originalShellCommand?.map((step) => step.token)).toEqual(['git', 'log']);
+	});
+
+	it('shares grant scope descriptions between settings and capability surfaces', () => {
+		const scope = {
+			kind: 'fs' as const,
+			perms: ['read' as const],
+			rule: {
+				kind: 'path' as const,
+				root: 'workspace' as const,
+				behavior: 'prefix' as const,
+				value: 'src'
+			}
+		};
+		expect(describeGrantScope({ scope, scopePattern: null })).toBe('[read] <workspace>/src/**');
+		expect(capabilityRuleKindForScope(scope)).toBe('filesystem');
 	});
 });

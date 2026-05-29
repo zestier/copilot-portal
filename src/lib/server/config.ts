@@ -1,4 +1,24 @@
 import { z } from 'zod';
+import { BACKEND_PROVIDER_IDS } from '$lib/types';
+
+const optionalUrl = z
+	.string()
+	.trim()
+	.optional()
+	.transform((v) => (v ? v : undefined))
+	.pipe(z.string().url().optional());
+
+const commaList = z
+	.string()
+	.optional()
+	.transform((v) =>
+		v
+			? v
+					.split(',')
+					.map((s) => s.trim().toLowerCase())
+					.filter(Boolean)
+			: []
+	);
 
 const Schema = z
 	.object({
@@ -23,22 +43,24 @@ const Schema = z
 
 		GITHUB_CLIENT_ID: z.string().optional(),
 		GITHUB_CLIENT_SECRET: z.string().optional(),
-		ALLOWED_GITHUB_LOGINS: z
-			.string()
-			.optional()
-			.transform((v) =>
-				v
-					? v
-							.split(',')
-							.map((s) => s.trim().toLowerCase())
-							.filter(Boolean)
-					: []
-			),
+		ALLOWED_GITHUB_LOGINS: commaList,
+		REDEPLOY_ADMIN_GITHUB_LOGINS: commaList,
 
 		SHARED_SECRET: z.string().optional(),
 
 		COPILOT_GITHUB_TOKEN: z.string().optional(),
+		DEFAULT_BACKEND_PROVIDER: z.enum(BACKEND_PROVIDER_IDS).default('copilot'),
 		DEFAULT_MODEL: z.string().default('claude-sonnet-4.5'),
+		OPENAI_COMPATIBLE_BASE_URL: optionalUrl,
+		OPENAI_COMPATIBLE_API_KEY: z.string().optional(),
+		OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS: z.coerce.number().int().positive().default(8),
+		OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES: z.coerce.number().int().positive().default(20),
+		OPENAI_COMPATIBLE_TEMPERATURE: z.coerce.number().min(0).max(2).optional(),
+		OPENAI_COMPATIBLE_TOP_P: z.coerce.number().min(0).max(1).optional(),
+		OPENAI_COMPATIBLE_PRESENCE_PENALTY: z.coerce.number().min(-2).max(2).optional(),
+		OPENAI_COMPATIBLE_FREQUENCY_PENALTY: z.coerce.number().min(-2).max(2).optional(),
+		LMSTUDIO_BASE_URL: z.string().trim().url().default('http://127.0.0.1:1234'),
+		LMSTUDIO_API_KEY: z.string().optional(),
 
 		IDLE_TIMEOUT_MIN: z.coerce.number().int().positive().default(15),
 		MAX_CONCURRENT_SESSIONS: z.coerce.number().int().positive().default(4),
@@ -50,14 +72,8 @@ const Schema = z
 			.optional()
 			.transform((v) => v === '1' || v === 'true'),
 
-		// When set, the server is reached via a tunnel/proxy whose hostname
-		// won't match event.url.origin. Disables the Origin/Referer check on
-		// mutating API calls (the SameSite=Lax session cookie still blocks
-		// cross-site CSRF).
-		TUNNEL_HOST: z.string().optional(),
-
-		// When "1", `bridge.ts` swaps the real Copilot SDK for the in-process
-		// stub in `bridge-stub.ts`. Used by e2e tests.
+		// When "1", `copilot-provider.ts` swaps the real Copilot SDK for the
+		// in-process stub in `bridge-stub.ts`. Used by e2e tests.
 		COPILOT_STUB: z
 			.string()
 			.optional()
@@ -100,6 +116,29 @@ const Schema = z
 				ctx.addIssue({
 					code: z.ZodIssueCode.custom,
 					message: 'ALLOWED_GITHUB_LOGINS must be a non-empty list for AUTH_MODE=github.'
+				});
+			}
+			const unknownRedeployAdmins = cfg.REDEPLOY_ADMIN_GITHUB_LOGINS.filter(
+				(login) => !cfg.ALLOWED_GITHUB_LOGINS.includes(login)
+			);
+			if (unknownRedeployAdmins.length > 0) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ['REDEPLOY_ADMIN_GITHUB_LOGINS'],
+					message:
+						'REDEPLOY_ADMIN_GITHUB_LOGINS entries must also be present in ALLOWED_GITHUB_LOGINS.'
+				});
+			}
+			if (
+				cfg.ENABLE_REDEPLOY &&
+				cfg.ALLOWED_GITHUB_LOGINS.length > 1 &&
+				cfg.REDEPLOY_ADMIN_GITHUB_LOGINS.length === 0
+			) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ['REDEPLOY_ADMIN_GITHUB_LOGINS'],
+					message:
+						'REDEPLOY_ADMIN_GITHUB_LOGINS is required when ENABLE_REDEPLOY=1 and multiple GitHub logins are allowed.'
 				});
 			}
 		}

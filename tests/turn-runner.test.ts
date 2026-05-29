@@ -15,7 +15,7 @@ async function freshImports() {
 	await setupLocalEnv();
 	const users = await import('../src/lib/server/db/repos/users');
 	const convs = await import('../src/lib/server/db/repos/conversations');
-	const turnRunner = await import('../src/lib/server/copilot/turn-runner');
+	const turnRunner = await import('../src/lib/server/runtime/turn-runner');
 	return { users, convs, turnRunner };
 }
 
@@ -24,7 +24,56 @@ describe('turn-runner', () => {
 		acquireMock.mockReset();
 	});
 
-	it('emits conversation.update before the terminal done so clients see the auto-title', async () => {
+	it('marks a turn running before opening the provider session', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'Custom title',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		let resolveAcquire: (session: ReturnType<typeof makeFakeSession>) => void = () => {};
+		acquireMock.mockReturnValue(
+			new Promise((resolve) => {
+				resolveAcquire = resolve;
+			})
+		);
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+
+		expect(turnRunner.getTurn(conv.id)).toBe(turn);
+		await expect(
+			turnRunner.startTurn({
+				bridge: {
+					conversationId: conv.id,
+					userId: user.id,
+					workingDirectory: wd,
+					model: 'gpt-4',
+					policy: 'prompt'
+				},
+				prompt: 'second',
+				conversationId: conv.id
+			})
+		).rejects.toThrow('turn already in progress');
+
+		resolveAcquire(makeFakeSession([{ type: 'done' }], conv.id, wd));
+		for await (const { event } of turn.subscribe()) {
+			if (event.type === 'done') break;
+		}
+	});
+
+	it('replays initial conversation.update before the terminal done', async () => {
 		const { users, convs, turnRunner } = await freshImports();
 		const user = users.ensureLocalUser();
 		const wd = makeTmpDir('portal-wd-');
@@ -34,9 +83,6 @@ describe('turn-runner', () => {
 			model: 'gpt-4'
 		});
 
-		// SDK emits its own `done` mid-stream. Before the fix, this `done`
-		// reached subscribers and the client would break out of its SSE loop
-		// before the auto-title `conversation.update` was sent.
 		acquireMock.mockResolvedValue(
 			makeFakeSession([
 				{ type: 'message.start', messageId: 'm1', role: 'assistant' },
@@ -54,7 +100,14 @@ describe('turn-runner', () => {
 				policy: 'prompt'
 			},
 			prompt: 'Help me write a haiku about TypeScript',
-			conversationId: conv.id
+			conversationId: conv.id,
+			initialEvents: [
+				{
+					type: 'conversation.update',
+					conversationId: conv.id,
+					title: 'Help me write a haiku'
+				}
+			]
 		});
 
 		const received: PortalEvent[] = [];
@@ -67,19 +120,15 @@ describe('turn-runner', () => {
 		const doneIndices = received.map((e, i) => (e.type === 'done' ? i : -1)).filter((i) => i >= 0);
 		expect(doneIndices).toEqual([received.length - 1]);
 
-		// The conversation.update must arrive before `done`, with the derived title.
+		// The initial conversation.update must arrive before `done`.
 		const updateIdx = received.findIndex((e) => e.type === 'conversation.update');
 		expect(updateIdx).toBeGreaterThanOrEqual(0);
 		expect(updateIdx).toBeLessThan(received.length - 1);
 		const update = received[updateIdx];
 		if (update.type !== 'conversation.update') throw new Error('unreachable');
 		expect(update.conversationId).toBe(conv.id);
-		expect(update.title).toBeTruthy();
-		expect(update.title).not.toBe('New chat');
-
-		// The DB row was actually renamed.
-		const reloaded = convs.get(conv.id, user.id);
-		expect(reloaded?.title).toBe(update.title);
+		expect(update.title).toBe('Help me write a haiku');
+		expect(convs.get(conv.id, user.id)?.title).toBe('New chat');
 	});
 
 	it('does not emit conversation.update when the title is already set', async () => {

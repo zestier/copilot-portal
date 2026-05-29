@@ -46,6 +46,7 @@ export function buildTicketTools(opts: {
 			name: 'ticket_add',
 			description:
 				'Add a durable workspace ticket for something the user wants to do later. Use when asked to add a ticket, remember a task, or stash follow-up work between sessions.',
+			argsSchema: AddArgs,
 			parameters: {
 				type: 'object',
 				properties: {
@@ -70,6 +71,7 @@ export function buildTicketTools(opts: {
 			name: 'ticket_list',
 			description:
 				'List durable workspace tickets for the current workspace. Defaults to open tickets.',
+			argsSchema: ListArgs,
 			parameters: {
 				type: 'object',
 				properties: {
@@ -98,6 +100,7 @@ export function buildTicketTools(opts: {
 		{
 			name: 'ticket_get',
 			description: 'Read one durable workspace ticket by id.',
+			argsSchema: GetArgs,
 			parameters: {
 				type: 'object',
 				properties: {
@@ -119,6 +122,7 @@ export function buildTicketTools(opts: {
 			name: 'ticket_update',
 			description:
 				'Update a durable workspace ticket title, body, or status. Use status=done when a ticket has been completed, or archived when it should be hidden without completion.',
+			argsSchema: UpdateArgs,
 			parameters: {
 				type: 'object',
 				properties: {

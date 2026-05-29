@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { parseGitToolResult } from '../src/lib/client/git-tool-result';
 import { summarizeToolCall } from '../src/lib/client/tool-summary';
 import { decodeToolResult, shouldRenderToolResultAsMarkdown } from '../src/lib/client/tool-result';
 import { getBackgroundAgentId, getSubagentDisplayState } from '../src/lib/client/subagent-display';
@@ -67,6 +68,114 @@ describe('summarizeToolCall', () => {
 
 	it('falls back to first string arg for unknown tools', () => {
 		expect(summarizeToolCall('unknown_tool', JSON.stringify({ x: 'hello' }))).toBe('hello');
+	});
+
+	it('summarizes structured git tool options', () => {
+		expect(
+			summarizeToolCall(
+				'git_diff',
+				JSON.stringify({ output: 'name-status', target: 'worktree-vs-head', path: 'src/a.ts' })
+			)
+		).toBe('name-status · worktree-vs-head · src/a.ts');
+		expect(summarizeToolCall('git_log', JSON.stringify({ path: 'src/a.ts' }))).toBe('src/a.ts');
+		expect(
+			summarizeToolCall('git_show_commit', JSON.stringify({ sha: 'abc1234', includePatch: true }))
+		).toBe('abc1234 · patch');
+		expect(
+			summarizeToolCall('git_commit', JSON.stringify({ subject: 'Add feature', paths: 'all' }))
+		).toBe('Add feature · all changes');
+		expect(
+			summarizeToolCall(
+				'git_commit',
+				JSON.stringify({
+					subject: 'Add feature',
+					paths: ['src/a.ts', 'src/b.ts'],
+					body: 'Details',
+					trailers: [{ token: 'Co-authored-by', value: 'Copilot <copilot@example.com>' }]
+				})
+			)
+		).toBe('Add feature · src/a.ts +1 more · body · 1 trailers');
+	});
+});
+
+describe('parseGitToolResult', () => {
+	it('parses structured git_diff name-status output', () => {
+		expect(
+			parseGitToolResult(
+				'git_diff',
+				JSON.stringify({ output: 'name-status' }),
+				JSON.stringify({
+					files: [{ statusCode: 'M', status: 'modified', path: 'src/a.ts', origPath: null }]
+				})
+			)
+		).toEqual({
+			kind: 'diff-name-status',
+			files: [{ statusCode: 'M', status: 'modified', path: 'src/a.ts', origPath: null }]
+		});
+	});
+
+	it('parses git_log and git_show_commit output', () => {
+		expect(
+			parseGitToolResult(
+				'git_log',
+				'{}',
+				JSON.stringify({
+					commits: [
+						{
+							sha: 'abc123',
+							shortSha: 'abc123',
+							author: 'A',
+							email: 'a@example.com',
+							timestamp: 1,
+							subject: 'subject'
+						}
+					]
+				})
+			)
+		).toMatchObject({ kind: 'log', commits: [{ shortSha: 'abc123' }] });
+		expect(
+			parseGitToolResult(
+				'git_show_commit',
+				'{}',
+				JSON.stringify({
+					sha: 'abc123',
+					shortSha: 'abc123',
+					author: 'A',
+					email: 'a@example.com',
+					timestamp: 1,
+					subject: 'subject',
+					body: '',
+					parents: [],
+					files: []
+				})
+			)
+		).toMatchObject({ kind: 'commit', commit: { shortSha: 'abc123' } });
+	});
+
+	it('parses git_commit output', () => {
+		expect(
+			parseGitToolResult(
+				'git_commit',
+				'{}',
+				JSON.stringify({
+					sha: 'abcdef123456',
+					shortSha: 'abcdef12',
+					subject: 'created',
+					body: 'Body line',
+					trailers: [{ token: 'Reviewed-by', value: 'Tester <t@example.com>' }],
+					files: [{ statusCode: 'M', status: 'modified', path: 'src/a.ts', origPath: null }],
+					fileStats: [{ path: 'src/a.ts', origPath: null, added: 1, removed: 0 }],
+					diffStat: { filesChanged: 1, added: 1, removed: 0 },
+					remainingDirtyFiles: []
+				})
+			)
+		).toMatchObject({
+			kind: 'commit-created',
+			shortSha: 'abcdef12',
+			body: 'Body line',
+			trailers: [{ token: 'Reviewed-by', value: 'Tester <t@example.com>' }],
+			diffStat: { filesChanged: 1, added: 1, removed: 0 }
+		});
 	});
 });
 
@@ -147,7 +256,6 @@ describe('shouldRenderToolResultAsMarkdown', () => {
 			'exit_plan_mode',
 			'read_agent',
 			'report_intent',
-			'request_mode_switch',
 			'task_complete'
 		]) {
 			expect(shouldRenderToolResultAsMarkdown(tool)).toBe(true);

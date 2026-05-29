@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import type { PermissionPolicy, SessionMode } from '$lib/types';
-import type { GrantScope } from '$lib/permissions/scope-types';
+import { GRANT_TOOLS, isFilesystemPermissionKind } from '$lib/permissions/metadata';
+import { capabilityRuleKindForScope, capabilityScopeSummary } from '$lib/permissions/scope-summary';
 import * as settings from '../db/repos/settings';
 import type { PortalTool } from './git';
 
-const PermissionKind = z.enum(['shell', 'read', 'write', 'edit', 'url', 'custom-tool']);
+const CAPABILITY_PERMISSION_KINDS = [...GRANT_TOOLS, 'custom-tool'] as const;
+const PermissionKind = z.enum(CAPABILITY_PERMISSION_KINDS);
 
 const CapabilitiesArgs = z
 	.object({
@@ -18,8 +20,8 @@ const CapabilitiesArgs = z
 type CapabilityStatus = 'allowed' | 'denied' | 'prompt_required' | 'partially_allowed';
 
 interface CapabilityRule {
-	kind: 'tool' | 'filesystem' | 'shell' | 'url' | 'legacy' | 'exact-invocation' | 'policy';
-	decision: 'allow' | 'deny';
+	kind: ReturnType<typeof capabilityRuleKindForScope> | 'policy';
+	decision: 'allow' | 'force-allow' | 'deny' | 'prompt';
 	scope: 'all-conversations' | 'current-conversation';
 	summary: string;
 }
@@ -30,6 +32,7 @@ interface Capability {
 	guidance: string;
 	allowed?: CapabilityRule[];
 	denied?: CapabilityRule[];
+	promptRequired?: CapabilityRule[];
 }
 
 export function buildPermissionTools(opts: {
@@ -43,6 +46,7 @@ export function buildPermissionTools(opts: {
 			name: 'permission_capabilities',
 			description:
 				'Read-only summary of currently allowed permission capabilities and recovery options. Use after a permission rejection to find allowed alternatives before escalating.',
+			argsSchema: CapabilitiesArgs,
 			parameters: {
 				type: 'object',
 				properties: {
@@ -101,8 +105,8 @@ function permissionCapabilities(opts: {
 	const kinds = opts.permissionKind
 		? [opts.permissionKind]
 		: opts.toolName
-			? ['shell', 'read', 'write', 'edit', 'url', 'custom-tool']
-			: ['shell', 'read', 'write', 'edit', 'url'];
+			? CAPABILITY_PERMISSION_KINDS
+			: GRANT_TOOLS;
 	const capabilities = kinds.map((permissionKind) =>
 		capabilityForKind(permissionKind, grants, opts.policy)
 	);
@@ -121,12 +125,7 @@ function permissionCapabilities(opts: {
 			forcePermissionPrompt: {
 				supported: true,
 				guidance:
-					'Always available. Retry the blocked request with forcePermissionPrompt and a concise reason when no allowed alternative works.'
-			},
-			requestModeSwitch: {
-				supported: true,
-				guidance:
-					'Use request_mode_switch when repeated permission prompts block progress in best-effort mode.'
+					'Use sparingly. Retry the blocked request with forcePermissionPrompt and a concise reason only after verifying no allowed alternative works.'
 			}
 		}
 	};
@@ -138,29 +137,38 @@ function capabilityForKind(
 	policy: PermissionPolicy
 ): Capability {
 	const relevant = grants.filter((g) => grantCoversPermissionKind(g, permissionKind));
-	const allowed = relevant.filter((g) => g.decision === 'allow').map(grantToRule);
+	const allowed = relevant
+		.filter((g) => g.decision === 'allow' || g.decision === 'force-allow')
+		.map(grantToRule);
 	const denied = relevant.filter((g) => g.decision === 'deny').map(grantToRule);
+	const promptRequired = relevant.filter((g) => g.decision === 'prompt').map(grantToRule);
 	const policyRule = policyRuleFor(permissionKind, policy);
 	if (policyRule?.decision === 'allow') allowed.push(policyRule);
 	if (policyRule?.decision === 'deny') denied.push(policyRule);
 
-	const status = capabilityStatus(allowed, denied, policy);
+	const status = capabilityStatus(allowed, denied, promptRequired, policy);
 	return pruneEmptyArrays({
 		permissionKind,
 		status,
 		guidance: guidanceFor(permissionKind, status),
 		allowed,
-		denied
+		denied,
+		promptRequired
 	});
 }
 
 function capabilityStatus(
 	allowed: CapabilityRule[],
 	denied: CapabilityRule[],
+	promptRequired: CapabilityRule[],
 	policy: PermissionPolicy
 ): CapabilityStatus {
-	if (allowed.length > 0 && denied.length > 0) return 'partially_allowed';
+	if (denied.length > 0 && (allowed.length > 0 || promptRequired.length > 0)) {
+		return 'partially_allowed';
+	}
+	if (allowed.length > 0 && promptRequired.length > 0) return 'partially_allowed';
 	if (allowed.length > 0) return 'allowed';
+	if (promptRequired.length > 0) return 'prompt_required';
 	if (denied.length > 0 || policy === 'deny-all') return 'denied';
 	return 'prompt_required';
 }
@@ -174,8 +182,8 @@ function grantCoversPermissionKind(g: settings.GrantSummary, permissionKind: str
 		return true;
 	}
 	if (permissionKind === 'custom-tool' && g.permissionKind === 'custom-tool') return true;
-	if (g.scope?.kind === 'fs' && ['read', 'write', 'edit'].includes(permissionKind)) {
-		return !g.scope.perms || g.scope.perms.includes(permissionKind as 'read' | 'write' | 'edit');
+	if (g.scope?.kind === 'fs' && isFilesystemPermissionKind(permissionKind)) {
+		return !g.scope.perms || g.scope.perms.includes(permissionKind);
 	}
 	return g.scope?.kind === permissionKind;
 }
@@ -190,68 +198,22 @@ function grantToRule(g: settings.GrantSummary): CapabilityRule {
 }
 
 function ruleKind(g: settings.GrantSummary): CapabilityRule['kind'] {
-	if (g.argsHash) return 'exact-invocation';
-	if (!g.scope) return 'legacy';
-	switch (g.scope.kind) {
-		case 'any':
-			return 'tool';
-		case 'fs':
-			return 'filesystem';
-		case 'shell':
-			return 'shell';
-		case 'url':
-			return 'url';
-	}
+	return capabilityRuleKindForScope(g.scope, g.argsHash);
 }
 
 function grantSummary(g: settings.GrantSummary): string {
 	if (g.argsHash) return `${decisionVerb(g)} a previously approved exact ${g.tool} invocation.`;
 	if (!g.scope) return `${decisionVerb(g)} ${g.tool} requests covered by a legacy grant.`;
-	return `${decisionVerb(g)} ${g.tool} for ${scopeSummary(g.scope)}.`;
+	return `${decisionVerb(g)} ${g.tool} for ${capabilityScopeSummary(g.scope)}.`;
 }
 
-function decisionVerb(g: settings.GrantSummary): 'Allow' | 'Deny' {
-	return g.decision === 'deny' ? 'Deny' : 'Allow';
-}
-
-function scopeSummary(scope: GrantScope): string {
-	switch (scope.kind) {
-		case 'any':
-			return 'any request to this tool';
-		case 'shell':
-			return shellRuleSummary(scope.rule);
-		case 'fs':
-			return fsScopeSummary(scope);
-		case 'url':
-			return urlRuleSummary(scope.rule);
-	}
-}
-
-function shellRuleSummary(rule: Extract<GrantScope, { kind: 'shell' }>['rule']): string {
-	const parts = [`shell command \`${rule.argv0}\``];
-	if (rule.subcommands?.length) parts.push(`subcommands: ${rule.subcommands.join(', ')}`);
-	if (rule.positionals) parts.push(`positionals: ${rule.positionals.kind}`);
-	if (rule.pipeline) parts.push(`pipeline: ${rule.pipeline}`);
-	return parts.join('; ');
-}
-
-function fsScopeSummary(scope: Extract<GrantScope, { kind: 'fs' }>): string {
-	const perms = scope.perms?.length ? scope.perms.join('/') : 'read/write/edit';
-	const rule = scope.rule;
-	if (rule.behavior === 'any') return `${perms} anywhere under ${rule.root}`;
-	if (rule.root === 'absolute') return `${perms} for a specific absolute ${rule.behavior} rule`;
-	return `${perms} for a ${rule.behavior} rule under ${rule.root}`;
-}
-
-function urlRuleSummary(rule: Extract<GrantScope, { kind: 'url' }>['rule']): string {
-	switch (rule.kind) {
-		case 'exact':
-			return 'a specific URL';
-		case 'host':
-			return `URLs on host ${rule.host}`;
-		case 'host-suffix':
-			return `URLs on hosts ending in ${rule.suffix}`;
-	}
+function decisionVerb(
+	g: settings.GrantSummary
+): 'Approve' | 'Force approve' | 'Deny' | 'Prompt for' {
+	if (g.decision === 'force-allow') return 'Force approve';
+	if (g.decision === 'deny') return 'Deny';
+	if (g.decision === 'prompt') return 'Prompt for';
+	return 'Approve';
 }
 
 function policyRuleFor(permissionKind: string, policy: PermissionPolicy): CapabilityRule | null {
@@ -268,19 +230,19 @@ function guidanceFor(permissionKind: string, status: CapabilityStatus): string {
 	if (status === 'allowed')
 		return `${permissionKind} has allowed paths available; prefer those first.`;
 	if (status === 'partially_allowed') {
-		return `${permissionKind} has both allow and deny rules; use the allowed alternatives and avoid denied shapes.`;
+		return `${permissionKind} has a mix of approve, prompt, or deny rules; use approved alternatives and avoid denied shapes.`;
 	}
-	if (status === 'denied') {
-		return `${permissionKind} is currently denied by policy or grants; use escalation if no other kind works.`;
-	}
+	if (status === 'denied')
+		return `${permissionKind} is hard-denied by policy or grants; forcePermissionPrompt cannot override hard denies.`;
 	return (
 		`${permissionKind} requests not covered by listed grants will prompt. ` +
-		'In best-effort mode, prompt-worthy requests auto-reject.'
+		'In best-effort mode, prompt-worthy requests auto-reject unless retried with forcePermissionPrompt.'
 	);
 }
 
 function pruneEmptyArrays(capability: Capability): Capability {
 	if (capability.allowed?.length === 0) delete capability.allowed;
 	if (capability.denied?.length === 0) delete capability.denied;
+	if (capability.promptRequired?.length === 0) delete capability.promptRequired;
 	return capability;
 }

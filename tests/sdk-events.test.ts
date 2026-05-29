@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SdkEventAdapter } from '../src/lib/server/copilot/sdk-events';
-import type { AsyncQueue } from '../src/lib/server/copilot/async-queue';
+import type { AsyncQueue } from '../src/lib/server/runtime/async-queue';
 import type { PortalEvent, SessionMode } from '../src/lib/types';
 
 class FakeSdkSource {

@@ -5,7 +5,7 @@ import { argsHash } from '../src/lib/server/tool-invocation';
 const startTurnMock = vi.fn();
 const getTurnMock = vi.fn();
 
-vi.mock('../src/lib/server/copilot/turn-runner', () => ({
+vi.mock('../src/lib/server/runtime/turn-runner', () => ({
 	getTurn: (...args: unknown[]) => getTurnMock(...args),
 	startTurn: (...args: unknown[]) => startTurnMock(...args)
 }));
@@ -79,7 +79,7 @@ describe('tool-call rerun endpoint', () => {
 			conversationId: conv.id,
 			permissionKind: null,
 			argsHash: argsHash({ command: 'echo approved' }),
-			decision: 'allow',
+			decision: 'force-allow',
 			expiresAt: expect.any(Number)
 		});
 		expect(startTurnMock).toHaveBeenCalledWith(
@@ -127,7 +127,7 @@ describe('tool-call rerun endpoint', () => {
 			conversationId: conv.id,
 			permissionKind: null,
 			argsHash: argsHash(args),
-			decision: 'allow',
+			decision: 'force-allow',
 			expiresAt: expect.any(Number)
 		});
 		expect(startTurnMock).toHaveBeenCalledWith(

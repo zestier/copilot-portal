@@ -179,7 +179,7 @@ function unsafeOpReason(op: string): string {
 // view of where strings begin or end. If a caller really passes a
 // command containing this exact identifier, parsing treats it as the
 // elided marker; acceptable for an obviously-internal token.
-const SAFE_REDIR_SENTINEL = '__COPILOT_PORTAL_SAFE_REDIR__';
+const SAFE_REDIR_SENTINEL = '__ZAP_SAFE_REDIR__';
 const SAFE_REDIR_RE = /(?<=\s|^)(?:\d?>&(?:\d|-)|(?:\d?>>?|&>|\d?<)\s*\/dev\/null)(?=\s|$)/g;
 
 function elideSafeRedirections(input: string): string {

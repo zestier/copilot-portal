@@ -23,6 +23,12 @@ import {
 import { log } from '../log';
 import * as messagesRepo from '../db/repos/messages';
 import { argsHash } from '../tool-invocation';
+import {
+	bestEffortAlternativeHint,
+	bestEffortPermissionKindLabel,
+	isFilesystemPermissionKind
+} from '$lib/permissions/metadata';
+import { summarizeGitCommitPermission } from '$lib/permissions/git-commit';
 
 interface PermissionRequestLike {
 	kind?: string;
@@ -38,6 +44,10 @@ interface PermissionRequestLike {
 	args?: unknown;
 }
 
+const FORCE_PERMISSION_PROMPT_MIN_LENGTH = 20;
+const INVALID_FORCE_PERMISSION_PROMPT_FEEDBACK =
+	'`forcePermissionPrompt` must be a reason string of at least 20 characters explaining why no allowed alternative works.';
+
 interface InteractiveAdapterOptions {
 	conversationId: string;
 	userId: string;
@@ -48,6 +58,7 @@ interface InteractiveAdapterOptions {
 	getMode(): SessionMode;
 	getSessionWorkspacePath(): string | null;
 	getPermissionBehavior(tool: string): 'normal' | 'always-prompt';
+	validateCustomToolArgs?(toolName: string, args: unknown): { feedback: string } | null;
 }
 
 export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
@@ -79,7 +90,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 		const hash = hashPermissionArgs(req);
 		const alwaysPrompt = opts.getPermissionBehavior(tool) === 'always-prompt';
 
-		const audit = (decision: 'auto-allow' | 'auto-deny') => {
+		const audit = (decision: 'auto-allow' | 'auto-deny' | 'auto-prompt-required') => {
 			try {
 				settingsRepo.recordDecision(opts.conversationId, tool, summary, decision);
 			} catch (e) {
@@ -89,6 +100,26 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				});
 			}
 		};
+
+		const forcePermissionPrompt = parseForcePermissionPrompt(req);
+		if (forcePermissionPrompt.kind === 'invalid') {
+			audit('auto-deny');
+			return { kind: 'reject', feedback: forcePermissionPrompt.feedback } as const;
+		}
+		// Schema-validate custom portal tool args before any permission
+		// dialog or grant matching. Args that don't match the tool's
+		// declared schema are an agent bug, not something the user
+		// should approve; rejecting here with the schema in the
+		// feedback lets the agent self-correct on the next turn.
+		if (req.toolName && opts.validateCustomToolArgs) {
+			const invalid = opts.validateCustomToolArgs(req.toolName, req.args);
+			if (invalid) {
+				audit('auto-deny');
+				return { kind: 'reject', feedback: invalid.feedback } as const;
+			}
+		}
+		const forceEscalationReason =
+			forcePermissionPrompt.kind === 'valid' ? forcePermissionPrompt.reason : null;
 
 		let shellSegments: ParsedSegment[] | null = null;
 		let shellAnalysis: import('$lib/types').ShellAnalysisView | undefined = undefined;
@@ -113,10 +144,32 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			}
 		}
 
-		if (!alwaysPrompt && opts.getApproveAll()) {
+		const maybePromptForEscalation = async (
+			fallbackFeedback = 'Escalation denied. Use an allowed alternative or stop and explain what capability is missing.'
+		) => {
+			if (!forceEscalationReason) return null;
+			const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
+				'permission',
+				{
+					kind: 'permission',
+					tool,
+					permissionKind,
+					summary,
+					args: req.args ?? null,
+					userPolicy: opts.policy,
+					canPersistDecision: false,
+					escalationReason: forceEscalationReason,
+					shellAnalysis
+				}
+			);
+			if (response.decision === 'deny' || response.decision === 'deny-always') {
+				audit('auto-deny');
+				return rejectWithFeedback(response, fallbackFeedback);
+			}
 			audit('auto-allow');
 			return { kind: 'approve-once' } as const;
-		}
+		};
+
 		if (alwaysPrompt) {
 			const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
 				'permission',
@@ -137,10 +190,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			audit('auto-allow');
 			return { kind: 'approve-once' } as const;
 		}
-		const target =
-			permissionKind === 'read' || permissionKind === 'write' || permissionKind === 'edit'
-				? scopeKey
-				: null;
+		const target = isFilesystemPermissionKind(permissionKind) ? scopeKey : null;
 		const url = permissionKind === 'url' ? scopeKey : null;
 
 		const grant = settingsRepo.matchGrantDetailed(
@@ -163,55 +213,47 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 			return { kind: 'approve-once' } as const;
 		}
 		if (grant.outcome === 'deny') {
-			const escalationReason = grant.denyReason ? readForcePermissionPrompt(req) : null;
-			if (escalationReason) {
-				const response = await askInteractive<Extract<InteractiveResponse, { kind: 'permission' }>>(
-					'permission',
-					{
-						kind: 'permission',
-						tool,
-						permissionKind,
-						summary,
-						args: req.args ?? null,
-						userPolicy: opts.policy,
-						canPersistDecision: false,
-						escalationReason,
-						shellAnalysis
-					}
-				);
-				if (response.decision === 'deny' || response.decision === 'deny-always') {
-					audit('auto-deny');
-					return rejectWithFeedback(
-						response,
-						'Escalation denied. Use structured tools or stop and explain what capability is missing.'
-					);
-				}
+			audit('auto-deny');
+			if (grant.feedback) return { kind: 'reject', feedback: grant.feedback } as const;
+			return { kind: 'reject' } as const;
+		}
+		let promptRequest: { canPersistDecision: boolean; bestEffortFeedback: string };
+		if (grant.outcome === 'prompt') {
+			promptRequest = {
+				canPersistDecision: false,
+				bestEffortFeedback: grant.feedback ?? bestEffortPromptGrantFeedback({ permissionKind })
+			};
+		} else {
+			if (opts.getApproveAll()) {
 				audit('auto-allow');
 				return { kind: 'approve-once' } as const;
 			}
-			audit('auto-deny');
-			if (grant.denyReason) return { kind: 'reject', feedback: grant.denyReason } as const;
-			return { kind: 'reject' } as const;
+
+			const decision = decideByPolicy(opts.policy, 'permission', permissionKind, {
+				scopeKey,
+				workspaceRoot: opts.workingDirectory
+			});
+			if (decision === 'approved') {
+				audit('auto-allow');
+				return { kind: 'approve-once' } as const;
+			}
+			if (decision === 'denied') {
+				audit('auto-deny');
+				return { kind: 'reject' } as const;
+			}
+			promptRequest = {
+				canPersistDecision: true,
+				bestEffortFeedback: bestEffortPermissionFeedback({ permissionKind })
+			};
 		}
 
-		const decision = decideByPolicy(opts.policy, 'permission', permissionKind, {
-			scopeKey,
-			workspaceRoot: opts.workingDirectory
-		});
-		if (decision === 'approved') {
-			audit('auto-allow');
-			return { kind: 'approve-once' } as const;
-		}
-		if (decision === 'denied') {
-			audit('auto-deny');
-			return { kind: 'reject' } as const;
-		}
 		if (opts.getMode() === 'best-effort') {
-			audit('auto-deny');
-			const feedback = bestEffortPermissionFeedback({ permissionKind });
+			const escalated = await maybePromptForEscalation();
+			if (escalated) return escalated;
+			audit('auto-prompt-required');
 			return {
 				kind: 'reject',
-				feedback
+				feedback: promptRequest.bestEffortFeedback
 			} as const;
 		}
 
@@ -224,7 +266,7 @@ export function createInteractiveCallbacks(opts: InteractiveAdapterOptions) {
 				summary,
 				args: req.args ?? null,
 				userPolicy: opts.policy,
-				canPersistDecision: true,
+				canPersistDecision: promptRequest.canPersistDecision,
 				shellAnalysis
 			}
 		);
@@ -336,24 +378,56 @@ function hashPermissionArgs(req: PermissionRequestLike): string | null {
 	return null;
 }
 
-function readForcePermissionPrompt(req: PermissionRequestLike): string | null {
-	const raw =
-		typeof req.forcePermissionPrompt === 'string'
-			? req.forcePermissionPrompt
-			: (readArgString(req.args, 'forcePermissionPrompt') ??
-				(typeof req.toolCallId === 'string'
-					? readArgString(messagesRepo.getToolCallArgs(req.toolCallId), 'forcePermissionPrompt')
-					: null));
-	const reason = raw?.trim();
-	if (!reason) return null;
-	if (reason.length < 20) return null;
-	return reason;
+function parseForcePermissionPrompt(
+	req: PermissionRequestLike
+): { kind: 'absent' } | { kind: 'invalid'; feedback: string } | { kind: 'valid'; reason: string } {
+	const values = forcePermissionPromptValues(req);
+	if (values.length === 0) return { kind: 'absent' };
+
+	let reason: string | null = null;
+	for (const value of values) {
+		if (typeof value !== 'string') {
+			return { kind: 'invalid', feedback: INVALID_FORCE_PERMISSION_PROMPT_FEEDBACK };
+		}
+		const trimmed = value.trim();
+		if (trimmed.length < FORCE_PERMISSION_PROMPT_MIN_LENGTH) {
+			return { kind: 'invalid', feedback: INVALID_FORCE_PERMISSION_PROMPT_FEEDBACK };
+		}
+		reason ??= trimmed;
+	}
+
+	return { kind: 'valid', reason: reason ?? '' };
 }
 
-function readArgString(args: unknown, key: string): string | null {
-	if (!args || typeof args !== 'object') return null;
-	const v = (args as Record<string, unknown>)[key];
-	return typeof v === 'string' && v.length > 0 ? v : null;
+function forcePermissionPromptValues(req: PermissionRequestLike): unknown[] {
+	const values: unknown[] = [];
+	if (hasOwn(req, 'forcePermissionPrompt')) values.push(req.forcePermissionPrompt);
+
+	const argValue = readArgValue(req.args, 'forcePermissionPrompt');
+	if (argValue.present) values.push(argValue.value);
+
+	if (typeof req.toolCallId === 'string') {
+		const persistedValue = readArgValue(
+			messagesRepo.getToolCallArgs(req.toolCallId),
+			'forcePermissionPrompt'
+		);
+		if (persistedValue.present) values.push(persistedValue.value);
+	}
+
+	return values;
+}
+
+function readArgValue(
+	args: unknown,
+	key: string
+): { present: false } | { present: true; value: unknown } {
+	if (!args || typeof args !== 'object') return { present: false };
+	if (!hasOwn(args, key)) return { present: false };
+	return { present: true, value: (args as Record<string, unknown>)[key] };
+}
+
+function hasOwn(obj: object, key: string): boolean {
+	return Object.prototype.hasOwnProperty.call(obj, key);
 }
 
 function bestEffortPermissionFeedback(view: { permissionKind: string }): string {
@@ -361,39 +435,23 @@ function bestEffortPermissionFeedback(view: { permissionKind: string }): string 
 	const permissionKind = bestEffortPermissionKindLabel(view.permissionKind);
 	return (
 		`A ${permissionKind} permission request was auto-rejected because this conversation is in \`best-effort\` mode. ` +
-		`${alternative} Use \`permission_capabilities\` to inspect alternatives. If still blocked, retry with \`forcePermissionPrompt\` or call \`request_mode_switch\` for repeated permission blocks.`
+		`${alternative} Use \`permission_capabilities\` to inspect alternatives. If still blocked after verifying no allowed alternative works, retry sparingly with \`forcePermissionPrompt\`.`
 	);
 }
 
-function bestEffortPermissionKindLabel(permissionKind: string): string {
-	switch (permissionKind) {
-		case 'shell':
-		case 'read':
-		case 'write':
-		case 'edit':
-		case 'url':
-			return permissionKind;
-		default:
-			return 'unknown';
-	}
-}
-
-function bestEffortAlternativeHint(permissionKind: string): string {
-	switch (permissionKind) {
-		case 'shell':
-			return 'Try a structured tool or another already-allowed approach first.';
-		case 'read':
-			return 'Try the structured read/search tools or existing workspace context first.';
-		case 'write':
-		case 'edit':
-			return 'Try a structured workspace edit/create workflow or another already-allowed path first.';
-		case 'url':
-			return 'Try a local source or another non-network approach first.';
-		default:
-			return 'Try another approach that stays within the current permission set first.';
-	}
+function bestEffortPromptGrantFeedback(view: { permissionKind: string }): string {
+	const permissionKind = bestEffortPermissionKindLabel(view.permissionKind);
+	return (
+		`A ${permissionKind} permission request matched a saved prompt grant and ` +
+		'requires interactive approval, ' +
+		'but this conversation is in `best-effort` mode and cannot display permission dialogs.'
+	);
 }
 
 function summarizePermissionRequest(req: PermissionRequestLike, tool: string): string {
+	if (tool === 'git_commit') {
+		const summary = summarizeGitCommitPermission(req.args);
+		if (summary) return summary;
+	}
 	return req.fullCommandText ?? req.fileName ?? req.path ?? req.url ?? req.toolDescription ?? tool;
 }

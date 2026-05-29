@@ -7,30 +7,34 @@
 		type FormResult,
 		type PermissionGrant
 	} from './settings-types';
+	import type { ShellCommandStep } from '$lib/permissions/scope-types';
 	import {
-		FS_RULE_BEHAVIORS_WITH_VALUE,
-		FS_RULE_ROOTS,
-		type FsRuleBehaviorWithValue,
-		type FsRuleRoot,
-		type ShellOptionSpec
-	} from '$lib/permissions/scope-types';
+		GRANT_TOOLS,
+		grantToolLabel,
+		isGrantTool,
+		type GrantTool
+	} from '$lib/permissions/metadata';
+	import {
+		buildGrantScopeJson,
+		defaultGrantScopeFormFields,
+		grantScopeToFormFields,
+		nextShellStepOptions,
+		type BuildResult,
+		type FsBehaviorKind,
+		type GrantScopeFormFields,
+		type ShellPipelineKind,
+		type ShellPositionalsKind,
+		type ShellStepOptionInput,
+		type UrlRuleKind
+	} from '$lib/permissions/grant-form';
+	import PermissionGrantScopeFields from './PermissionGrantScopeFields.svelte';
 
 	let { grants, form }: { grants: PermissionGrant[]; form: FormResult | null } = $props();
 
-	type GrantTool = 'shell' | 'read' | 'write' | 'edit' | 'url';
-	type ShellPositionalsKind =
-		| 'unset'
-		| 'none'
-		| 'any'
-		| 'workspace-paths'
-		| 'session-workspace-paths';
-	type ShellPipelineKind = 'unset' | 'must' | 'forbid';
-	type FsRootKind = FsRuleRoot;
-	type FsBehaviorKind = 'any' | FsRuleBehaviorWithValue;
-	type UrlRuleKind = 'exact' | 'host' | 'host-suffix';
+	type GrantDecision = 'allow' | 'force-allow' | 'deny' | 'prompt';
 
 	let newGrantTool = $state<GrantTool>('shell');
-	let newGrantDecision = $state<'allow' | 'deny'>('allow');
+	let newGrantDecision = $state<GrantDecision>('allow');
 	let newGrantExpiry = $state('');
 	let newGrantDenyReason = $state('');
 	let editingGrantId = $state<number | null>(null);
@@ -42,23 +46,21 @@
 	let editorDetails: HTMLDetailsElement | undefined = $state();
 
 	let searchQuery = $state('');
-	let decisionFilter = $state<'all' | 'allow' | 'deny'>('all');
+	let decisionFilter = $state<'all' | GrantDecision>('all');
 	let toolFilter = $state('all');
 	let kindFilter = $state('all');
 	let scopeFilter = $state<'all' | 'global' | 'conversation'>('all');
 	let expiryFilter = $state<'all' | 'never' | 'expiring' | 'expired'>('all');
-	let provenanceFilter = $state<'all' | 'seed' | 'user'>('all');
+	let provenanceFilter = $state<'all' | PermissionGrant['source']>('all');
 
 	let shellArgv0 = $state('');
 	let shellSubcommands = $state('');
 	let shellPositionals = $state<ShellPositionalsKind>('unset');
 	let shellPipeline = $state<ShellPipelineKind>('unset');
-	let shellPreOptionsAllow = $state('');
-	let shellPreOptionsDeny = $state('');
-	let shellOptionsAllow = $state('');
-	let shellOptionsDeny = $state('');
+	let shellStepOptions = $state<ShellStepOptionInput[]>([{ allow: '', deny: '' }]);
+	let originalShellCommand = $state<ShellCommandStep[] | null>(null);
 
-	let fsRoot = $state<FsRootKind>('workspace');
+	let fsRoot = $state<GrantScopeFormFields['fsRoot']>('workspace');
 	let fsBehavior = $state<FsBehaviorKind>('any');
 	let fsValue = $state('');
 
@@ -67,134 +69,62 @@
 	let urlHost = $state('');
 	let urlSuffix = $state('');
 
-	function csvToList(s: string): string[] {
-		return s
-			.split(',')
+	function grantScopeFormFields(): GrantScopeFormFields {
+		return {
+			shellArgv0,
+			shellSubcommands,
+			shellPositionals,
+			shellPipeline,
+			shellStepOptions,
+			fsRoot,
+			fsBehavior,
+			fsValue,
+			urlRuleKind,
+			urlExact,
+			urlHost,
+			urlSuffix
+		};
+	}
+
+	function applyGrantScopeFormFields(fields: GrantScopeFormFields) {
+		shellArgv0 = fields.shellArgv0;
+		shellSubcommands = fields.shellSubcommands;
+		shellPositionals = fields.shellPositionals;
+		shellPipeline = fields.shellPipeline;
+		shellStepOptions = fields.shellStepOptions;
+		fsRoot = fields.fsRoot;
+		fsBehavior = fields.fsBehavior;
+		fsValue = fields.fsValue;
+		urlRuleKind = fields.urlRuleKind;
+		urlExact = fields.urlExact;
+		urlHost = fields.urlHost;
+		urlSuffix = fields.urlSuffix;
+	}
+
+	const shellCommandTokens = $derived([
+		shellArgv0.trim(),
+		...shellSubcommands
+			.split(/\s+/)
 			.map((t) => t.trim())
-			.filter((t) => t.length > 0);
-	}
+			.filter(Boolean)
+	]);
 
-	function parseShellOptionSpecs(input: string): ShellOptionSpec[] {
-		return csvToList(input).map((entry) => {
-			const split = entry.indexOf('=');
-			if (split === -1) {
-				if (!entry.startsWith('-')) {
-					throw new Error(`option name "${entry}" must start with '-'`);
-				}
-				return { name: entry, kind: 'flag' };
-			}
-			const name = entry.slice(0, split).trim();
-			const valueKind = entry.slice(split + 1).trim();
-			if (!name.startsWith('-')) {
-				throw new Error(`option name "${name}" must start with '-'`);
-			}
-			if (valueKind !== 'any' && valueKind !== 'workspace-path') {
-				throw new Error(`option "${name}" must end with =any or =workspace-path`);
-			}
-			const valueRule =
-				valueKind === 'any' ? ({ kind: 'any' } as const) : ({ kind: 'workspace-path' } as const);
-			return {
-				name,
-				kind: 'option',
-				value: valueRule
-			};
-		});
-	}
+	$effect(() => {
+		const next = nextShellStepOptions(shellCommandTokens, shellStepOptions, originalShellCommand);
+		const changed =
+			next.length !== shellStepOptions.length ||
+			next.some((entry, i) => entry !== shellStepOptions[i]);
+		if (changed) shellStepOptions = next;
+	});
 
-	function shellOptionSpecsToCsv(specs: ShellOptionSpec[]): string {
-		return specs
-			.map((spec) => (spec.kind === 'flag' ? spec.name : `${spec.name}=${spec.value.kind}`))
-			.join(', ');
+	function updateShellStepOption(index: number, field: keyof ShellStepOptionInput, value: string) {
+		shellStepOptions = shellStepOptions.map((entry, i) =>
+			i === index ? { ...entry, [field]: value } : entry
+		);
 	}
-
-	function fsRootLabel(root: FsRootKind): string {
-		switch (root) {
-			case 'workspace':
-				return 'workspace';
-			case 'session-workspace':
-				return 'SDK session workspace';
-			case 'absolute':
-				return 'absolute path';
-		}
-	}
-
-	function fsBehaviorLabel(behavior: FsBehaviorKind): string {
-		switch (behavior) {
-			case 'any':
-				return 'any path inside the root';
-			case 'exact':
-				return 'one exact path';
-			case 'prefix':
-				return 'path or anything inside it';
-			case 'glob':
-				return 'path matching a glob';
-		}
-	}
-
-	type BuildResult = { json: string; error: null } | { json: null; error: string };
 
 	function buildScopeJson(): BuildResult {
-		try {
-			if (newGrantTool === 'shell') {
-				if (!shellArgv0.trim()) return { json: null, error: 'argv0 is required' };
-				const rule: Record<string, unknown> = { argv0: shellArgv0.trim() };
-				const subs = csvToList(shellSubcommands);
-				if (subs.length > 0) rule.subcommands = subs;
-				if (shellPositionals !== 'unset') rule.positionals = { kind: shellPositionals };
-				if (shellPipeline !== 'unset') rule.pipeline = shellPipeline;
-				const preAllow = parseShellOptionSpecs(shellPreOptionsAllow);
-				const preDeny = csvToList(shellPreOptionsDeny);
-				if (preAllow.length > 0 || preDeny.length > 0) {
-					const options: Record<string, unknown> = {};
-					if (preAllow.length > 0) options.allow = preAllow;
-					if (preDeny.length > 0) options.deny = preDeny;
-					rule.preSubcommandOptions = options;
-				}
-				const allow = parseShellOptionSpecs(shellOptionsAllow);
-				const deny = csvToList(shellOptionsDeny);
-				if (allow.length > 0 || deny.length > 0) {
-					const options: Record<string, unknown> = {};
-					if (allow.length > 0) options.allow = allow;
-					if (deny.length > 0) options.deny = deny;
-					rule.options = options;
-				}
-				return { json: JSON.stringify({ kind: 'shell', rule }), error: null };
-			}
-			if (newGrantTool === 'url') {
-				let rule: Record<string, unknown>;
-				switch (urlRuleKind) {
-					case 'exact':
-						if (!urlExact.trim()) return { json: null, error: 'URL is required' };
-						rule = { kind: 'exact', url: urlExact.trim() };
-						break;
-					case 'host':
-						if (!urlHost.trim()) return { json: null, error: 'host is required' };
-						rule = { kind: 'host', host: urlHost.trim() };
-						break;
-					case 'host-suffix':
-						if (!urlSuffix.trim()) return { json: null, error: 'suffix is required' };
-						rule = { kind: 'host-suffix', suffix: urlSuffix.trim() };
-						break;
-				}
-				return { json: JSON.stringify({ kind: 'url', rule }), error: null };
-			}
-
-			const perms = [newGrantTool] as ('read' | 'write' | 'edit')[];
-			let rule: Record<string, unknown>;
-			if (fsBehavior === 'any') {
-				if (fsRoot === 'absolute') {
-					return { json: null, error: 'absolute root requires exact, prefix, or glob behavior' };
-				}
-				rule = { kind: 'path', root: fsRoot, behavior: 'any' };
-			} else {
-				const value = fsValue.trim();
-				if (!value) return { json: null, error: 'path or glob value is required' };
-				rule = { kind: 'path', root: fsRoot, behavior: fsBehavior, value };
-			}
-			return { json: JSON.stringify({ kind: 'fs', perms, rule }), error: null };
-		} catch (e) {
-			return { json: null, error: e instanceof Error ? e.message : String(e) };
-		}
+		return buildGrantScopeJson(newGrantTool, grantScopeFormFields());
 	}
 
 	const buildResult = $derived<BuildResult>(
@@ -204,10 +134,7 @@
 			void shellSubcommands;
 			void shellPositionals;
 			void shellPipeline;
-			void shellPreOptionsAllow;
-			void shellPreOptionsDeny;
-			void shellOptionsAllow;
-			void shellOptionsDeny;
+			void shellStepOptions;
 			void fsRoot;
 			void fsBehavior;
 			void fsValue;
@@ -252,21 +179,8 @@
 		newGrantDecision = 'allow';
 		newGrantExpiry = '';
 		newGrantDenyReason = '';
-		shellArgv0 = '';
-		shellSubcommands = '';
-		shellPositionals = 'unset';
-		shellPipeline = 'unset';
-		shellPreOptionsAllow = '';
-		shellPreOptionsDeny = '';
-		shellOptionsAllow = '';
-		shellOptionsDeny = '';
-		fsRoot = 'workspace';
-		fsBehavior = 'any';
-		fsValue = '';
-		urlRuleKind = 'host';
-		urlExact = '';
-		urlHost = '';
-		urlSuffix = '';
+		applyGrantScopeFormFields(defaultGrantScopeFormFields());
+		originalShellCommand = null;
 		userTouched = false;
 	}
 
@@ -287,38 +201,13 @@
 		newGrantExpiry = expiryToLocalInput(g.expiresAt);
 		newGrantDenyReason = g.denyReason ?? '';
 
-		if (
-			g.tool === 'shell' ||
-			g.tool === 'url' ||
-			g.tool === 'read' ||
-			g.tool === 'write' ||
-			g.tool === 'edit'
-		) {
+		if (isGrantTool(g.tool)) {
 			newGrantTool = g.tool;
 		}
 
-		const sc = g.scope;
-		if (sc) {
-			if (sc.kind === 'shell') {
-				shellArgv0 = sc.rule.argv0;
-				shellSubcommands = (sc.rule.subcommands ?? []).join(', ');
-				shellPositionals = sc.rule.positionals?.kind ?? 'unset';
-				shellPipeline = sc.rule.pipeline ?? 'unset';
-				shellPreOptionsAllow = shellOptionSpecsToCsv(sc.rule.preSubcommandOptions?.allow ?? []);
-				shellPreOptionsDeny = (sc.rule.preSubcommandOptions?.deny ?? []).join(', ');
-				shellOptionsAllow = shellOptionSpecsToCsv(sc.rule.options?.allow ?? []);
-				shellOptionsDeny = (sc.rule.options?.deny ?? []).join(', ');
-			} else if (sc.kind === 'url') {
-				urlRuleKind = sc.rule.kind;
-				if (sc.rule.kind === 'exact') urlExact = sc.rule.url;
-				else if (sc.rule.kind === 'host') urlHost = sc.rule.host;
-				else urlSuffix = sc.rule.suffix;
-			} else if (sc.kind === 'fs') {
-				fsRoot = sc.rule.root;
-				fsBehavior = sc.rule.behavior;
-				fsValue = 'value' in sc.rule ? sc.rule.value : '';
-			}
-		}
+		const editState = grantScopeToFormFields(g.scope);
+		applyGrantScopeFormFields(editState.fields);
+		originalShellCommand = editState.originalShellCommand;
 
 		detailsOpen = true;
 		queueMicrotask(() => {
@@ -345,7 +234,7 @@
 	function canEditGrant(g: PermissionGrant): boolean {
 		if (g.scope === null) return false;
 		if (g.scope.kind === 'any') return false;
-		if (!['shell', 'read', 'write', 'edit', 'url'].includes(g.tool)) return false;
+		if (!isGrantTool(g.tool)) return false;
 		if (g.scope.kind === 'fs' && g.scope.perms && g.scope.perms.length > 1) return false;
 		return true;
 	}
@@ -378,7 +267,29 @@
 	}
 
 	function provenanceLabel(g: PermissionGrant): string {
-		return g.isSeedGrant ? 'Default seed' : 'User-created';
+		switch (g.source) {
+			case 'seed':
+				return 'Default seed';
+			case 'prompt':
+				return 'Prompt-created';
+			case 'settings':
+				return 'Settings-created';
+			case 'legacy':
+				return 'Legacy';
+		}
+	}
+
+	function decisionLabel(decision: GrantDecision): string {
+		switch (decision) {
+			case 'allow':
+				return 'Approve';
+			case 'force-allow':
+				return 'Force approve';
+			case 'deny':
+				return 'Deny';
+			case 'prompt':
+				return 'Prompt';
+		}
 	}
 
 	function groupSearchText(g: PermissionGrant): string {
@@ -406,8 +317,7 @@
 		if (kindFilter !== 'all' && (g.permissionKind ?? 'any kind') !== kindFilter) return false;
 		if (scopeFilter === 'global' && g.conversationId !== null) return false;
 		if (scopeFilter === 'conversation' && g.conversationId === null) return false;
-		if (provenanceFilter === 'seed' && !g.isSeedGrant) return false;
-		if (provenanceFilter === 'user' && g.isSeedGrant) return false;
+		if (provenanceFilter !== 'all' && g.source !== provenanceFilter) return false;
 		if (expiryFilter === 'never' && g.expiresAt !== null) return false;
 		if (expiryFilter === 'expiring' && !isExpiringSoon(g)) return false;
 		if (expiryFilter === 'expired' && !isExpired(g)) return false;
@@ -417,12 +327,12 @@
 	function getGrantStats(items: PermissionGrant[]) {
 		return {
 			total: items.length,
-			allow: items.filter((g) => g.decision === 'allow').length,
+			allow: items.filter((g) => g.decision === 'allow' || g.decision === 'force-allow').length,
 			deny: items.filter((g) => g.decision === 'deny').length,
+			prompt: items.filter((g) => g.decision === 'prompt').length,
 			global: items.filter((g) => g.conversationId === null).length,
 			conversation: items.filter((g) => g.conversationId !== null).length,
-			seed: items.filter((g) => g.isSeedGrant).length,
-			user: items.filter((g) => !g.isSeedGrant).length,
+			seed: items.filter((g) => g.source === 'seed').length,
 			expiring: items.filter(isExpiringSoon).length,
 			expired: items.filter(isExpired).length
 		};
@@ -430,36 +340,53 @@
 
 	function buildGrantSections(items: PermissionGrant[]) {
 		const deny = items.filter((g) => g.decision === 'deny');
+		const prompt = items.filter((g) => g.decision === 'prompt');
 		const userGlobal = items.filter(
-			(g) => g.decision === 'allow' && !g.isSeedGrant && g.conversationId === null
+			(g) =>
+				(g.decision === 'allow' || g.decision === 'force-allow') &&
+				g.source !== 'seed' &&
+				g.conversationId === null
 		);
 		const conversation = items.filter(
-			(g) => g.decision === 'allow' && !g.isSeedGrant && g.conversationId !== null
+			(g) =>
+				(g.decision === 'allow' || g.decision === 'force-allow') &&
+				g.source !== 'seed' &&
+				g.conversationId !== null
 		);
-		const defaults = items.filter((g) => g.decision === 'allow' && g.isSeedGrant);
+		const defaults = items.filter(
+			(g) => (g.decision === 'allow' || g.decision === 'force-allow') && g.source === 'seed'
+		);
 
 		return [
 			{
 				id: 'deny',
-				title: 'Deny rules and nudges',
-				description: 'Rules that actively reject requests and may return feedback to the agent.',
+				title: 'Hard deny rules',
+				description:
+					'Rules that absolutely reject matching requests. They never prompt and forcePermissionPrompt cannot override them.',
 				grants: deny
 			},
 			{
+				id: 'prompt',
+				title: 'Prompt-required rules',
+				description:
+					'Rules that block automated approval but allow a human permission dialog or forcePermissionPrompt escalation.',
+				grants: prompt
+			},
+			{
 				id: 'user-global',
-				title: 'User-created global allows',
-				description: 'Allow rules that apply across conversations.',
+				title: 'Non-seed global approvals',
+				description: 'Approve rules not marked as default seeds that apply across conversations.',
 				grants: userGlobal
 			},
 			{
 				id: 'conversation',
-				title: 'Conversation-scoped allows',
-				description: 'Allow rules created from a specific conversation prompt.',
+				title: 'Conversation-scoped approvals',
+				description: 'Approve rules created from a specific conversation prompt.',
 				grants: conversation
 			},
 			{
 				id: 'defaults',
-				title: 'Default seed allows',
+				title: 'Default seed approvals',
 				description: 'Built-in safe defaults installed for each user; revocable and restorable.',
 				grants: defaults
 			}
@@ -494,8 +421,8 @@
 	<div class="section-heading">
 		<h2>Saved permission grants</h2>
 		<p class="muted small">
-			Review persistent allow/deny rules, audit defaults, and find conversation-scoped rules
-			quickly.
+			Review persistent approve, deny, and prompt rules; audit defaults; and find
+			conversation-scoped rules quickly.
 		</p>
 	</div>
 
@@ -506,11 +433,15 @@
 		</div>
 		<div class="summary-card">
 			<span class="summary-value">{stats.allow}</span>
-			<span class="summary-label">Allows</span>
+			<span class="summary-label">Approvals</span>
 		</div>
 		<div class="summary-card danger-card">
 			<span class="summary-value">{stats.deny}</span>
 			<span class="summary-label">Denies</span>
+		</div>
+		<div class="summary-card warning-card">
+			<span class="summary-value">{stats.prompt}</span>
+			<span class="summary-label">Prompts</span>
 		</div>
 		<div class="summary-card">
 			<span class="summary-value">{stats.seed}</span>
@@ -556,18 +487,17 @@
 					<label>
 						Decision
 						<select name="decision" bind:value={newGrantDecision}>
-							<option value="allow">Allow</option>
+							<option value="allow">Approve</option>
 							<option value="deny">Deny</option>
+							<option value="prompt">Prompt</option>
 						</select>
 					</label>
 					<label>
 						Tool
 						<select name="tool" bind:value={newGrantTool}>
-							<option value="shell">shell (run a command)</option>
-							<option value="read">read (file read)</option>
-							<option value="write">write (file write)</option>
-							<option value="edit">edit (file edit)</option>
-							<option value="url">url (fetch URL)</option>
+							{#each GRANT_TOOLS as tool}
+								<option value={tool}>{grantToolLabel(tool)}</option>
+							{/each}
 						</select>
 					</label>
 					<label>
@@ -593,216 +523,32 @@
 					</label>
 				{:else}
 					<input type="hidden" name="denyReason" value="" />
+					{#if newGrantDecision === 'prompt'}
+						<p class="muted small">
+							Prompt grants block automated approval but allow a human permission dialog or
+							forcePermissionPrompt escalation. Persistent choices are disabled for those dialogs;
+							edit or remove the prompt grant here to change that behavior.
+						</p>
+					{/if}
 				{/if}
 
-				{#if newGrantTool === 'shell'}
-					<fieldset class="scope-fields">
-						<legend>Shell scope</legend>
-						<label>
-							argv0 (the bare command name)
-							<input
-								type="text"
-								bind:value={shellArgv0}
-								placeholder="cd"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small">No slashes, no leading dot — just the program name.</span>
-						</label>
-						<label>
-							Subcommands (optional, comma-separated)
-							<input
-								type="text"
-								bind:value={shellSubcommands}
-								placeholder="status, log, diff"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small"
-								>If set, the resolved subcommand must be one of these. Leading option specs below
-								control which options are consumed before subcommand matching.</span
-							>
-						</label>
-						<label>
-							Positional arguments
-							<select bind:value={shellPositionals}>
-								<option value="unset">(unconstrained — any positionals)</option>
-								<option value="none">none (the command takes no positional args)</option>
-								<option value="any">any (positionals are anything)</option>
-								<option value="workspace-paths"
-									>workspace-paths (every positional must resolve inside the conversation's
-									workspace)</option
-								>
-								<option value="session-workspace-paths"
-									>session-workspace-paths (every positional must resolve inside the SDK session
-									workspace)</option
-								>
-							</select>
-						</label>
-						<label>
-							Pipeline constraint
-							<select bind:value={shellPipeline}>
-								<option value="unset">(no constraint — matches regardless of `|` neighbours)</option
-								>
-								<option value="must"
-									>must — only matches when the command is part of a pipeline (`a | b`)</option
-								>
-								<option value="forbid"
-									>forbid — only matches when the command is NOT pipelined</option
-								>
-							</select>
-							<span class="muted small"
-								>Useful for deny grants that nudge toward structured alternatives: `pipeline=forbid`
-								lets `cmd | grep ...` keep working while rejecting bare `grep`.</span
-							>
-						</label>
-						<label>
-							Leading option allow list (optional, comma-separated)
-							<input
-								type="text"
-								bind:value={shellPreOptionsAllow}
-								placeholder="--no-pager, -C=any, --git-dir=workspace-path"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small"
-								>Shared option-spec syntax: bare names are boolean flags; `name=any` and
-								`name=workspace-path` consume a value (either `name value` or `name=value`).</span
-							>
-						</label>
-						<label>
-							Leading option deny list (optional, comma-separated)
-							<input
-								type="text"
-								bind:value={shellPreOptionsDeny}
-								placeholder="--git-dir, -C"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small"
-								>Name-based deny list for options before the subcommand. Useful for blocking repo
-								escape hatches like `git -C` or `git --git-dir`.</span
-							>
-						</label>
-						<label>
-							Post-subcommand option allow list (optional, comma-separated)
-							<input
-								type="text"
-								bind:value={shellOptionsAllow}
-								placeholder="-n, --color=any, --"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small"
-								>If set, every option-shaped token after the subcommand must match one of these
-								specs. Consumed option values are not treated as positionals.</span
-							>
-						</label>
-						<label>
-							Post-subcommand option deny list (optional, comma-separated)
-							<input
-								type="text"
-								bind:value={shellOptionsDeny}
-								placeholder="--format, --upload-pack"
-								spellcheck="false"
-								autocomplete="off"
-							/>
-							<span class="muted small"
-								>Name-based deny list for options after the subcommand. Positionals are governed by
-								the row above.</span
-							>
-						</label>
-					</fieldset>
-				{:else if newGrantTool === 'url'}
-					<fieldset class="scope-fields">
-						<legend>URL scope</legend>
-						<label>
-							Match by
-							<select bind:value={urlRuleKind}>
-								<option value="exact">exact URL</option>
-								<option value="host">exact host</option>
-								<option value="host-suffix">host suffix (e.g. *.github.com)</option>
-							</select>
-						</label>
-						{#if urlRuleKind === 'exact'}
-							<label>
-								URL
-								<input
-									type="url"
-									bind:value={urlExact}
-									placeholder="https://api.github.com/users/octocat"
-									autocomplete="off"
-								/>
-							</label>
-						{:else if urlRuleKind === 'host'}
-							<label>
-								Host
-								<input
-									type="text"
-									bind:value={urlHost}
-									placeholder="api.github.com"
-									autocomplete="off"
-								/>
-							</label>
-						{:else}
-							<label>
-								Suffix
-								<input
-									type="text"
-									bind:value={urlSuffix}
-									placeholder="github.com"
-									autocomplete="off"
-								/>
-								<span class="muted small"
-									>Matches hosts equal to `suffix` or ending with `.suffix` (so `github.com` and
-									`api.github.com` both match `github.com`).</span
-								>
-							</label>
-						{/if}
-					</fieldset>
-				{:else}
-					<fieldset class="scope-fields">
-						<legend>Filesystem scope ({newGrantTool})</legend>
-						<label>
-							Root
-							<select bind:value={fsRoot}>
-								{#each FS_RULE_ROOTS as root}
-									<option value={root}>{fsRootLabel(root)}</option>
-								{/each}
-							</select>
-						</label>
-						<label>
-							Behavior
-							<select bind:value={fsBehavior}>
-								{#if fsRoot !== 'absolute'}
-									<option value="any">{fsBehaviorLabel('any')}</option>
-								{/if}
-								{#each FS_RULE_BEHAVIORS_WITH_VALUE as behavior}
-									<option value={behavior}>{fsBehaviorLabel(behavior)}</option>
-								{/each}
-							</select>
-						</label>
-						{#if fsBehavior !== 'any'}
-							<label>
-								{fsRoot === 'absolute' ? 'Absolute path or glob' : 'Relative path or glob'}
-								<input
-									type="text"
-									bind:value={fsValue}
-									placeholder={fsRoot === 'absolute'
-										? '/workspaces/project/src/**/*.ts'
-										: 'src/**/*.ts'}
-									spellcheck="false"
-									autocomplete="off"
-								/>
-								<span class="muted small"
-									>Workspace and session-workspace values are relative to that root. Absolute values
-									start with `/`. For glob, `*` matches one path segment and `**` matches any
-									number.</span
-								>
-							</label>
-						{/if}
-					</fieldset>
-				{/if}
+				<PermissionGrantScopeFields
+					tool={newGrantTool}
+					{shellCommandTokens}
+					bind:shellArgv0
+					bind:shellSubcommands
+					bind:shellPositionals
+					bind:shellPipeline
+					bind:shellStepOptions
+					bind:fsRoot
+					bind:fsBehavior
+					bind:fsValue
+					bind:urlRuleKind
+					bind:urlExact
+					bind:urlHost
+					bind:urlSuffix
+					{updateShellStepOption}
+				/>
 
 				<input type="hidden" name="scopeJson" value={scopeJsonPreview} />
 
@@ -846,7 +592,7 @@
 				<button
 					class="btn small"
 					type="submit"
-					title="Re-install any default seed grants that are missing from your account (idempotent — won't touch existing rules)"
+					title="Replace identifiable default seed grants with the current default set; user-created non-default rules are left alone"
 				>
 					Restore default seed grants
 				</button>
@@ -877,8 +623,10 @@
 			<h3>No saved grants yet</h3>
 			<p class="muted small">
 				No saved grants. When you click "Allow always" or "Deny always" on a tool prompt, the
-				resulting rule shows up here so you can revoke it later. The button above re-installs the
-				built-in defaults (file/dir reads, git read-only, structured-tool nudge denies).
+				resulting approve or hard-deny rule shows up here so you can revoke it later. You can also
+				add prompt-required rules here to force interactive approval for matching requests. The
+				button above re-installs the built-in defaults (file/dir reads, structured tools, and safety
+				rules).
 			</p>
 		</div>
 	{:else}
@@ -909,8 +657,9 @@
 					Decision filter
 					<select bind:value={decisionFilter}>
 						<option value="all">All decisions</option>
-						<option value="allow">Allow only</option>
+						<option value="allow">Approve only</option>
 						<option value="deny">Deny only</option>
+						<option value="prompt">Prompt only</option>
 					</select>
 				</label>
 				<label>
@@ -951,9 +700,11 @@
 				<label>
 					Source filter
 					<select bind:value={provenanceFilter}>
-						<option value="all">Default and user-created</option>
-						<option value="seed">Default seed matches</option>
-						<option value="user">User-created</option>
+						<option value="all">All sources</option>
+						<option value="seed">Default seed</option>
+						<option value="prompt">Prompt-created</option>
+						<option value="settings">Settings-created</option>
+						<option value="legacy">Legacy</option>
 					</select>
 				</label>
 			</div>
@@ -972,11 +723,12 @@
 			</div>
 		{:else}
 			<div class="filtered-summary" aria-live="polite">
-				<span>{filteredStats.allow} allow</span>
+				<span>{filteredStats.allow} approve</span>
 				<span>{filteredStats.deny} deny</span>
+				<span>{filteredStats.prompt} prompt</span>
 				<span>{filteredStats.global} global</span>
 				<span>{filteredStats.conversation} conversation-scoped</span>
-				<span>{filteredStats.seed} default seed matches</span>
+				<span>{filteredStats.seed} default seed</span>
 			</div>
 
 			{#each grantSections as section (section.id)}
@@ -993,12 +745,12 @@
 							<li class="grant-row">
 								<div class="grant-row-main">
 									<div class="grant-row-title">
-										<span class="decision-tag {g.decision}"
-											>{g.decision === 'allow' ? 'Allow' : 'Deny'}</span
-										>
+										<span class="decision-tag {g.decision}">{decisionLabel(g.decision)}</span>
 										<code class="tool">{g.tool}</code>
 										<span class="kind">{g.permissionKind ?? 'any kind'}</span>
-										<span class="source-tag" class:seed={g.isSeedGrant}>{provenanceLabel(g)}</span>
+										<span class="source-tag" class:seed={g.source === 'seed'}
+											>{provenanceLabel(g)}</span
+										>
 										<span
 											class="expiry-tag"
 											class:warn={isExpiringSoon(g)}
@@ -1011,7 +763,7 @@
 										<span>Granted {formatTime(g.grantedAt)}</span>
 										<span>Expires {formatExpiry(g.expiresAt)}</span>
 									</div>
-									{#if g.decision === 'deny' && g.denyReason}
+									{#if g.denyReason}
 										<p class="deny-reason-row muted small">Feedback: {g.denyReason}</p>
 									{/if}
 								</div>
@@ -1196,19 +948,6 @@
 		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 		gap: 0.75rem;
 	}
-	.scope-fields {
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		padding: 0.5rem 0.75rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-	}
-	.scope-fields legend {
-		padding: 0 0.25rem;
-		font-size: 0.85em;
-		color: var(--muted, #888);
-	}
 	.scope-preview pre {
 		background: var(--code-bg, #1118);
 		padding: 0.5rem;
@@ -1328,9 +1067,14 @@
 		border-radius: var(--radius-sm);
 		border: 1px solid var(--border);
 	}
-	.decision-tag.allow {
+	.decision-tag.allow,
+	.decision-tag.force-allow {
 		color: var(--success);
 		border-color: var(--success);
+	}
+	.decision-tag.prompt {
+		color: var(--warning, #d99000);
+		border-color: var(--warning, #d99000);
 	}
 	.decision-tag.deny {
 		color: var(--danger);

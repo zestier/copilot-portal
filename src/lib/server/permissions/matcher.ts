@@ -17,14 +17,14 @@ import { shellRuleMatches, shellRuleMatchesSegment } from './predicates/shell';
 import { fsScopeMatches } from './predicates/fs';
 import { urlScopeMatches } from './predicates/url';
 
-export type GrantDecision = 'allow' | 'deny';
-export type MatchOutcome = 'allow' | 'deny' | 'none';
+export type GrantDecision = 'allow' | 'force-allow' | 'deny' | 'prompt';
+export type MatchOutcome = 'allow' | 'deny' | 'prompt' | 'none';
 
 export interface DetailedMatchOutcome {
 	outcome: MatchOutcome;
-	/** When `outcome === 'deny'`, the matched grant's `denyReason`
-	 * (if any). Otherwise null. Used by the bridge to populate
-	 * `feedback` on the SDK's `{kind:'reject'}` response. */
+	/** Agent-facing feedback from the matched deny or prompt-required grant. */
+	feedback: string | null;
+	/** @deprecated use `feedback`. */
 	denyReason: string | null;
 }
 
@@ -74,12 +74,14 @@ export interface MatchQuery {
 }
 
 /**
- * Decide allow / deny / none against an in-memory list of candidate
+ * Decide allow / deny / prompt / none against an in-memory list of candidate
  * grants. Precedence:
  *
- *   1. Any matching `deny` grant wins.
- *   2. Otherwise any matching `allow` grant wins.
- *   3. Otherwise `none` — caller falls back to policy.
+ *   1. Matching `force-allow` grants approve the request even when deny grants match.
+ *   2. Any matching `deny` grant wins as a hard block.
+ *   3. Otherwise any matching `allow` grant wins.
+ *   4. Otherwise any matching `prompt` grant forces a human prompt.
+ *   5. Otherwise `none` — caller falls back to policy.
  *
  * "Match" means tool matches (exact or wildcard `*`), permission_kind
  * matches (exact, NULL = any, or `*`), and the scope pattern matches
@@ -87,49 +89,77 @@ export interface MatchQuery {
  * Expired grants are skipped.
  *
  * For shell requests with multiple parsed segments (e.g. `cd ./src &&
- * git diff`), each segment is evaluated independently against the grant
- * set: the request is allowed only if every segment has at least one
- * matching allow grant, and is denied if any segment is denied. This
- * lets a `cd` grant cover the prefix while a `git` grant covers the
- * tail without requiring a single rule that knows about both.
+ * git diff`), hard-denies are checked first across all segments. Otherwise,
+ * each segment is evaluated independently against the ordered grant set. This
+ * lets a `cd` grant cover the prefix while a `git` grant covers the tail
+ * without requiring a single rule that knows about both.
  */
 export function matchGrants(rows: GrantRow[], q: MatchQuery): MatchOutcome {
 	return matchGrantsDetailed(rows, q).outcome;
 }
 
 /**
- * Like `matchGrants`, but additionally returns the matched deny grant's
- * `denyReason` (when one fired). For `allow` / `none` outcomes, the
- * reason is always null. When multiple deny grants would match, the
- * first one with a non-null reason wins (deny precedence is unchanged
- * — we just pick a reason to surface).
+ * Like `matchGrants`, but additionally returns agent-facing feedback from
+ * the matched hard-deny or prompt-required grant. Grants are evaluated in
+ * precedence order (force-allow, deny, allow, prompt), preserving input order
+ * within each tier.
  */
 export function matchGrantsDetailed(rows: GrantRow[], q: MatchQuery): DetailedMatchOutcome {
-	const exactArgsAllow = matchExactArgsAllow(rows, q);
-	if (exactArgsAllow) return { outcome: 'allow', denyReason: null };
+	const orderedRows = sortGrantRows(rows);
+	const forceAllow = matchFirst(orderedRows, q, (r) => r.decision === 'force-allow');
+	if (forceAllow) return withFeedback('allow', null);
+	const hardDeny = matchHardDeny(orderedRows, q);
+	if (hardDeny) return hardDeny;
 	if (q.permissionKind === 'shell' && q.shellSegments && q.shellSegments.length > 0) {
-		return matchShellSegments(rows, q, q.shellSegments);
+		return matchShellSegments(orderedRows, q, q.shellSegments);
 	}
-	let sawAllow = false;
-	for (const r of rows) {
-		if (!grantApplies(r, q)) continue;
-		if (!rowScopeMatches(r, q)) continue;
-		if (r.decision === 'deny') return { outcome: 'deny', denyReason: r.denyReason };
-		sawAllow = true;
-	}
-	return { outcome: sawAllow ? 'allow' : 'none', denyReason: null };
+	const match = matchFirst(orderedRows, q, (r) => !r.argsHash);
+	if (!match) return withFeedback('none', null);
+	return withFeedback(
+		match.decision === 'force-allow' ? 'allow' : match.decision,
+		match.decision === 'allow' || match.decision === 'force-allow' ? null : match.denyReason
+	);
 }
 
-function matchExactArgsAllow(rows: GrantRow[], q: MatchQuery): boolean {
-	if (!q.argsHash) return false;
+function matchHardDeny(rows: GrantRow[], q: MatchQuery): DetailedMatchOutcome | null {
+	if (q.permissionKind === 'shell' && q.shellSegments && q.shellSegments.length > 0) {
+		for (let i = 0; i < q.shellSegments.length; i++) {
+			const seg = q.shellSegments[i];
+			const ctx = {
+				workspaceRoot: q.workspaceRoot ?? null,
+				sessionWorkspaceRoot: q.sessionWorkspaceRoot ?? null,
+				inPipeline: segmentInPipeline(q.shellSegments, i)
+			};
+			for (const r of rows) {
+				if (r.decision !== 'deny') continue;
+				if (!grantApplies(r, q)) continue;
+				if (!rowMatchesShellSegment(r, seg, q, ctx)) continue;
+				return withFeedback('deny', r.denyReason);
+			}
+		}
+		return null;
+	}
 	for (const r of rows) {
-		if (r.decision !== 'allow') continue;
-		if (!r.argsHash) continue;
+		if (r.decision !== 'deny') continue;
 		if (!grantApplies(r, q)) continue;
 		if (!rowScopeMatches(r, q)) continue;
-		return true;
+		return withFeedback('deny', r.denyReason);
 	}
-	return false;
+	return null;
+}
+
+function matchFirst(
+	rows: GrantRow[],
+	q: MatchQuery,
+	filter: (r: GrantRow) => boolean
+): GrantRow | null {
+	for (const r of rows) {
+		if (!filter(r)) continue;
+		if (!grantApplies(r, q)) continue;
+		if (!rowScopeMatches(r, q)) continue;
+		return r;
+	}
+	return null;
 }
 
 function matchShellSegments(
@@ -138,6 +168,8 @@ function matchShellSegments(
 	segments: ParsedSegment[]
 ): DetailedMatchOutcome {
 	let allAllowed = true;
+	let sawPrompt = false;
+	let promptFeedback: string | null = null;
 	for (let i = 0; i < segments.length; i++) {
 		const seg = segments[i];
 		const inPipeline = segmentInPipeline(segments, i);
@@ -146,16 +178,39 @@ function matchShellSegments(
 			sessionWorkspaceRoot: q.sessionWorkspaceRoot ?? null,
 			inPipeline
 		};
-		let segAllow = false;
+		let segMatched = false;
 		for (const r of rows) {
+			if (r.decision === 'deny') continue;
+			if (r.decision === 'force-allow') continue;
+			if (r.argsHash) continue;
 			if (!grantApplies(r, q)) continue;
 			if (!rowMatchesShellSegment(r, seg, q, ctx)) continue;
-			if (r.decision === 'deny') return { outcome: 'deny', denyReason: r.denyReason };
-			segAllow = true;
+			segMatched = true;
+			if (r.decision === 'prompt') {
+				sawPrompt = true;
+				promptFeedback ??= r.denyReason;
+			}
+			break;
 		}
-		if (!segAllow) allAllowed = false;
+		if (!segMatched || sawPrompt) allAllowed = false;
 	}
-	return { outcome: allAllowed ? 'allow' : 'none', denyReason: null };
+	if (sawPrompt) return withFeedback('prompt', promptFeedback);
+	return withFeedback(allAllowed ? 'allow' : 'none', null);
+}
+
+function sortGrantRows(rows: GrantRow[]): GrantRow[] {
+	return [...rows].sort((a, b) => grantRank(a) - grantRank(b));
+}
+
+function grantRank(r: GrantRow): number {
+	if (r.decision === 'force-allow') return 0;
+	if (r.decision === 'deny') return 1;
+	if (r.decision === 'allow') return 2;
+	return 3;
+}
+
+function withFeedback(outcome: MatchOutcome, feedback: string | null): DetailedMatchOutcome {
+	return { outcome, feedback, denyReason: feedback };
 }
 
 /**
@@ -182,7 +237,11 @@ function rowMatchesShellSegment(
 	r: GrantRow,
 	seg: ParsedSegment,
 	q: MatchQuery,
-	ctx: { workspaceRoot: string | null; sessionWorkspaceRoot: string | null; inPipeline: boolean }
+	ctx: {
+		workspaceRoot: string | null;
+		sessionWorkspaceRoot: string | null;
+		inPipeline: boolean;
+	}
 ): boolean {
 	if (r.scope) {
 		switch (r.scope.kind) {
@@ -194,7 +253,7 @@ function rowMatchesShellSegment(
 				return false;
 		}
 	}
-	return scopeMatches(r.scopePattern, q.scopeKey);
+	return scopeMatches(r.scopePattern, seg.argv.join(' '));
 }
 
 function rowScopeMatches(r: GrantRow, q: MatchQuery): boolean {

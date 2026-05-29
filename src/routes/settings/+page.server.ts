@@ -2,73 +2,108 @@ import { redirect, fail } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { PageServerLoad, Actions } from './$types';
 import * as settings from '$lib/server/db/repos/settings';
-import * as tokens from '$lib/server/db/repos/tokens';
-import { fetchAuthStatus, fetchModels } from '$lib/server/copilot/bridge';
+import {
+	fetchAuthStatus,
+	fetchModels,
+	getDefaultProviderId,
+	listProviders
+} from '$lib/server/providers';
+import {
+	loadProviderStatus,
+	shouldProbeProviderStatus,
+	type ProviderStatusSnapshot
+} from '$lib/server/providers/status';
+import { providerAuthToken } from '$lib/server/providers/auth';
 import { loadConfig } from '$lib/server/config';
 import { getDeployMetadata } from '$lib/server/deploy';
 import { log } from '$lib/server/log';
-import type { PermissionPolicy, SessionMode, UserSettings } from '$lib/types';
+import { canRedeployUser } from '$lib/server/redeploy';
+import { listBuiltInPromptTemplates } from '$lib/prompt-templates';
+import * as promptTemplates from '$lib/server/db/repos/prompt-templates';
+import {
+	normalizeBackendProvider,
+	BACKEND_PROVIDER_IDS,
+	type PermissionPolicy,
+	type SessionMode,
+	type UserSettings
+} from '$lib/types';
 import { GrantInputSchema, permissionKindForTool } from '$lib/permissions/scope-schema';
 import { stableScopeKey } from '$lib/permissions/scope-codec';
-import { defaultSeedGrants, ensureSeedGrantsForUser } from '$lib/server/permissions/seed-grants';
+import { defaultSeedGrants, restoreSeedGrantsForUser } from '$lib/server/permissions/seed-grants';
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.userId) throw redirect(302, '/login');
+	const userId = locals.userId;
 	const cfg = loadConfig();
-	const authToken = tokens.getGithubToken(locals.userId) ?? cfg.COPILOT_GITHUB_TOKEN ?? undefined;
+	const currentSettings = settings.get(userId) ?? settings.defaults();
+	const defaultProvider = currentSettings.defaultProvider;
 
 	// Garbage-collect expired grants on load so the management table
 	// doesn't show TTL'd rows the matcher is already ignoring.
 	const purged = settings.pruneExpiredGrants();
 	if (purged > 0) log.info('settings.grants_pruned', { count: purged });
 
-	let copilot: {
-		auth: { isAuthenticated: boolean; authType?: string; login?: string; statusMessage?: string };
-		models: { id: string; name: string; maxContextWindowTokens?: number }[];
-		error?: string;
-	};
-	try {
-		const [auth, models] = await Promise.all([
-			fetchAuthStatus(locals.userId, authToken),
-			fetchModels(locals.userId, authToken)
-		]);
-		copilot = {
-			auth: {
-				isAuthenticated: auth.isAuthenticated,
-				authType: auth.authType,
-				login: auth.login,
-				statusMessage: auth.statusMessage
-			},
-			models: models.map((m) => ({
-				id: m.id,
-				name: m.name,
-				maxContextWindowTokens: m.capabilities?.limits?.max_context_window_tokens
-			}))
-		};
-	} catch (e) {
-		log.warn('settings.copilot_status_failed', { err: String(e) });
-		copilot = {
-			auth: { isAuthenticated: false, statusMessage: String(e) },
-			models: [],
-			error: e instanceof Error ? e.message : String(e)
-		};
-	}
+	const providers = await Promise.all(
+		listProviders().map(async (provider): Promise<ProviderStatusSnapshot> => {
+			try {
+				return await loadProviderStatus(provider, {
+					userId,
+					providerAuthToken: shouldProbeProviderStatus(provider, defaultProvider)
+						? providerAuthToken(provider.id, userId)
+						: undefined,
+					defaultProvider,
+					loader: { fetchAuthStatus, fetchModels }
+				});
+			} catch (e) {
+				log.warn('settings.provider_status_failed', { provider: provider.id, err: String(e) });
+				return {
+					id: provider.id,
+					displayName: provider.displayName,
+					ui: provider.ui,
+					auth: { isAuthenticated: false, statusMessage: String(e) },
+					models: [],
+					capabilities: provider.capabilities,
+					statusChecked: true,
+					error: e instanceof Error ? e.message : String(e)
+				};
+			}
+		})
+	);
+	const defaultProviderStatus =
+		providers.find((provider) => provider.id === defaultProvider) ?? providers[0];
 
 	return {
-		settings: settings.get(locals.userId) ?? settings.defaults(),
-		copilot,
-		recentDecisions: settings.listRecentDecisionsForUser(locals.userId, 25),
-		grants: markSeedGrants(settings.listGrantsForUser(locals.userId)),
-		enableRedeploy: cfg.ENABLE_REDEPLOY,
+		settings: currentSettings,
+		defaultProvider: getDefaultProviderId(),
+		providers,
+		defaultProviderStatus,
+		recentDecisions: settings.listRecentDecisionsForUser(userId, 25),
+		grants: markSeedGrants(settings.listGrantsForUser(userId)),
+		builtInPromptTemplates: listBuiltInPromptTemplates(),
+		promptTemplates: promptTemplates.list(userId, { status: 'all' }),
+		enableRedeploy: cfg.ENABLE_REDEPLOY && canRedeployUser(locals.user, cfg),
 		deploy: getDeployMetadata()
 	};
 };
 
 const SaveSchema = z.object({
+	defaultProvider: z.enum(BACKEND_PROVIDER_IDS),
 	defaultModel: z.string().optional(),
 	defaultWorkdir: z.string().optional(),
 	defaultConversationMode: z.enum(['interactive', 'plan', 'autopilot', 'best-effort']),
 	defaultPolicy: z.enum(['prompt', 'allow-all', 'deny-all']),
 	theme: z.enum(['dark', 'light', 'system'])
+});
+
+const PromptTemplateSchema = z.object({
+	title: z.string().trim().min(1).max(120),
+	description: z.string().trim().max(500).optional(),
+	prompt: z.string().trim().min(1).max(20_000),
+	pinned: z.boolean().optional(),
+	orderIndex: z.coerce.number().int().min(-1_000_000).max(1_000_000).optional()
+});
+
+const UpdatePromptTemplateSchema = PromptTemplateSchema.extend({
+	id: z.string().min(1)
 });
 
 export const actions: Actions = {
@@ -77,6 +112,7 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const parsed = SaveSchema.safeParse({
 			defaultModel: (data.get('defaultModel') as string) || undefined,
+			defaultProvider: data.get('defaultProvider'),
 			defaultWorkdir: (data.get('defaultWorkdir') as string) || undefined,
 			defaultConversationMode: data.get('defaultConversationMode'),
 			defaultPolicy: data.get('defaultPolicy'),
@@ -90,6 +126,7 @@ export const actions: Actions = {
 			};
 		}
 		const next: UserSettings = {
+			defaultProvider: normalizeBackendProvider(parsed.data.defaultProvider),
 			defaultModel: parsed.data.defaultModel ?? null,
 			defaultWorkdir: parsed.data.defaultWorkdir ?? null,
 			defaultConversationMode: parsed.data.defaultConversationMode as SessionMode,
@@ -98,6 +135,77 @@ export const actions: Actions = {
 		};
 		settings.save(locals.userId, next);
 		return { ok: true, formId: 'save' };
+	},
+	createPromptTemplate: async ({ request, locals }) => {
+		if (!locals.userId)
+			return fail(401, { ok: false, error: 'Not authenticated', formId: 'createPromptTemplate' });
+		const data = await request.formData();
+		const parsed = PromptTemplateSchema.safeParse({
+			title: data.get('title'),
+			description: (data.get('description') as string) || undefined,
+			prompt: data.get('prompt'),
+			pinned: data.get('pinned') === 'on',
+			orderIndex: (data.get('orderIndex') as string) || undefined
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				ok: false,
+				error: parsed.error.issues[0]?.message ?? 'Invalid prompt template',
+				formId: 'createPromptTemplate'
+			});
+		}
+		promptTemplates.create(locals.userId, parsed.data);
+		return { ok: true, formId: 'createPromptTemplate' };
+	},
+	updatePromptTemplate: async ({ request, locals }) => {
+		if (!locals.userId)
+			return fail(401, { ok: false, error: 'Not authenticated', formId: 'updatePromptTemplate' });
+		const data = await request.formData();
+		const parsed = UpdatePromptTemplateSchema.safeParse({
+			id: data.get('id'),
+			title: data.get('title'),
+			description: (data.get('description') as string) || undefined,
+			prompt: data.get('prompt'),
+			pinned: data.get('pinned') === 'on',
+			orderIndex: (data.get('orderIndex') as string) || undefined
+		});
+		if (!parsed.success) {
+			return fail(400, {
+				ok: false,
+				error: parsed.error.issues[0]?.message ?? 'Invalid prompt template',
+				formId: 'updatePromptTemplate'
+			});
+		}
+		const { id, ...patch } = parsed.data;
+		const updated = promptTemplates.update(id, locals.userId, patch);
+		if (!updated)
+			return fail(404, {
+				ok: false,
+				error: 'Prompt template not found',
+				formId: 'updatePromptTemplate'
+			});
+		return { ok: true, formId: 'updatePromptTemplate' };
+	},
+	archivePromptTemplate: async ({ request, locals }) => {
+		if (!locals.userId)
+			return fail(401, { ok: false, error: 'Not authenticated', formId: 'archivePromptTemplate' });
+		const data = await request.formData();
+		const id = data.get('id');
+		if (typeof id !== 'string' || id.length === 0) {
+			return fail(400, {
+				ok: false,
+				error: 'Invalid prompt template id',
+				formId: 'archivePromptTemplate'
+			});
+		}
+		const archived = promptTemplates.archive(id, locals.userId);
+		if (!archived)
+			return fail(404, {
+				ok: false,
+				error: 'Prompt template not found',
+				formId: 'archivePromptTemplate'
+			});
+		return { ok: true, formId: 'archivePromptTemplate' };
 	},
 	revokeGrant: async ({ request, locals }) => {
 		if (!locals.userId)
@@ -122,19 +230,18 @@ export const actions: Actions = {
 	},
 
 	/**
-	 * Re-install any default seed grants that aren't already present for
-	 * this user. Idempotent: seeds the user has manually deleted will
-	 * come back, seeds they already have are skipped. Lets a user
-	 * recover after "Revoke all grants", and lets existing users
-	 * back-fill any new seeds shipped after their account was created.
+	 * Replace identifiable default seed grants with the current default set.
+	 * This lets users recover after "Revoke all grants" and swap stale default
+	 * rows (for example old hard-deny prompt seeds) for the current defaults without
+	 * rewriting unrelated user-created grants.
 	 */
 	restoreSeedGrants: async ({ locals }) => {
 		if (!locals.userId) {
 			return fail(401, { ok: false, error: 'Not authenticated', formId: 'restoreSeedGrants' });
 		}
-		const inserted = ensureSeedGrantsForUser(locals.userId);
-		log.info('settings.seed_grants_restored', { userId: locals.userId, inserted });
-		return { ok: true, inserted, formId: 'restoreSeedGrants' };
+		const result = restoreSeedGrantsForUser(locals.userId);
+		log.info('settings.seed_grants_restored', { userId: locals.userId, ...result });
+		return { ok: true, ...result, formId: 'restoreSeedGrants' };
 	},
 
 	/**
@@ -179,7 +286,8 @@ export const actions: Actions = {
 			scope: input.scope,
 			decision: input.decision,
 			expiresAt: input.expiresAt,
-			denyReason: input.denyReason
+			denyReason: input.denyReason,
+			source: 'settings'
 		});
 		log.info('settings.grant_created', {
 			userId: locals.userId,
@@ -293,8 +401,9 @@ function markSeedGrants(grants: settings.GrantSummary[]) {
 			defaultSeedGrantKey(
 				seed.tool,
 				seed.permissionKind,
-				seed.scope,
-				seed.decision === 'deny' ? 'deny' : 'allow'
+				seed.scope ?? null,
+				seed.scopePattern ?? null,
+				seed.decision ?? 'allow'
 			)
 		)
 	);
@@ -302,19 +411,26 @@ function markSeedGrants(grants: settings.GrantSummary[]) {
 	return grants.map((grant) => ({
 		...grant,
 		isSeedGrant:
-			grant.conversationId === null &&
-			grant.scope !== null &&
-			seedKeys.has(
-				defaultSeedGrantKey(grant.tool, grant.permissionKind, grant.scope, grant.decision)
-			)
+			grant.source === 'seed' ||
+			(grant.conversationId === null &&
+				seedKeys.has(
+					defaultSeedGrantKey(
+						grant.tool,
+						grant.permissionKind,
+						grant.scope,
+						grant.scopePattern,
+						grant.decision
+					)
+				))
 	}));
 }
 
 function defaultSeedGrantKey(
 	tool: string,
 	permissionKind: string | null,
-	scope: import('$lib/permissions/scope-types').GrantScope,
+	scope: import('$lib/permissions/scope-types').GrantScope | null,
+	scopePattern: string | null,
 	decision: string
 ) {
-	return `${tool}\u0000${permissionKind ?? ''}\u0000${decision}\u0000${stableScopeKey(scope)}`;
+	return `${tool}\u0000${permissionKind ?? ''}\u0000${decision}\u0000${scope ? stableScopeKey(scope) : `pattern:${scopePattern ?? ''}`}`;
 }

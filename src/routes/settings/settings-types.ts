@@ -1,4 +1,4 @@
-import type { GrantScope } from '$lib/permissions/scope-types';
+export { describeGrantScope } from '$lib/permissions/scope-summary';
 import type { PageData } from './$types';
 
 export type FormResult = {
@@ -8,12 +8,13 @@ export type FormResult = {
 	duplicate?: boolean;
 };
 
-export type SettingsTab = 'general' | 'permissions' | 'activity' | 'update';
+export type SettingsTab = 'general' | 'prompts' | 'permissions' | 'activity' | 'update';
 
 export type SettingsData = PageData['settings'];
-export type CopilotStatus = PageData['copilot'];
+export type ProviderStatus = PageData['providers'][number];
 export type PermissionGrant = PageData['grants'][number];
 export type PermissionDecision = PageData['recentDecisions'][number];
+export type PromptTemplate = PageData['promptTemplates'][number];
 
 export function formatContextWindow(tokens: number | undefined): string {
 	if (!tokens || !Number.isFinite(tokens)) return 'context size unknown';
@@ -28,7 +29,7 @@ export function formatContextWindow(tokens: number | undefined): string {
 	return `${tokens} ctx`;
 }
 
-export function authLabel(a: CopilotStatus['auth']): string {
+export function authLabel(a: ProviderStatus['auth']): string {
 	if (!a.isAuthenticated) return 'Not signed in';
 	const who = a.login ? `@${a.login}` : 'signed in';
 	const via = a.authType ? ` via ${a.authType}` : '';
@@ -57,6 +58,8 @@ export function decisionLabel(d: PermissionDecision['decision']): string {
 			return 'Auto-allow';
 		case 'auto-deny':
 			return 'Auto-deny';
+		case 'auto-prompt-required':
+			return 'Auto prompt-required';
 	}
 }
 
@@ -66,66 +69,6 @@ export function grantScopeLabel(g: {
 }) {
 	if (!g.conversationId) return 'Global';
 	return g.conversationTitle ?? g.conversationId;
-}
-
-export function describeGrantScope(g: {
-	scope: GrantScope | null;
-	scopePattern: string | null;
-}): string {
-	const s = g.scope;
-	if (s) {
-		switch (s.kind) {
-			case 'any':
-				return '*';
-			case 'shell':
-				return describeShellRule(s.rule);
-			case 'url':
-				switch (s.rule.kind) {
-					case 'exact':
-						return s.rule.url;
-					case 'host':
-						return `host=${s.rule.host}`;
-					case 'host-suffix':
-						return `*.${s.rule.suffix}`;
-				}
-				break;
-			case 'fs': {
-				const perms = s.perms && s.perms.length > 0 ? `[${s.perms.join('|')}] ` : '';
-				switch (s.rule.kind) {
-					case 'path':
-						return `${perms}${describeFsPathRule(s.rule)}`;
-				}
-			}
-		}
-	}
-	return g.scopePattern ?? '*';
-}
-
-function describeFsPathRule(rule: Extract<GrantScope, { kind: 'fs' }>['rule']): string {
-	const root =
-		rule.root === 'workspace'
-			? '<workspace>'
-			: rule.root === 'session-workspace'
-				? '<session workspace>'
-				: '';
-	if (rule.behavior === 'any') return root;
-	const sep = root && rule.value ? '/' : '';
-	if (rule.behavior === 'prefix') return `${root}${sep}${rule.value}/**`;
-	return `${root}${sep}${rule.value}`;
-}
-
-function describeShellRule(rule: Extract<GrantScope, { kind: 'shell' }>['rule']): string {
-	const parts = [`argv0=${rule.argv0}`];
-	if (rule.subcommands && rule.subcommands.length > 0) {
-		parts.push(`subcommands=${rule.subcommands.join('|')}`);
-	}
-	if (rule.positionals) {
-		parts.push(`positionals=${rule.positionals.kind}`);
-	}
-	if (rule.pipeline) {
-		parts.push(`pipeline=${rule.pipeline}`);
-	}
-	return parts.join('; ');
 }
 
 export function formatExpiry(ms: number | null): string {

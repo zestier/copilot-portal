@@ -46,7 +46,7 @@ a few small `.svelte.ts`/`.ts` modules under `src/lib/client/` are enough.
 ## Repository layout
 
 ```
-copilot-portal/
+zap/
 ├─ src/
 │  ├─ app.html
 │  ├─ app.d.ts
@@ -65,7 +65,8 @@ copilot-portal/
 │  │  │                          # ReasoningBlock, … + ui/
 │  │  ├─ server/
 │  │  │  ├─ copilot/
-│  │  │  │  ├─ bridge.ts          # SDK wrapper, event normalization
+│  │  │  │  ├─ bridge.ts          # compatibility facade
+│  │  │  │  ├─ copilot-provider.ts # SDK wrapper, event normalization
 │  │  │  │  ├─ bridge-stub.ts     # in-process stub (e2e via COPILOT_STUB)
 │  │  │  │  ├─ pool.ts            # conversation→session map, idle reaper
 │  │  │  │  ├─ turn-runner.ts     # per-turn event log + persistence
@@ -89,7 +90,6 @@ copilot-portal/
 │  │  │  ├─ conversation-auth.ts
 │  │  │  ├─ http.ts             # JSON response envelopes
 │  │  │  ├─ sse.ts              # SSE response helper
-│  │  │  ├─ rate-limit.ts
 │  │  │  ├─ crypto.ts           # AES-256-GCM
 │  │  │  ├─ title.ts            # auto-title via the SDK
 │  │  │  ├─ validate.ts
@@ -161,11 +161,21 @@ invalid config.
 | `SHARED_SECRET`           | —                        | If `AUTH_MODE=shared-secret`.        |
 | `COPILOT_GITHUB_TOKEN`    | —                        | Optional: forwarded to the SDK.      |
 | `COPILOT_CLI_URL`         | —                        | If set, connect to an external `copilot --headless --port N` instead of spawning the bundled CLI. See `docs/deployment.md` Topology C. |
-| `DEFAULT_MODEL`           | `claude-sonnet-4.5`      | Default model id for new conversations. |
+| `DEFAULT_BACKEND_PROVIDER`| `copilot`                | Default backend for new conversations: `copilot` \| `openai-compatible` \| `lm-studio`. |
+| `DEFAULT_MODEL`           | `claude-sonnet-4.5`      | Default model id for new conversations, stored separately from the provider id. |
+| `OPENAI_COMPATIBLE_BASE_URL` | —                     | Trusted operator-configured base `/v1` URL for an OpenAI-compatible backend; may intentionally be hosted, local, or private. |
+| `OPENAI_COMPATIBLE_API_KEY` | —                      | Optional bearer token for the generic OpenAI-compatible backend. |
+| `OPENAI_COMPATIBLE_MAX_TOOL_ITERATIONS` | `8`       | Maximum OpenAI-compatible tool-calling loops before the portal stops the turn. |
+| `OPENAI_COMPATIBLE_CONTEXT_RESTORE_MESSAGES` | `20`  | Maximum complete portal messages replayed when a fresh OpenAI-compatible session restores context. |
+| `OPENAI_COMPATIBLE_TEMPERATURE` | — | Optional sampling temperature for OpenAI-compatible and LM Studio chat completions. Leave unset to use backend/model defaults. |
+| `OPENAI_COMPATIBLE_TOP_P` | — | Optional nucleus sampling value for OpenAI-compatible and LM Studio chat completions. Leave unset to use backend/model defaults. |
+| `OPENAI_COMPATIBLE_PRESENCE_PENALTY` | — | Optional topic repetition penalty for OpenAI-compatible and LM Studio chat completions. Leave unset to use backend/model defaults. |
+| `OPENAI_COMPATIBLE_FREQUENCY_PENALTY` | — | Optional token repetition penalty for OpenAI-compatible and LM Studio chat completions. Leave unset to use backend/model defaults. |
+| `LMSTUDIO_BASE_URL`       | `http://127.0.0.1:1234`  | Base URL for LM Studio's local server. The portal uses `/v1` for chat and `/api/v1` for model metadata. |
+| `LMSTUDIO_API_KEY`        | —                        | Optional LM Studio API token when server authentication is enabled. |
 | `IDLE_TIMEOUT_MIN`        | `15`                     | SDK session idle reap.               |
 | `MAX_CONCURRENT_SESSIONS` | `4`                      | Hard cap on live sessions.           |
 | `LOG_LEVEL`               | `info`                   | `debug` \| `info` \| `warn` \| `error`. |
-| `TUNNEL_HOST`             | —                        | When set, relaxes the Origin/Referer check for requests fronted by a tunnel/proxy whose hostname won't match `event.url.origin`. |
 | `ENABLE_REDEPLOY`         | —                        | Set to `1` to enable `POST /api/admin/redeploy` (only meaningful under `pnpm run serve`). |
 | `COPILOT_STUB`            | —                        | Set to `1` to swap the real SDK for the in-process stub. Used by e2e tests. |
 | `DB_MIGRATIONS_DIR`       | *(auto)*                 | Explicit override for the migrations directory. Useful when cwd isn't the repo root. |

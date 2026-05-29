@@ -2,7 +2,7 @@
 
 The portal is distributed as a multi-arch container image
 (`linux/amd64` + `linux/arm64`) at
-`ghcr.io/<owner>/copilot-portal:<tag>`. It's a long-running web server
+`ghcr.io/<owner>/zap:<tag>`. It's a long-running web server
 that needs:
 
 - A persistent volume for its encrypted SQLite database (`/data`).
@@ -29,7 +29,7 @@ Three deployment topologies are supported:
 # compose.yaml is committed; just supply a .env file.
 services:
   portal:
-    image: ghcr.io/<owner>/copilot-portal:latest
+    image: ghcr.io/<owner>/zap:latest
     # ...
     volumes:
       - ./data:/data
@@ -180,7 +180,7 @@ COPILOT_CLI_URL=host.docker.internal:9000   # portal in Docker, CLI on host
 # COPILOT_CLI_URL=127.0.0.1:9000
 ```
 
-When `COPILOT_CLI_URL` is set, `bridge.ts` constructs the SDK client
+When `COPILOT_CLI_URL` is set, `copilot-provider.ts` constructs the SDK client
 with `{ cliUrl, autoStart: false }` and does NOT pass `gitHubToken` or
 `useLoggedInUser` — those are mutually exclusive with `cliUrl`, and the
 remote CLI manages its own auth.
@@ -255,10 +255,9 @@ Cloudflare side:
 With Access in front, the portal is doubly protected: CF gates at the
 network edge, and the portal's own login still applies.
 
-When fronted by a tunnel whose hostname won't match
-`event.url.origin`, also set `TUNNEL_HOST=<your-host>` in `.env` so the
-Origin/Referer check on mutating API calls is relaxed (the
-`SameSite=Lax` session cookie still blocks cross-site CSRF).
+When fronted by a tunnel or reverse proxy, set SvelteKit's `ORIGIN` environment
+variable to the public origin (for example, `https://copilot.example.com`) so
+same-origin checks compare against the browser-visible URL.
 
 ## Local development
 
@@ -280,12 +279,14 @@ the local DB isn't polluted. See [`AGENTS.md`](../AGENTS.md).
 
 - **Containerized deployment:** `docker compose pull && docker compose up -d`.
 - **Bare metal under `pnpm run serve` (the supervisor):** the in-app
-  redeploy button runs `git pull && pnpm install && pnpm run verify`
-  and exits; the supervisor relaunches on the new code. `verify`
-  overlaps independent lint/check/unit phases, then runs one production
-  build and Playwright e2e with phase-prefixed logs. Disabled by default;
-  set `ENABLE_REDEPLOY=1` to opt in. Not used in the container image
-  (the image ships only the built tree, not the source).
+   redeploy button runs `git pull && pnpm install && pnpm run verify`
+   and exits; the supervisor relaunches on the new code. `verify`
+   schedules a small DAG that overlaps independent lint/unit/build phases,
+   then runs check and Playwright e2e with phase-prefixed logs. Disabled by default;
+   set `ENABLE_REDEPLOY=1` to opt in. With `AUTH_MODE=github`, set
+   `REDEPLOY_ADMIN_GITHUB_LOGINS` to the GitHub logins allowed to trigger
+   redeploys when more than one login can sign in. Not used in the container
+   image (the image ships only the built tree, not the source).
 - Migrations run automatically on startup; DB schema is forward-only.
   Rolling back across a migration requires restoring a pre-update DB
   backup.
@@ -310,13 +311,13 @@ the local DB isn't polluted. See [`AGENTS.md`](../AGENTS.md).
 ## Building the image locally
 
 ```bash
-docker build -t copilot-portal:dev .
+docker build -t zap:dev .
 ```
 
 For a multi-arch build matching the released image:
 
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t copilot-portal:dev .
+docker buildx build --platform linux/amd64,linux/arm64 -t zap:dev .
 ```
 
 Requires `docker buildx` with QEMU set up
