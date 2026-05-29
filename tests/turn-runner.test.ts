@@ -10,6 +10,25 @@ vi.mock('../src/lib/server/copilot/pool', () => ({
 	acquire: (...args: unknown[]) => acquireMock(...args)
 }));
 
+// Mock the provider surface the background harvester opens, so a full
+// harvest pass can run in-process without real credentials.
+const harvestOpenMock = vi.fn();
+const deleteProviderSessionMock = vi.fn().mockResolvedValue(true);
+vi.mock('../src/lib/server/providers', () => ({
+	open: (...args: unknown[]) => harvestOpenMock(...args),
+	deleteProviderSession: (...args: unknown[]) => deleteProviderSessionMock(...args)
+}));
+
+function fakeHarvestSession(response: string) {
+	return {
+		async *send(): AsyncIterable<PortalEvent> {
+			yield { type: 'message.delta', messageId: 'harvest', text: response };
+			yield { type: 'done' };
+		},
+		async dispose() {}
+	};
+}
+
 async function freshImports() {
 	vi.resetModules();
 	await setupLocalEnv();
@@ -22,6 +41,9 @@ async function freshImports() {
 describe('turn-runner', () => {
 	beforeEach(() => {
 		acquireMock.mockReset();
+		harvestOpenMock.mockReset();
+		deleteProviderSessionMock.mockReset();
+		deleteProviderSessionMock.mockResolvedValue(true);
 	});
 
 	it('marks a turn running before opening the provider session', async () => {
@@ -129,6 +151,350 @@ describe('turn-runner', () => {
 		expect(update.conversationId).toBe(conv.id);
 		expect(update.title).toBe('Help me write a haiku');
 		expect(convs.get(conv.id, user.id)?.title).toBe('New chat');
+	});
+
+	it('only injects active memories when the memory level includes the injector', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const memory = await import('../src/lib/server/db/repos/memory');
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'memory levels',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		memory.write(user.id, conv.id, {
+			scope: 'session',
+			kind: 'contract',
+			content: 'The response format uses snake_case.',
+			source: 'model'
+		});
+		const sentPrompts: string[] = [];
+		let sendCount = 0;
+		acquireMock.mockResolvedValue({
+			conversationId: conv.id,
+			workingDirectory: wd,
+			model: 'gpt-4',
+			async *send(prompt: string): AsyncIterable<PortalEvent> {
+				sendCount += 1;
+				const messageId = `assistant-${sendCount}`;
+				sentPrompts.push(prompt);
+				yield { type: 'message.start', messageId, role: 'assistant' };
+				yield { type: 'message.delta', messageId, text: `reply ${sendCount}` };
+				yield { type: 'done' };
+			},
+			async abort() {},
+			async dispose() {},
+			lastUsed: Date.now()
+		});
+
+		const toolsOnly = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt',
+				memoryLevel: 'tools'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+		for await (const { event } of toolsOnly.subscribe()) {
+			if (event.type === 'done') break;
+		}
+		const withInjector = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt',
+				memoryLevel: 'injector'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+		for await (const { event } of withInjector.subscribe()) {
+			if (event.type === 'done') break;
+		}
+
+		expect(sentPrompts[0]).not.toContain('[Memory bank');
+		expect(sentPrompts[0]).not.toContain('snake_case');
+		expect(sentPrompts[1]).toContain('[Memory bank');
+		expect(sentPrompts[1]).toContain('snake_case');
+		const assistantMessages = messages
+			.listByConversation(conv.id)
+			.filter((m) => m.role === 'assistant');
+		expect(assistantMessages[0]?.memoryContextEnabled).toBe(false);
+		expect(assistantMessages[0]?.memoryContext).toEqual([]);
+		expect(assistantMessages[1]?.memoryContextEnabled).toBe(true);
+		expect(assistantMessages[1]?.memoryContext?.[0]).toMatchObject({
+			scope: 'session',
+			content: 'The response format uses snake_case.'
+		});
+	});
+
+	it('records an empty memory context when injection is enabled with no active memories', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'empty memory context',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		acquireMock.mockResolvedValue(
+			makeFakeSession([
+				{ type: 'message.start', messageId: 'm1', role: 'assistant' },
+				{ type: 'message.delta', messageId: 'm1', text: 'hi' },
+				{ type: 'done' }
+			])
+		);
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt',
+				memoryLevel: 'injector'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+		const events: PortalEvent[] = [];
+		for await (const { event } of turn.subscribe()) {
+			events.push(event);
+			if (event.type === 'done') break;
+		}
+
+		const start = events.find((event) => event.type === 'message.start');
+		expect(start).toMatchObject({
+			type: 'message.start',
+			memoryContextEnabled: true,
+			memoryContext: []
+		});
+		const assistant = messages.listByConversation(conv.id).find((m) => m.role === 'assistant');
+		expect(assistant?.memoryContextEnabled).toBe(true);
+		expect(assistant?.memoryContext).toEqual([]);
+	});
+
+	it('streams memory harvest skip status on a background turn after done', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'harvest status',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		acquireMock.mockResolvedValue(
+			makeFakeSession([
+				{ type: 'message.start', messageId: 'm1', role: 'assistant' },
+				{ type: 'message.delta', messageId: 'm1', text: 'short reply' },
+				{ type: 'done' }
+			])
+		);
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt',
+				memoryLevel: 'harvester'
+			},
+			prompt: 'hi',
+			conversationId: conv.id
+		});
+		const events: PortalEvent[] = [];
+		for await (const { event } of turn.subscribe()) {
+			events.push(event);
+			if (event.type === 'done') break;
+		}
+
+		const start = events.find((event) => event.type === 'message.start');
+		expect(start).toMatchObject({ type: 'message.start', role: 'assistant' });
+		// The harvest itself no longer streams on the primary turn; instead the
+		// primary turn announces a background harvest turn just before `done`.
+		expect(events.find((event) => event.type === 'memory.harvest')).toBeUndefined();
+		const started = events.find((event) => event.type === 'memory.harvest.started');
+		if (start?.type !== 'message.start' || started?.type !== 'memory.harvest.started') {
+			throw new Error('expected live message start and harvest.started events');
+		}
+		const delta = events.find((event) => event.type === 'message.delta');
+		expect(delta).toMatchObject({ type: 'message.delta', messageId: start.messageId });
+		expect(started.messageId).toBe(start.messageId);
+		const end = events.find((event) => event.type === 'message.end');
+		expect(end).toMatchObject({ type: 'message.end', messageId: start.messageId });
+		expect(events.findIndex((event) => event.type === 'memory.harvest.started')).toBeLessThan(
+			events.findIndex((event) => event.type === 'done')
+		);
+
+		// The background turn carries the skipped harvest record and its own
+		// terminal `done`, and is reachable by its announced id.
+		const bg = turnRunner.getTurnById(conv.id, started.harvestTurnId);
+		if (!bg) throw new Error('expected background harvest turn to be registered');
+		const bgEvents: PortalEvent[] = [];
+		for await (const { event } of bg.subscribe()) {
+			bgEvents.push(event);
+			if (event.type === 'done') break;
+		}
+		const harvest = bgEvents.find((event) => event.type === 'memory.harvest');
+		expect(harvest).toMatchObject({
+			type: 'memory.harvest',
+			messageId: start.messageId,
+			harvest: { status: 'skipped', reason: 'assistant_reply_too_short' }
+		});
+		expect(bgEvents[bgEvents.length - 1].type).toBe('done');
+
+		const assistant = messages.listByConversation(conv.id).find((m) => m.role === 'assistant');
+		expect(assistant?.id).toBe(start.messageId);
+		expect(assistant?.memoryHarvest).toMatchObject({
+			status: 'skipped',
+			reason: 'assistant_reply_too_short'
+		});
+	});
+
+	it('streams the full harvest pass on the background turn after the primary done', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const memory = await import('../src/lib/server/db/repos/memory');
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const harvester = await import('../src/lib/server/copilot/memory-harvester');
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'background harvest',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		acquireMock.mockResolvedValue(
+			makeFakeSession([
+				{ type: 'message.start', messageId: 'm1', role: 'assistant' },
+				{ type: 'message.delta', messageId: 'm1', text: 'x'.repeat(250) },
+				{ type: 'done' }
+			])
+		);
+		harvestOpenMock.mockResolvedValue(
+			fakeHarvestSession(
+				JSON.stringify({
+					writes: [{ scope: 'session', kind: 'fact', entity: 'Mark', content: 'harvested' }]
+				})
+			)
+		);
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt',
+				memoryLevel: 'harvester'
+			},
+			prompt: 'remember Mark',
+			conversationId: conv.id
+		});
+		const events: PortalEvent[] = [];
+		for await (const { event } of turn.subscribe()) {
+			events.push(event);
+			if (event.type === 'done') break;
+		}
+
+		// Primary turn announces the background turn and ends without waiting
+		// on the harvest.
+		const started = events.find((event) => event.type === 'memory.harvest.started');
+		if (started?.type !== 'memory.harvest.started') {
+			throw new Error('expected harvest.started on the primary turn');
+		}
+		expect(events.findIndex((event) => event.type === 'memory.harvest.started')).toBeLessThan(
+			events.findIndex((event) => event.type === 'done')
+		);
+
+		// The background turn streams pending -> applied and its own done.
+		const bg = turnRunner.getTurnById(conv.id, started.harvestTurnId);
+		if (!bg) throw new Error('expected background harvest turn to be registered');
+		const bgEvents: PortalEvent[] = [];
+		for await (const { event } of bg.subscribe()) {
+			bgEvents.push(event);
+			if (event.type === 'done') break;
+		}
+		await harvester.waitForPendingHarvest(conv.id);
+		const statuses = bgEvents
+			.filter((event) => event.type === 'memory.harvest')
+			.map((event) => (event.type === 'memory.harvest' ? event.harvest.status : ''));
+		expect(statuses).toEqual(['pending', 'applied']);
+		expect(bgEvents[bgEvents.length - 1].type).toBe('done');
+
+		// The harvested write landed and the persisted record reflects applied.
+		expect(memory.query(user.id, conv.id, 'harvested').map((row) => row.content)).toEqual([
+			'harvested'
+		]);
+		const assistant = messages.listByConversation(conv.id).find((m) => m.role === 'assistant');
+		expect(assistant?.memoryHarvest).toMatchObject({ status: 'applied', writes: 1 });
+	});
+
+	it('snapshots memory state after a completed assistant turn', async () => {
+		const { users, convs, turnRunner } = await freshImports();
+		const memory = await import('../src/lib/server/db/repos/memory');
+		const messages = await import('../src/lib/server/db/repos/messages');
+		const user = users.ensureLocalUser();
+		const wd = makeTmpDir('portal-wd-');
+		const conv = convs.create(user.id, {
+			title: 'memory snapshot',
+			workdir: wd,
+			model: 'gpt-4'
+		});
+		acquireMock.mockResolvedValue(
+			makeFakeSession([
+				{ type: 'message.start', messageId: 'm1', role: 'assistant' },
+				{ type: 'message.delta', messageId: 'm1', text: 'hi' },
+				{ type: 'done' }
+			])
+		);
+		const beforeSend = async () => {
+			memory.write(user.id, conv.id, {
+				scope: 'session',
+				kind: 'fact',
+				content: 'Memory written during the turn.',
+				source: 'model'
+			});
+		};
+
+		const turn = await turnRunner.startTurn({
+			bridge: {
+				conversationId: conv.id,
+				userId: user.id,
+				workingDirectory: wd,
+				model: 'gpt-4',
+				policy: 'prompt',
+				memoryLevel: 'tools'
+			},
+			prompt: 'hi',
+			conversationId: conv.id,
+			beforeSend
+		});
+		for await (const { event } of turn.subscribe()) {
+			if (event.type === 'done') break;
+		}
+		const assistant = messages.listByConversation(conv.id).find((m) => m.role === 'assistant');
+		if (!assistant) throw new Error('assistant missing');
+		memory.write(user.id, conv.id, {
+			scope: 'session',
+			kind: 'fact',
+			content: 'Future memory.',
+			source: 'model'
+		});
+
+		expect(memory.restoreSnapshotToConversation(user.id, conv.id, assistant.id)).toBe(true);
+		expect(memory.query(user.id, conv.id, 'during the turn')).toHaveLength(1);
+		expect(memory.query(user.id, conv.id, 'Future', { includeArchived: true })).toEqual([]);
 	});
 
 	it('does not emit conversation.update when the title is already set', async () => {

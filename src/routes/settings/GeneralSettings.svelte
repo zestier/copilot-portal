@@ -9,6 +9,7 @@
 	import {
 		BACKEND_PROVIDER_IDS,
 		type BackendProviderId,
+		type MemorySupportLevel,
 		type ProviderRuntimeFeatureStatus,
 		type SessionMode
 	} from '$lib/types';
@@ -35,6 +36,29 @@
 			value: 'best-effort',
 			label: 'Best effort',
 			hint: 'Autopilot-style execution, but permission prompts auto-reject with feedback.'
+		}
+	];
+
+	const MEMORY_OPTIONS: { value: MemorySupportLevel; label: string; hint: string }[] = [
+		{
+			value: 'none',
+			label: 'None',
+			hint: 'No memory tools, injected memories, or harvesting.'
+		},
+		{
+			value: 'tools',
+			label: 'Tool memories only',
+			hint: 'Expose memory tools, but do not auto-inject or harvest memories.'
+		},
+		{
+			value: 'injector',
+			label: 'Tools + injector',
+			hint: 'Expose memory tools and inject active memories into each turn.'
+		},
+		{
+			value: 'harvester',
+			label: 'Tools + injector + harvester',
+			hint: 'Full memory support: tools, active-memory injection, and post-turn harvesting.'
 		}
 	];
 
@@ -255,6 +279,20 @@
 				{:else}
 					{modeFeature.description}
 				{/if}
+			</span>
+		</label>
+		<label>
+			Default memory support
+			<select name="defaultMemoryLevel" value={settings.defaultMemoryLevel}>
+				{#each MEMORY_OPTIONS as opt (opt.value)}
+					<option value={opt.value}>{opt.label}</option>
+				{/each}
+			</select>
+			<span class="muted small">
+				Applies to newly created conversations. Existing conversations keep their current memory
+				setting.
+				<br />
+				{MEMORY_OPTIONS.find((opt) => opt.value === settings.defaultMemoryLevel)?.hint}
 			</span>
 		</label>
 		<label>

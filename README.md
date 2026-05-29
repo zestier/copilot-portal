@@ -84,6 +84,8 @@ redeploy logs identify failures clearly.
 - Use the **official** GitHub Copilot SDK only. No reverse-engineered endpoints,
   no ToS gray areas.
 - Persist conversations locally so sessions survive restarts and can be resumed.
+- Maintain per-conversation memory banks so agents can recall, update, and
+  deliberately forget details across long sessions.
 - Trivial to deploy: `docker compose up` + a Cloudflare Tunnel.
 
 ## Non-goals (initially)

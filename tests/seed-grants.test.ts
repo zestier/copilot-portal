@@ -168,6 +168,15 @@ describe('seed grants — runtime behaviour', () => {
 		expect(customToolMatch('ticket_update')).toBe('allow');
 	});
 
+	it('auto-approves memory tools by default', () => {
+		expect(customToolMatch('memory_write')).toBe('allow');
+		expect(customToolMatch('memory_update')).toBe('allow');
+		expect(customToolMatch('memory_forget')).toBe('allow');
+		expect(customToolMatch('memory_query')).toBe('allow');
+		expect(customToolMatch('memory_scene_start')).toBe('allow');
+		expect(customToolMatch('memory_scene_end')).toBe('allow');
+	});
+
 	it('auto-approves permission capability inspection by default', () => {
 		expect(customToolMatch('permission_capabilities')).toBe('allow');
 	});

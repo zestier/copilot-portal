@@ -30,7 +30,7 @@ const feature = (
 const providerCapabilities: ProviderCapabilities = {
 	authStatus: true,
 	modelList: true,
-	session: { open: true, resume: true, dispose: true, abort: true },
+	session: { open: true, resume: true, dispose: true, abort: true, delete: true },
 	stream: { send: true, contract: 'PortalEvent' },
 	controls: {
 		mode: true,
@@ -69,6 +69,7 @@ const conversation: Conversation = {
 	provider: 'copilot',
 	model: 'gpt-5.5',
 	mode: 'best-effort',
+	memoryLevel: 'harvester',
 	approveAllTools: false,
 	createdAt: 1_700_000_000_000,
 	updatedAt: 1_700_000_000_000,

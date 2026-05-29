@@ -88,6 +88,14 @@ const GIT_STRUCTURED_TOOLS = [
 	'git_show_file'
 ];
 const TICKET_STRUCTURED_TOOLS = ['ticket_add', 'ticket_list', 'ticket_get', 'ticket_update'];
+const MEMORY_STRUCTURED_TOOLS = [
+	'memory_write',
+	'memory_update',
+	'memory_forget',
+	'memory_query',
+	'memory_scene_start',
+	'memory_scene_end'
+];
 const PERMISSION_STRUCTURED_TOOLS = ['permission_capabilities'];
 const RISKY_GIT_GLOBAL_OPTIONS = [
 	'--bare',
@@ -236,6 +244,9 @@ export function defaultSeedGrants(): SeedSpec[] {
 		seeds.push({ tool, permissionKind: 'custom-tool', scope: { kind: 'any' } });
 	}
 	for (const tool of TICKET_STRUCTURED_TOOLS) {
+		seeds.push({ tool, permissionKind: 'custom-tool', scope: { kind: 'any' } });
+	}
+	for (const tool of MEMORY_STRUCTURED_TOOLS) {
 		seeds.push({ tool, permissionKind: 'custom-tool', scope: { kind: 'any' } });
 	}
 	for (const tool of PERMISSION_STRUCTURED_TOOLS) {

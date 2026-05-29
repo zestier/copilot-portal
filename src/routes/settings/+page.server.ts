@@ -23,6 +23,7 @@ import * as promptTemplates from '$lib/server/db/repos/prompt-templates';
 import {
 	normalizeBackendProvider,
 	BACKEND_PROVIDER_IDS,
+	type MemorySupportLevel,
 	type PermissionPolicy,
 	type SessionMode,
 	type UserSettings
@@ -90,6 +91,7 @@ const SaveSchema = z.object({
 	defaultModel: z.string().optional(),
 	defaultWorkdir: z.string().optional(),
 	defaultConversationMode: z.enum(['interactive', 'plan', 'autopilot', 'best-effort']),
+	defaultMemoryLevel: z.enum(['none', 'tools', 'injector', 'harvester']),
 	defaultPolicy: z.enum(['prompt', 'allow-all', 'deny-all']),
 	theme: z.enum(['dark', 'light', 'system'])
 });
@@ -115,6 +117,7 @@ export const actions: Actions = {
 			defaultProvider: data.get('defaultProvider'),
 			defaultWorkdir: (data.get('defaultWorkdir') as string) || undefined,
 			defaultConversationMode: data.get('defaultConversationMode'),
+			defaultMemoryLevel: data.get('defaultMemoryLevel'),
 			defaultPolicy: data.get('defaultPolicy'),
 			theme: data.get('theme')
 		});
@@ -130,6 +133,7 @@ export const actions: Actions = {
 			defaultModel: parsed.data.defaultModel ?? null,
 			defaultWorkdir: parsed.data.defaultWorkdir ?? null,
 			defaultConversationMode: parsed.data.defaultConversationMode as SessionMode,
+			defaultMemoryLevel: parsed.data.defaultMemoryLevel as MemorySupportLevel,
 			defaultPolicy: parsed.data.defaultPolicy as PermissionPolicy,
 			theme: parsed.data.theme
 		};

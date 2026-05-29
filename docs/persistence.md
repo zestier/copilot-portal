@@ -157,7 +157,9 @@ When a user edits a previous message, the portal:
    conversation, then appends the edited content as a fresh user message
    (for the edit flavour; the retry flavour clones up to and including
    the assistant target and appends nothing).
-4. Starts a brand-new SDK session under the new conversation id. No
+4. Clones/restores the message-linked memory-bank snapshots described below so
+   the fork's active memories match the selected branch point.
+5. Starts a brand-new SDK session under the new conversation id. No
    prior conversation events are seeded into the SDK in v1 — the agent
    starts fresh from the next prompt, using the live shared workdir. The
    cloned message rows exist for UI continuity only.
@@ -172,9 +174,141 @@ Limitations (v1):
   to reproduce the prior state.
 - A conversation boundary is a transcript/session boundary only. It is not a
   filesystem, git, process, network, or database isolation boundary.
-- Side effects outside the workdir (DB writes, network calls) are not
-  rolled back. Snapshots track files only.
+- Side effects outside the workdir (DB writes, network calls) are not generally
+  rolled back; memory-bank state is the exception described below.
 - Submodule/LFS state is out of scope.
+
+## Memory banks
+
+Added in migration `025_memory_banks.sql`. Memory banks are per-conversation
+SQLite rows that let the agent recall, update, and deliberately forget details
+that should remain consistent across turns. The first pass uses one bank per
+conversation/session; the schema includes a `shared` scope for future
+cross-session reuse, but v1 model-facing tools expose only `scene` and
+`session`.
+
+```sql
+CREATE TABLE memory_banks (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  scope           TEXT NOT NULL CHECK (scope IN ('scene','session','shared')),
+  scene_id        TEXT REFERENCES memory_scenes(id) ON DELETE SET NULL,
+  kind            TEXT NOT NULL,
+  entity          TEXT,
+  content_json    TEXT NOT NULL,
+  tags_json       TEXT NOT NULL DEFAULT '[]',
+  importance      INTEGER NOT NULL DEFAULT 3 CHECK (importance BETWEEN 1 AND 5),
+  status          TEXT NOT NULL DEFAULT 'active'
+                  CHECK (status IN ('active','archived','forgotten','superseded')),
+  source          TEXT NOT NULL CHECK (source IN ('model','harvester','user')),
+  supersedes_id   TEXT REFERENCES memory_banks(id) ON DELETE SET NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  expires_at      INTEGER
+);
+
+CREATE UNIQUE INDEX idx_memory_active_entity_unique
+  ON memory_banks(conversation_id, scope, entity)
+  WHERE status = 'active';
+
+CREATE VIRTUAL TABLE memory_banks_fts USING fts5(
+  kind, entity, content, tags,
+  content='memory_banks', content_rowid='rowid'
+);
+
+CREATE TABLE memory_scenes (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  label           TEXT,
+  opened_at       INTEGER NOT NULL,
+  closed_at       INTEGER
+);
+```
+
+`entity` is the **sole external identity** of a memory: a stable dot-path handle
+(`story.protagonist.mara`, `user.memory.style`, `repo.commands.validation`) that
+the model-facing tools and the harvester use to address records. The
+`idx_memory_active_entity_unique` partial index enforces **one active row per
+`(conversation, scope, entity)`**, so writing the same handle again upserts the
+existing row in place rather than spawning a near-duplicate. Writers that omit a
+handle get a generated `auto.<kind>.<rand>` slug so every active row stays
+addressable.
+
+The ULID `id` is **internal-only**: it is the primary key and the ref target for
+`supersedes_id`, `message_memory_context`, and the snapshot tables, but it is
+never serialized to the model. Renames and "split one memory into two" are done
+by forgetting a handle and writing new ones, not by mutating ids.
+
+`kind` is a mutable label, **not** part of the identity, so an update can change a
+memory's kind in place. It is the typed record category (`character`,
+`plot_thread`, `scene_state`, `bugfix`, `command`, etc.). A genuinely distinct
+fact deserves its own honest handle — e.g. Mara's relationship to Kael lives
+under `mara.rel.kael` rather than as a second slot on the `mara` handle.
+`content_json` stores native JSON content; strings are allowed, but callers
+should prefer structured objects or scalars over JSON encoded inside strings.
+
+These usability rules are centralized in `MEMORY_ENTITY_GUIDANCE`
+(`src/lib/server/db/repos/memory.ts`) and surfaced verbatim on every practical
+path — the memory tool descriptions, the harvester prompt, and the auto-injected
+memory block — so the "one entity = one memory" contract is consistent wherever
+the bank is used.
+
+`memory_banks_fts` is maintained by insert/update/delete triggers and backs the
+`memory_query` tool. The FTS row indexes kind, entity, `content_json`, and tags.
+JSON tags are stored in `tags_json`; they are rendered into FTS as searchable
+text but not joined relationally.
+
+Scopes:
+
+- `scene` — short-lived situational state. `memory_scene_end` closes the current
+  row in `memory_scenes`, archives active memories tied to that scene, and stamps
+  `expires_at`.
+- `session` — active for the whole conversation and included in the default
+  memory digest until forgotten or superseded.
+- `shared` — reserved for future cross-session banks. The database can store it
+  for forward compatibility, but v1 tools and the harvester do not write it.
+
+Statuses are lifecycle markers, not hard deletion. `forgotten` rows are kept for
+audit/undo but excluded from the auto-injected block and default queries.
+`archived` rows usually come from closed scenes. `superseded` rows remain linked
+through `supersedes_id` when a fact is replaced.
+
+Memory support is configurable per user default and per conversation:
+
+- `none` — no model-facing memory tools, no injected digest, and no harvester.
+- `tools` — exposes memory tools only.
+- `injector` — exposes memory tools and renders active scene/session memories
+  into the portal prelude within a fixed character budget.
+- `harvester` — includes tools and injection, then runs a background harvester
+  after assistant replies persist. The harvester may write, update, forget, or
+  close a scene using the same repository APIs as the model-facing memory tools.
+  It is also prompted to compact, correct, rewrite, and split existing active
+  memories, especially bloated direct-agent entries, while preserving important
+  qualifiers, using native JSON content, and avoiding duplicates by updating
+  existing stable entities. The harvest streams on its own background turn
+  (announced to the client via a `memory.harvest.started` event on the primary
+  turn before its `done`), so its `pending` → `applied`/`empty`/`failed`
+  transition is visible live without blocking the visible turn or the user's
+  next message; the persisted `message_memory_harvest` row remains the source of
+  truth on refresh.
+
+Memory repository functions take both `userId` and `conversationId`; read/write
+queries join or validate the owning conversation so authorization stays enforced
+at the data layer.
+
+After each completed assistant turn, the full memory-bank state is snapshotted
+against that assistant message. When the `harvester` level is active the
+snapshot is deferred until the background harvest settles so it captures the
+harvested state; the snapshot is otherwise taken inline at turn end. The next
+turn's memory injection waits for any in-progress harvest before reading the
+digest, so it never injects pre-harvest memories or races the snapshot. Forks
+clone those snapshots into the new conversation and restore the active memory
+bank to the selected branch point: editing a user message restores the prior
+assistant snapshot, while retrying from an assistant restores that assistant's
+snapshot. Inline backtracking uses the same snapshots to roll the active memory
+bank back before deleting later messages, so memory writes, updates, scene
+changes, and forgets from discarded turns do not leak into the rewound
+conversation.
 
 
 ## Conventions

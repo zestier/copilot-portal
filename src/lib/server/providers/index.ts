@@ -6,6 +6,7 @@ import { normalizeBackendProvider, type BackendProviderId } from '$lib/types';
 import type {
 	ModelBackendProvider,
 	ProviderAuthStatus,
+	ProviderDeleteSessionOptions,
 	ProviderModelInfo,
 	ProviderOpenOptions,
 	ProviderSession
@@ -15,6 +16,7 @@ export type {
 	ModelBackendProvider,
 	ProviderAuthStatus,
 	ProviderCapabilities,
+	ProviderDeleteSessionOptions,
 	ProviderModelInfo,
 	ProviderOpenOptions,
 	ProviderStatusBehavior,
@@ -62,6 +64,16 @@ export async function fetchModels(
 
 export async function open(opts: ProviderOpenOptions): Promise<ProviderSession> {
 	return getProvider(opts.provider).openSession(opts);
+}
+
+export async function deleteProviderSession(
+	provider: BackendProviderId | null | undefined,
+	opts: ProviderDeleteSessionOptions
+): Promise<boolean> {
+	const backend = getProvider(provider);
+	if (!backend.deleteSession) return false;
+	await backend.deleteSession(opts);
+	return true;
 }
 
 export async function shutdownProviders(): Promise<void> {

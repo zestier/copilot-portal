@@ -4,10 +4,13 @@ import type { RequestHandler } from './$types';
 import * as convs from '$lib/server/db/repos/conversations';
 import * as messages from '$lib/server/db/repos/messages';
 import * as pool from '$lib/server/runtime/pool';
-import { getTurn } from '$lib/server/runtime/turn-runner';
+import { getTurn, getBackgroundTurn } from '$lib/server/runtime/turn-runner';
 import { listForConversation as listPendingInteractive } from '$lib/server/runtime/interactive-requests';
 import { parseBody } from '$lib/server/validate';
 import { authorizeConversation } from '$lib/server/conversation-auth';
+import { deleteProviderSession } from '$lib/server/providers';
+import { providerAuthToken } from '$lib/server/providers/auth';
+import { log } from '$lib/server/log';
 
 export const GET: RequestHandler = ({ params, locals }) => {
 	const conv = authorizeConversation(params.id, locals.userId);
@@ -17,10 +20,13 @@ export const GET: RequestHandler = ({ params, locals }) => {
 	// useful to reattach to (replay then immediate done).
 	const turn = getTurn(conv.id);
 	const activeTurnId = turn && turn.status === 'running' ? turn.id : null;
+	const harvestTurn = getBackgroundTurn(conv.id);
+	const activeHarvestTurnId = harvestTurn ? harvestTurn.id : null;
 	return json({
 		conversation: conv,
 		messages: messages.listByConversation(conv.id),
 		activeTurnId,
+		activeHarvestTurnId,
 		// Outstanding prompts so a refresh / SSE blip can rehydrate the
 		// dialog rather than stranding the agent on a request the user can
 		// no longer see.
@@ -58,6 +64,20 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 export const DELETE: RequestHandler = async ({ params, locals }) => {
 	const conv = authorizeConversation(params.id, locals.userId);
 	await pool.release(conv.id);
+	try {
+		await deleteProviderSession(conv.provider, {
+			userId: conv.userId,
+			providerSessionId: conv.providerSessionId,
+			providerAuthToken: providerAuthToken(conv.provider, conv.userId)
+		});
+	} catch (e) {
+		log.warn('conversation.provider_session_delete_failed', {
+			conversationId: conv.id,
+			provider: conv.provider,
+			providerSessionId: conv.providerSessionId,
+			err: String(e)
+		});
+	}
 	convs.remove(conv.id, conv.userId);
 	return json({ ok: true });
 };

@@ -6,10 +6,11 @@ import { setupLocalEnv } from './helpers/env';
 async function freshImports() {
 	const users = await import('../src/lib/server/db/repos/users');
 	const convs = await import('../src/lib/server/db/repos/conversations');
+	const memory = await import('../src/lib/server/db/repos/memory');
 	const messages = await import('../src/lib/server/db/repos/messages');
 	const snapshots = await import('../src/lib/server/snapshots');
 	const fork = await import('../src/lib/server/fork');
-	return { users, convs, messages, snapshots, fork };
+	return { users, convs, memory, messages, snapshots, fork };
 }
 
 describe('fork.forkAtMessage', () => {
@@ -132,5 +133,68 @@ describe('fork.forkAtMessage', () => {
 		expect(cloned).toHaveLength(2);
 		expect(cloned[0]).toMatchObject({ role: 'user', content: 'first' });
 		expect(cloned[1]).toMatchObject({ role: 'assistant', content: 'reply 1' });
+	});
+
+	it('forks with the active memory state at the branch point', async () => {
+		const { users, convs, memory, messages, fork } = await freshImports();
+		const u = users.ensureLocalUser();
+		const sourceConv = convs.create(u.id, { title: 'src', workdir: '/tmp', model: null });
+
+		messages.append(sourceConv.id, { role: 'user', content: 'first' });
+		const a1 = messages.append(sourceConv.id, { role: 'assistant', content: 'reply 1' });
+		memory.write(u.id, sourceConv.id, {
+			scope: 'session',
+			kind: 'fact',
+			content: 'Memory from first turn.',
+			source: 'model'
+		});
+		memory.snapshotForMessage(u.id, sourceConv.id, a1.id);
+
+		const u2 = messages.append(sourceConv.id, { role: 'user', content: 'second' });
+		const a2 = messages.append(sourceConv.id, { role: 'assistant', content: 'reply 2' });
+		memory.write(u.id, sourceConv.id, {
+			scope: 'session',
+			kind: 'fact',
+			content: 'Memory from second turn.',
+			source: 'model'
+		});
+		memory.snapshotForMessage(u.id, sourceConv.id, a2.id);
+
+		const editFork = await fork.forkAtMessage({
+			userId: u.id,
+			sourceConversationId: sourceConv.id,
+			messageId: u2.id,
+			newContent: 'second edited'
+		});
+		expect(memory.query(u.id, editFork.conversation.id, 'first turn')).toHaveLength(1);
+		expect(memory.query(u.id, editFork.conversation.id, 'second turn')).toEqual([]);
+
+		const retryFork = await fork.forkAtMessage({
+			userId: u.id,
+			sourceConversationId: sourceConv.id,
+			messageId: a2.id,
+			newContent: null
+		});
+		expect(memory.query(u.id, retryFork.conversation.id, 'first turn')).toHaveLength(1);
+		expect(memory.query(u.id, retryFork.conversation.id, 'second turn')).toHaveLength(1);
+
+		const [retryA1] = messages
+			.listByConversation(retryFork.conversation.id)
+			.filter((message) => message.role === 'assistant');
+		if (!retryA1) throw new Error('cloned assistant missing');
+		memory.write(u.id, retryFork.conversation.id, {
+			scope: 'session',
+			kind: 'fact',
+			content: 'Retry-only future memory.',
+			source: 'model'
+		});
+		expect(memory.restoreSnapshotToConversation(u.id, retryFork.conversation.id, retryA1.id)).toBe(
+			true
+		);
+		expect(memory.query(u.id, retryFork.conversation.id, 'first turn')).toHaveLength(1);
+		expect(memory.query(u.id, retryFork.conversation.id, 'second turn')).toEqual([]);
+		expect(
+			memory.query(u.id, retryFork.conversation.id, 'Retry-only', { includeArchived: true })
+		).toEqual([]);
 	});
 });

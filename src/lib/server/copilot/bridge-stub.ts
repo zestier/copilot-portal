@@ -264,6 +264,10 @@ export class StubCopilotClient {
 		}
 		return s;
 	}
+
+	async deleteSession(sessionId: string) {
+		this.sessions.delete(sessionId);
+	}
 }
 
 export function isStubMode(): boolean {

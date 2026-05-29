@@ -3,9 +3,11 @@ import { getDb } from '../index';
 import { loadConfig } from '../../config';
 import {
 	normalizeBackendProvider,
+	normalizeMemorySupportLevel,
 	normalizeSessionMode,
 	type BackendProviderId,
 	type Conversation,
+	type MemorySupportLevel,
 	type SessionMode
 } from '$lib/types';
 
@@ -23,11 +25,13 @@ interface ConvRow {
 	forked_from_message_id: string | null;
 	provider_session_id: string | null;
 	mode: string | null;
+	memory_level: string | null;
 	approve_all_tools: number | null;
 }
 
 function rowToConv(r: ConvRow): Conversation {
 	const mode = normalizeSessionMode(r.mode);
+	const memoryLevel = normalizeMemorySupportLevel(r.memory_level);
 	return {
 		id: r.id,
 		userId: r.user_id,
@@ -36,6 +40,7 @@ function rowToConv(r: ConvRow): Conversation {
 		provider: normalizeBackendProvider(r.provider),
 		model: r.model,
 		mode,
+		memoryLevel,
 		approveAllTools: r.approve_all_tools === 1,
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
@@ -89,6 +94,7 @@ export interface CreateInput {
 	provider?: BackendProviderId;
 	model: string | null;
 	mode?: SessionMode;
+	memoryLevel?: MemorySupportLevel;
 	id?: string;
 	forkedFromConversationId?: string | null;
 	forkedFromMessageId?: string | null;
@@ -111,14 +117,15 @@ export function create(userId: string, input: CreateInput): Conversation {
 	const forkMsg = input.forkedFromMessageId ?? null;
 	const providerSessionId = input.providerSessionId ?? id;
 	const mode = input.mode ?? 'interactive';
+	const memoryLevel = normalizeMemorySupportLevel(input.memoryLevel);
 	const provider =
 		input.provider ?? normalizeBackendProvider(loadConfig().DEFAULT_BACKEND_PROVIDER);
 	getDb()
 		.prepare(
 			`INSERT INTO conversations(
-			   id, user_id, title, workdir, provider, model, mode, created_at, updated_at,
+			   id, user_id, title, workdir, provider, model, mode, memory_level, created_at, updated_at,
 			   forked_from_conversation_id, forked_from_message_id, provider_session_id
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.run(
 			id,
@@ -128,6 +135,7 @@ export function create(userId: string, input: CreateInput): Conversation {
 			provider,
 			input.model,
 			mode,
+			memoryLevel,
 			now,
 			now,
 			forkConv,
@@ -142,6 +150,7 @@ export function create(userId: string, input: CreateInput): Conversation {
 		provider,
 		model: input.model,
 		mode,
+		memoryLevel,
 		approveAllTools: false,
 		createdAt: now,
 		updatedAt: now,
@@ -207,7 +216,12 @@ export function renameIfDefault(id: string, userId: string, title: string): bool
 export function updateSessionSettings(
 	id: string,
 	userId: string,
-	patch: { model?: string; mode?: SessionMode; approveAllTools?: boolean }
+	patch: {
+		model?: string;
+		mode?: SessionMode;
+		memoryLevel?: MemorySupportLevel;
+		approveAllTools?: boolean;
+	}
 ): boolean {
 	const sets: string[] = [];
 	const args: Array<string | number> = [];
@@ -218,6 +232,10 @@ export function updateSessionSettings(
 	if (patch.mode !== undefined) {
 		sets.push('mode = ?');
 		args.push(patch.mode);
+	}
+	if (patch.memoryLevel !== undefined) {
+		sets.push('memory_level = ?');
+		args.push(normalizeMemorySupportLevel(patch.memoryLevel));
 	}
 	if (patch.approveAllTools !== undefined) {
 		sets.push('approve_all_tools = ?');

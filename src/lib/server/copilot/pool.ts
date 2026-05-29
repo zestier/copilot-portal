@@ -15,6 +15,7 @@ import {
 	type ProviderOpenOptions,
 	type ProviderSession
 } from '../providers';
+import { normalizeMemorySupportLevel } from '$lib/types';
 
 interface Entry {
 	session: ProviderSession;
@@ -67,15 +68,18 @@ export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSessio
 	const existing = sessions.get(opts.conversationId);
 	const requestedProvider = opts.provider ?? getDefaultProviderId();
 	const requestedProviderSessionId = opts.providerSessionId ?? opts.conversationId;
+	const requestedMemoryLevel = normalizeMemorySupportLevel(opts.memoryLevel);
 	if (existing) {
 		const cachedProvider = existing.session.provider ?? getDefaultProviderId();
 		const cachedProviderSessionId =
 			existing.session.providerSessionId ?? existing.session.conversationId;
+		const cachedMemoryLevel = normalizeMemorySupportLevel(existing.session.memoryLevel);
 		if (
 			existing.session.workingDirectory === opts.workingDirectory &&
 			existing.session.model === opts.model &&
 			cachedProviderSessionId === requestedProviderSessionId &&
-			cachedProvider === requestedProvider
+			cachedProvider === requestedProvider &&
+			cachedMemoryLevel === requestedMemoryLevel
 		) {
 			existing.lastUsed = Date.now();
 			return existing.session;
@@ -89,7 +93,9 @@ export async function acquire(opts: ProviderOpenOptions): Promise<ProviderSessio
 			cachedModel: existing.session.model,
 			requestedModel: opts.model,
 			cachedProviderSessionId,
-			requestedProviderSessionId
+			requestedProviderSessionId,
+			cachedMemoryLevel,
+			requestedMemoryLevel
 		});
 		await disposeSession(existing.session, {
 			conversationId: opts.conversationId,

@@ -74,3 +74,16 @@ that are easy to miss otherwise:
   orthogonal to the Copilot CLI's own approval prompts.** If you're
   running outside the portal (regular CLI, no headless server), nothing
   in this repo affects which of your tool calls get auto-approved.
+
+## Stop conditions for agents
+
+After making a change and running the relevant validation, stop. Do not keep
+re-reading files, re-running diffs, or checking status unless new information is
+needed to complete the task.
+
+If a tool call fails, is rejected, or returns no useful new information twice,
+do not retry the same check again. Summarize what is known and finish or choose
+a different action.
+
+Before every tool call, ask: "Will this produce new information required for the
+user's request?" If not, do not call the tool.

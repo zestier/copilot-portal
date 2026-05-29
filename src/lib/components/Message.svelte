@@ -5,6 +5,8 @@
 	import SubagentCall from './SubagentCall.svelte';
 	import DiffView from './DiffView.svelte';
 	import ReasoningBlock from './ReasoningBlock.svelte';
+	import MemoryContext from './MemoryContext.svelte';
+	import MemoryHarvest from './MemoryHarvest.svelte';
 	import Pill from '$lib/components/ui/Pill.svelte';
 	import { goto } from '$app/navigation';
 
@@ -388,6 +390,10 @@
 	</header>
 	<div class="body">
 		{#if message.role === 'assistant'}
+			<MemoryContext
+				enabled={message.memoryContextEnabled === true}
+				memories={message.memoryContext ?? []}
+			/>
 			{#each parts as p, i (i)}
 				{#if p.kind === 'text'}
 					<!-- eslint-disable-next-line svelte/no-at-html-tags -->
@@ -415,6 +421,11 @@
 					<DiffView path={p.edit.path} diff={p.edit.diff} />
 				{/if}
 			{/each}
+			{#if message.memoryHarvest}
+				<div class="post-turn">
+					<MemoryHarvest harvest={message.memoryHarvest} />
+				</div>
+			{/if}
 		{:else if editing}
 			<form
 				class="edit-form"
@@ -562,6 +573,11 @@
 	}
 	.body :global(p:last-child) {
 		margin-bottom: 0;
+	}
+	.post-turn {
+		margin-top: var(--space-1);
+		padding-top: var(--space-2);
+		border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
 	}
 	.user-text {
 		background: transparent;

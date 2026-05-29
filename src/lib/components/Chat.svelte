@@ -33,6 +33,7 @@
 		initialUsage = null,
 		parent = null,
 		initialActiveTurnId = null,
+		initialActiveHarvestTurnId = null,
 		initialPendingInteractive = [],
 		initialComposer = '',
 		providerCapabilities,
@@ -60,6 +61,7 @@
 			messageIndex: number | null;
 		} | null;
 		initialActiveTurnId?: string | null;
+		initialActiveHarvestTurnId?: string | null;
 		initialPendingInteractive?: InteractiveRequestView[];
 		initialComposer?: string;
 	} = $props();
@@ -68,6 +70,7 @@
 	let title = $state<string>(untrack(() => conversation.title));
 	let sessionModel = $state<string>(untrack(() => conversation.model ?? effectiveModel));
 	let sessionMode = $state<Conversation['mode']>(untrack(() => conversation.mode));
+	let memoryLevel = $state<Conversation['memoryLevel']>(untrack(() => conversation.memoryLevel));
 	let approveAllTools = $state<boolean>(untrack(() => conversation.approveAllTools));
 	let usage = $state<ConversationUsage | null>(untrack(() => initialUsage));
 	let recentCompaction = $state<{ tokensRemoved?: number; messagesRemoved?: number } | null>(null);
@@ -125,10 +128,12 @@
 			// before we swap state — otherwise its events would land in
 			// the new conversation's `messages` array.
 			closeStream();
+			closeHarvestStream();
 			messages = [...initialMessages];
 			title = conversation.title;
 			sessionModel = conversation.model ?? effectiveModel;
 			sessionMode = conversation.mode;
+			memoryLevel = conversation.memoryLevel;
 			approveAllTools = conversation.approveAllTools;
 			usage = initialUsage;
 			composer = initialComposer;
@@ -145,10 +150,16 @@
 			if (initialActiveTurnId) {
 				attachStream(initialActiveTurnId);
 			}
+			// Likewise reattach a background harvest that's still running so a
+			// reload mid-harvest surfaces its final result live.
+			if (initialActiveHarvestTurnId) {
+				attachHarvestStream(initialActiveHarvestTurnId);
+			}
 			void refreshForks();
 		});
 		return () => {
 			closeStream();
+			closeHarvestStream();
 			clearCompactionTimer();
 			clearInteractiveRevealTimers();
 		};
@@ -286,6 +297,50 @@
 		streaming = false;
 	}
 
+	// Active EventSource for the post-turn background harvest turn (if any).
+	// Independent of the primary `eventSource`: the harvest streams its
+	// pending -> applied/empty/failed transition after the primary turn's
+	// `done`, on its own turn id. Its `memory.harvest` events flow through the
+	// same `applyEvent` reducer (keyed by messageId), so the existing
+	// per-message rendering updates live.
+	let harvestEventSource: EventSource | null = null;
+	let activeHarvestTurnId: string | null = null;
+
+	function attachHarvestStream(turnId: string) {
+		// Already streaming this harvest turn (e.g. reattach + live announce).
+		if (activeHarvestTurnId === turnId && harvestEventSource) return;
+		closeHarvestStream();
+		activeHarvestTurnId = turnId;
+		const es = new EventSource(`/api/conversations/${conversation.id}/turns/${turnId}/stream`);
+		harvestEventSource = es;
+		es.onmessage = (msg) => {
+			let ev: PortalEvent;
+			try {
+				ev = JSON.parse(msg.data) as PortalEvent;
+			} catch {
+				return;
+			}
+			if (ev.type === 'done') {
+				closeHarvestStream();
+				return;
+			}
+			applyEvent(ev);
+		};
+		es.onerror = () => {
+			// Permanent close (e.g. 410 after the grace window): the persisted
+			// harvest record already reflects the final state, so just stop.
+			if (es.readyState === EventSource.CLOSED) closeHarvestStream();
+		};
+	}
+
+	function closeHarvestStream() {
+		if (harvestEventSource) {
+			harvestEventSource.close();
+			harvestEventSource = null;
+		}
+		activeHarvestTurnId = null;
+	}
+
 	function clearStreamStallTimeout() {
 		if (streamStallTimer) {
 			clearTimeout(streamStallTimer);
@@ -323,6 +378,7 @@
 			const data = (await r.json()) as {
 				messages: Message[];
 				activeTurnId: string | null;
+				activeHarvestTurnId?: string | null;
 				pendingInteractive?: InteractiveRequestView[];
 			};
 			if (run !== refreshMessagesRun) return;
@@ -352,6 +408,11 @@
 				attachStream(data.activeTurnId);
 			} else {
 				scheduleStreamStallTimeout();
+			}
+			// Reattach a still-running background harvest (persisted messages
+			// already carry its latest status; this resumes the live updates).
+			if (data.activeHarvestTurnId && data.activeHarvestTurnId !== activeHarvestTurnId) {
+				attachHarvestStream(data.activeHarvestTurnId);
 			}
 		} catch {
 			/* non-fatal */
@@ -396,8 +457,24 @@
 					createdAt: Date.now(),
 					toolCalls: [],
 					fileEdits: [],
+					memoryContextEnabled: ev.memoryContextEnabled === true,
+					memoryContext: ev.memoryContext ?? [],
+					memoryHarvest: null,
 					reasoningBlocks: []
 				});
+				break;
+			}
+			case 'memory.harvest': {
+				messages = messages.map((m) =>
+					m.id === ev.messageId ? { ...m, memoryHarvest: ev.harvest } : m
+				);
+				break;
+			}
+			case 'memory.harvest.started': {
+				// The post-turn harvest runs on its own background turn so its
+				// live status streams independently of (and after) this turn's
+				// `done`. Open a second EventSource to surface it.
+				attachHarvestStream(ev.harvestTurnId);
 				break;
 			}
 			case 'message.delta': {
@@ -421,6 +498,9 @@
 						createdAt: Date.now(),
 						toolCalls: [],
 						fileEdits: [],
+						memoryContextEnabled: false,
+						memoryContext: [],
+						memoryHarvest: null,
 						reasoningBlocks: []
 					};
 					messages.push(m);
@@ -578,6 +658,7 @@
 				// our local state so the header reflects reality without a
 				// page refresh.
 				if (ev.mode !== undefined) sessionMode = ev.mode;
+				if (ev.memoryLevel !== undefined) memoryLevel = ev.memoryLevel;
 				if (ev.approveAllTools !== undefined) approveAllTools = ev.approveAllTools;
 				break;
 			}
@@ -790,11 +871,13 @@
 		{usage}
 		{recentCompaction}
 		mode={sessionMode}
+		{memoryLevel}
 		{approveAllTools}
 		modelChangeDisabled={streaming}
 		onSettingsChange={(patch) => {
 			if (patch.model !== undefined) sessionModel = patch.model;
 			if (patch.mode !== undefined) sessionMode = patch.mode;
+			if (patch.memoryLevel !== undefined) memoryLevel = patch.memoryLevel;
 			if (patch.approveAllTools !== undefined) approveAllTools = patch.approveAllTools;
 		}}
 	/>

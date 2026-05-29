@@ -1,9 +1,13 @@
 import { ulid } from '../ids';
 import { getDb } from '../index';
+import { isMemoryContent, stringifyContent } from './memory';
 import type Database from 'better-sqlite3';
 import type {
 	Message,
 	MessageStatus,
+	MemoryHarvestRecord,
+	MemoryHarvestStatus,
+	MemoryContextRecord,
 	Role,
 	ToolCallRecord,
 	FileEditRecord,
@@ -20,6 +24,7 @@ interface MsgRow {
 	created_at: number;
 	reasoning: string | null;
 	reasoning_duration_ms: number | null;
+	memory_context_enabled: number | null;
 }
 
 interface ToolRow {
@@ -64,6 +69,36 @@ interface ReasoningRow {
 	parent_tool_call_id: string | null;
 }
 
+interface MemoryContextRow {
+	id: string;
+	message_id: string;
+	memory_id: string;
+	scope: string;
+	kind: string;
+	entity: string | null;
+	content_json: string;
+	tags_json: string;
+	importance: number;
+	sort_index: number;
+}
+
+interface MemoryHarvestRow {
+	message_id: string;
+	status: string;
+	reason: string | null;
+	writes: number;
+	updates: number;
+	forgets: number;
+	scene_ended: number;
+	error: string | null;
+	prompt: string | null;
+	response: string | null;
+	reasoning: string | null;
+	parsed_json: string | null;
+	changes_json: string | null;
+	updated_at: number;
+}
+
 export function ensureBackgroundAgentLifecycleTable(db: Database.Database = getDb()) {
 	db.prepare(
 		`CREATE TABLE IF NOT EXISTS background_agent_lifecycles (
@@ -88,7 +123,60 @@ function rowToMessage(r: MsgRow): Message {
 		content: r.content,
 		status: r.status as MessageStatus,
 		errorCode: r.error_code,
-		createdAt: r.created_at
+		createdAt: r.created_at,
+		memoryContextEnabled: r.memory_context_enabled === 1
+	};
+}
+
+function parseStringArray(raw: string): string[] {
+	try {
+		const parsed = JSON.parse(raw);
+		return Array.isArray(parsed) ? parsed.filter((tag) => typeof tag === 'string') : [];
+	} catch {
+		return [];
+	}
+}
+
+function parseJsonValue(raw: string): MemoryContextRecord['content'] {
+	const parsed = JSON.parse(raw) as unknown;
+	if (isMemoryContent(parsed)) return parsed;
+	throw new Error('Stored memory context content is not JSON-compatible');
+}
+
+function stringifyJsonValue(value: MemoryContextRecord['content']): string {
+	return stringifyContent(value);
+}
+
+function rowToMemoryContext(row: MemoryContextRow): MemoryContextRecord {
+	return {
+		messageId: row.message_id,
+		memoryId: row.memory_id,
+		scope: row.scope as MemoryContextRecord['scope'],
+		kind: row.kind,
+		entity: row.entity,
+		content: parseJsonValue(row.content_json),
+		tags: parseStringArray(row.tags_json),
+		importance: row.importance,
+		sortIndex: row.sort_index
+	};
+}
+
+function rowToMemoryHarvest(row: MemoryHarvestRow): MemoryHarvestRecord {
+	return {
+		messageId: row.message_id,
+		status: row.status as MemoryHarvestStatus,
+		reason: row.reason,
+		writes: row.writes,
+		updates: row.updates,
+		forgets: row.forgets,
+		sceneEnded: row.scene_ended === 1,
+		error: row.error,
+		prompt: row.prompt,
+		response: row.response,
+		reasoning: row.reasoning,
+		parsedJson: row.parsed_json,
+		changesJson: row.changes_json,
+		updatedAt: row.updated_at
 	};
 }
 
@@ -129,6 +217,14 @@ export function listByConversation(conversationId: string): Message[] {
 			`SELECT * FROM reasoning_blocks WHERE message_id IN (${placeholders}) ORDER BY segment_index ASC`
 		)
 		.all(...ids) as ReasoningRow[];
+	const memoryContextRows = db
+		.prepare(
+			`SELECT * FROM message_memory_context WHERE message_id IN (${placeholders}) ORDER BY sort_index ASC`
+		)
+		.all(...ids) as MemoryContextRow[];
+	const memoryHarvestRows = db
+		.prepare(`SELECT * FROM message_memory_harvest WHERE message_id IN (${placeholders})`)
+		.all(...ids) as MemoryHarvestRow[];
 
 	const byMsgT: Record<string, ToolCallRecord[]> = {};
 	for (const t of toolRows) {
@@ -175,9 +271,16 @@ export function listByConversation(conversationId: string): Message[] {
 			parentToolCallId: r.parent_tool_call_id
 		});
 	}
+	const byMsgM: Record<string, MemoryContextRecord[]> = {};
+	for (const m of memoryContextRows) {
+		(byMsgM[m.message_id] ??= []).push(rowToMemoryContext(m));
+	}
+	const byMsgH = new Map(memoryHarvestRows.map((row) => [row.message_id, rowToMemoryHarvest(row)]));
 	for (const m of msgs) {
 		m.toolCalls = byMsgT[m.id] ?? [];
 		m.fileEdits = byMsgE[m.id] ?? [];
+		m.memoryContext = byMsgM[m.id] ?? [];
+		m.memoryHarvest = byMsgH.get(m.id) ?? null;
 		m.reasoningBlocks = byMsgR[m.id] ?? [];
 	}
 	return msgs;
@@ -214,7 +317,10 @@ export function append(conversationId: string, input: AppendInput): Message {
 		content: input.content,
 		status: input.status ?? 'complete',
 		errorCode: input.errorCode ?? null,
-		createdAt: now
+		createdAt: now,
+		memoryContextEnabled: false,
+		memoryContext: [],
+		memoryHarvest: null
 	};
 }
 
@@ -272,6 +378,12 @@ export function truncateAfterAndUpdateUserMessage(
 			db.prepare(`DELETE FROM file_edits WHERE message_id IN (${msgPlaceholders})`).run(
 				...laterIds
 			);
+			db.prepare(`DELETE FROM message_memory_context WHERE message_id IN (${msgPlaceholders})`).run(
+				...laterIds
+			);
+			db.prepare(`DELETE FROM message_memory_harvest WHERE message_id IN (${msgPlaceholders})`).run(
+				...laterIds
+			);
 			db.prepare(`DELETE FROM tool_calls WHERE message_id IN (${msgPlaceholders})`).run(
 				...laterIds
 			);
@@ -294,6 +406,120 @@ export function truncateAfterAndUpdateUserMessage(
 		});
 	});
 	return tx();
+}
+
+export interface MemoryContextInput {
+	memoryId: string;
+	scope: MemoryContextRecord['scope'];
+	kind: string;
+	entity: string | null;
+	content: MemoryContextRecord['content'];
+	tags: string[];
+	importance: number;
+}
+
+export function replaceMemoryContext(messageId: string, rows: MemoryContextInput[]): void {
+	const db = getDb();
+	const tx = db.transaction(() => {
+		db.prepare('UPDATE messages SET memory_context_enabled = 1 WHERE id = ?').run(messageId);
+		db.prepare('DELETE FROM message_memory_context WHERE message_id = ?').run(messageId);
+		const stmt = db.prepare(
+			`INSERT INTO message_memory_context(
+			   id, message_id, memory_id, scope, kind, entity, content_json, tags_json, importance, sort_index
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		);
+		rows.forEach((row, sortIndex) => {
+			stmt.run(
+				ulid(),
+				messageId,
+				row.memoryId,
+				row.scope,
+				row.kind,
+				row.entity,
+				stringifyJsonValue(row.content),
+				JSON.stringify(row.tags),
+				row.importance,
+				sortIndex
+			);
+		});
+	});
+	tx();
+}
+
+export interface MemoryHarvestUpsert {
+	status: MemoryHarvestStatus;
+	reason?: string | null;
+	writes?: number;
+	updates?: number;
+	forgets?: number;
+	sceneEnded?: boolean;
+	error?: string | null;
+	prompt?: string | null;
+	response?: string | null;
+	reasoning?: string | null;
+	parsedJson?: string | null;
+	changesJson?: string | null;
+	updatedAt?: number;
+}
+
+export function upsertMemoryHarvest(
+	messageId: string,
+	input: MemoryHarvestUpsert
+): MemoryHarvestRecord {
+	const now = input.updatedAt ?? Date.now();
+	getDb()
+		.prepare(
+			`INSERT INTO message_memory_harvest(
+			   message_id, status, reason, writes, updates, forgets, scene_ended, error,
+			   prompt, response, reasoning, parsed_json, changes_json, updated_at
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(message_id) DO UPDATE SET
+			   status = excluded.status,
+			   reason = excluded.reason,
+			   writes = excluded.writes,
+			   updates = excluded.updates,
+			   forgets = excluded.forgets,
+			   scene_ended = excluded.scene_ended,
+			   error = excluded.error,
+			   prompt = excluded.prompt,
+			   response = excluded.response,
+			   reasoning = excluded.reasoning,
+			   parsed_json = excluded.parsed_json,
+			   changes_json = excluded.changes_json,
+			   updated_at = excluded.updated_at`
+		)
+		.run(
+			messageId,
+			input.status,
+			input.reason ?? null,
+			input.writes ?? 0,
+			input.updates ?? 0,
+			input.forgets ?? 0,
+			input.sceneEnded ? 1 : 0,
+			input.error ?? null,
+			input.prompt ?? null,
+			input.response ?? null,
+			input.reasoning ?? null,
+			input.parsedJson ?? null,
+			input.changesJson ?? null,
+			now
+		);
+	return {
+		messageId,
+		status: input.status,
+		reason: input.reason ?? null,
+		writes: input.writes ?? 0,
+		updates: input.updates ?? 0,
+		forgets: input.forgets ?? 0,
+		sceneEnded: input.sceneEnded === true,
+		error: input.error ?? null,
+		prompt: input.prompt ?? null,
+		response: input.response ?? null,
+		reasoning: input.reasoning ?? null,
+		parsedJson: input.parsedJson ?? null,
+		changesJson: input.changesJson ?? null,
+		updatedAt: now
+	};
 }
 
 export function insertToolCall(messageId: string, t: Omit<ToolCallRecord, 'messageId'>) {

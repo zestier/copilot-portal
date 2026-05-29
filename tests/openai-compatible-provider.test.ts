@@ -213,6 +213,53 @@ describe('openAICompatibleProvider', () => {
 		);
 	});
 
+	it('omits memory tools when memory support is disabled', async () => {
+		const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+			const body = JSON.parse(String(init?.body)) as {
+				tools?: Array<{ function?: { name?: string } }>;
+			};
+			const toolNames = (body.tools ?? []).map((tool) => tool.function?.name);
+			expect(toolNames).toContain('git_status');
+			expect(toolNames).not.toContain('memory_write');
+			return sseResponse([
+				'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const session = await openAICompatibleProvider.openSession({
+			...baseOpts,
+			memoryLevel: 'none'
+		});
+
+		await collect(session.send('hello', new AbortController().signal));
+
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+
+	it('includes memory tools when memory support is tool-level or higher', async () => {
+		const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+			const body = JSON.parse(String(init?.body)) as {
+				tools?: Array<{ function?: { name?: string } }>;
+			};
+			const toolNames = (body.tools ?? []).map((tool) => tool.function?.name);
+			expect(toolNames).toContain('memory_write');
+			return sseResponse([
+				'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+				'data: [DONE]\n\n'
+			]);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const session = await openAICompatibleProvider.openSession({
+			...baseOpts,
+			memoryLevel: 'tools'
+		});
+
+		await collect(session.send('hello', new AbortController().signal));
+
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+
 	it('sends configured OpenAI-compatible sampling controls with chat requests', async () => {
 		process.env.OPENAI_COMPATIBLE_TEMPERATURE = '1.1';
 		process.env.OPENAI_COMPATIBLE_TOP_P = '0.9';

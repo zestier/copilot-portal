@@ -22,6 +22,11 @@ describe('db migrations + repos', () => {
 				'conversations',
 				'file_edits',
 				'messages',
+				'message_memory_bank_snapshot_memories',
+				'message_memory_bank_snapshot_meta',
+				'message_memory_bank_snapshot_scenes',
+				'message_memory_context',
+				'message_memory_harvest',
 				'permission_decisions',
 				'permission_grants',
 				'prompt_templates',
@@ -83,11 +88,15 @@ describe('db migrations + repos', () => {
 			title: 't',
 			workdir: '/tmp',
 			model: null,
-			mode: 'autopilot'
+			mode: 'autopilot',
+			memoryLevel: 'injector'
 		});
 		expect(convs.get(c.id, u.id)?.mode).toBe('autopilot');
+		expect(convs.get(c.id, u.id)?.memoryLevel).toBe('injector');
 		expect(convs.updateSessionSettings(c.id, u.id, { mode: 'best-effort' })).toBe(true);
 		expect(convs.get(c.id, u.id)?.mode).toBe('best-effort');
+		expect(convs.updateSessionSettings(c.id, u.id, { memoryLevel: 'none' })).toBe(true);
+		expect(convs.get(c.id, u.id)?.memoryLevel).toBe('none');
 	});
 
 	it('permission grants scope by conversation and global', () => {
@@ -322,11 +331,13 @@ describe('db migrations + repos', () => {
 		expect(settings.get(u.id)).toBeNull();
 		const s = settings.defaults();
 		expect(s.defaultPolicy).toBe('prompt');
+		expect(s.defaultMemoryLevel).toBe('harvester');
 		settings.save(u.id, {
 			defaultProvider: 'openai-compatible',
 			defaultModel: 'claude',
 			defaultWorkdir: null,
 			defaultConversationMode: 'best-effort',
+			defaultMemoryLevel: 'tools',
 			defaultPolicy: 'allow-all',
 			theme: 'light'
 		});
@@ -335,6 +346,7 @@ describe('db migrations + repos', () => {
 			defaultModel: 'claude',
 			defaultWorkdir: null,
 			defaultConversationMode: 'best-effort',
+			defaultMemoryLevel: 'tools',
 			defaultPolicy: 'allow-all',
 			theme: 'light'
 		});
@@ -347,6 +359,7 @@ describe('db migrations + repos', () => {
 			defaultModel: null,
 			defaultWorkdir: null,
 			defaultConversationMode: 'interactive',
+			defaultMemoryLevel: 'harvester',
 			defaultPolicy: 'prompt',
 			theme: 'dark'
 		});
@@ -387,6 +400,84 @@ describe('db migrations + repos', () => {
 			id: 'tool-pending',
 			status: 'error',
 			endedAt: 1234
+		});
+	});
+
+	it('persists message memory context snapshots', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, { title: 'memory context', workdir: '/tmp', model: null });
+		const assistant = messages.append(c.id, {
+			role: 'assistant',
+			content: 'reply',
+			status: 'complete'
+		});
+
+		messages.replaceMemoryContext(assistant.id, [
+			{
+				memoryId: 'mem-1',
+				scope: 'session',
+				kind: 'contract',
+				entity: 'api',
+				content: { response_case: 'snake_case' },
+				tags: ['contract'],
+				importance: 4
+			}
+		]);
+
+		const reloaded = messages.listByConversation(c.id).find((m) => m.id === assistant.id);
+		expect(reloaded?.memoryContextEnabled).toBe(true);
+		expect(reloaded?.memoryContext).toEqual([
+			{
+				messageId: assistant.id,
+				memoryId: 'mem-1',
+				scope: 'session',
+				kind: 'contract',
+				entity: 'api',
+				content: { response_case: 'snake_case' },
+				tags: ['contract'],
+				importance: 4,
+				sortIndex: 0
+			}
+		]);
+	});
+
+	it('persists message memory harvest outcomes', () => {
+		const u = users.ensureLocalUser();
+		const c = convs.create(u.id, { title: 'memory harvest', workdir: '/tmp', model: null });
+		const assistant = messages.append(c.id, {
+			role: 'assistant',
+			content: 'reply',
+			status: 'complete'
+		});
+
+		const saved = messages.upsertMemoryHarvest(assistant.id, {
+			status: 'applied',
+			writes: 1,
+			updates: 2,
+			forgets: 3,
+			sceneEnded: true,
+			prompt: 'harvest input',
+			response: '{"writes":[]}',
+			reasoning: 'diagnostic thinking',
+			parsedJson: '{\n  "writes": []\n}',
+			changesJson: '[]'
+		});
+
+		expect(saved).toMatchObject({ status: 'applied', writes: 1, sceneEnded: true });
+		const reloaded = messages.listByConversation(c.id).find((m) => m.id === assistant.id);
+		expect(reloaded?.memoryHarvest).toMatchObject({
+			messageId: assistant.id,
+			status: 'applied',
+			writes: 1,
+			updates: 2,
+			forgets: 3,
+			sceneEnded: true,
+			error: null,
+			prompt: 'harvest input',
+			response: '{"writes":[]}',
+			reasoning: 'diagnostic thinking',
+			parsedJson: '{\n  "writes": []\n}',
+			changesJson: '[]'
 		});
 	});
 

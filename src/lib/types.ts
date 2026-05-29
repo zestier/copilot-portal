@@ -35,6 +35,8 @@ export interface Conversation {
 	 * The mode is forwarded to the runtime each time the session is opened.
 	 */
 	mode: SessionMode;
+	/** Controls model-visible memory support for this conversation. */
+	memoryLevel: MemorySupportLevel;
 	/**
 	 * Per-conversation bypass: when true, every tool-permission request is
 	 * auto-approved (an `auto-allow` audit row is still written). The flag
@@ -95,6 +97,25 @@ export function normalizeSessionMode(raw: string | null | undefined): SessionMod
 	return raw === 'plan' || raw === 'autopilot' || raw === 'best-effort' ? raw : 'interactive';
 }
 
+export type MemorySupportLevel = 'none' | 'tools' | 'injector' | 'harvester';
+
+export function normalizeMemorySupportLevel(raw: string | null | undefined): MemorySupportLevel {
+	return raw === 'none' || raw === 'tools' || raw === 'injector' ? raw : 'harvester';
+}
+
+export function memorySupportsTools(level: MemorySupportLevel | null | undefined): boolean {
+	return normalizeMemorySupportLevel(level) !== 'none';
+}
+
+export function memorySupportsInjector(level: MemorySupportLevel | null | undefined): boolean {
+	const normalized = normalizeMemorySupportLevel(level);
+	return normalized === 'injector' || normalized === 'harvester';
+}
+
+export function memorySupportsHarvester(level: MemorySupportLevel | null | undefined): boolean {
+	return normalizeMemorySupportLevel(level) === 'harvester';
+}
+
 export const BACKEND_PROVIDER_IDS = ['copilot', 'openai-compatible', 'lm-studio'] as const;
 export type BackendProviderId = (typeof BACKEND_PROVIDER_IDS)[number];
 
@@ -140,6 +161,8 @@ export interface ProviderCapabilities {
 		resume: boolean;
 		dispose: true;
 		abort: boolean;
+		/** Delete durable provider-side session state. */
+		delete: boolean;
 	};
 	stream: {
 		send: true;
@@ -193,11 +216,54 @@ export interface Message {
 	createdAt: number;
 	toolCalls?: ToolCallRecord[];
 	fileEdits?: FileEditRecord[];
+	memoryContextEnabled?: boolean;
+	memoryContext?: MemoryContextRecord[];
+	memoryHarvest?: MemoryHarvestRecord | null;
 	// Ordered assistant reasoning segments ("thinking") interleaved with
 	// content. Each segment is one contiguous burst of reasoning deltas
 	// anchored to a text offset, with its own elapsed-time window. Only
 	// populated for models that emit reasoning.
 	reasoningBlocks?: ReasoningBlockRecord[];
+}
+
+export interface MemoryContextRecord {
+	messageId: string;
+	memoryId: string;
+	scope: MemorySupportScope;
+	kind: string;
+	entity: string | null;
+	content: JsonValue;
+	tags: string[];
+	importance: number;
+	sortIndex: number;
+}
+
+export type MemorySupportScope = 'scene' | 'session' | 'shared';
+export type JsonValue =
+	| null
+	| string
+	| number
+	| boolean
+	| JsonValue[]
+	| { [key: string]: JsonValue };
+
+export type MemoryHarvestStatus = 'pending' | 'skipped' | 'empty' | 'applied' | 'failed';
+
+export interface MemoryHarvestRecord {
+	messageId: string;
+	status: MemoryHarvestStatus;
+	reason: string | null;
+	writes: number;
+	updates: number;
+	forgets: number;
+	sceneEnded: boolean;
+	error: string | null;
+	prompt: string | null;
+	response: string | null;
+	reasoning: string | null;
+	parsedJson: string | null;
+	changesJson: string | null;
+	updatedAt: number;
 }
 
 export interface ReasoningBlockRecord {
@@ -260,6 +326,7 @@ export interface UserSettings {
 	defaultModel: string | null;
 	defaultWorkdir: string | null;
 	defaultConversationMode: SessionMode;
+	defaultMemoryLevel: MemorySupportLevel;
 	defaultPolicy: PermissionPolicy;
 	theme: 'dark' | 'light' | 'system';
 }
@@ -503,7 +570,21 @@ export type ElicitationSchemaField =
 // --- Normalized streaming protocol (server -> client over SSE) ---
 
 export type PortalEvent =
-	| { type: 'message.start'; messageId: string; role: 'assistant' }
+	| {
+			type: 'message.start';
+			messageId: string;
+			role: 'assistant';
+			memoryContextEnabled?: boolean;
+			memoryContext?: MemoryContextRecord[];
+	  }
+	| { type: 'memory.harvest'; messageId: string; harvest: MemoryHarvestRecord }
+	// Announced on the primary turn stream just before its terminal `done`
+	// when a post-turn memory harvest was scheduled. Carries the id of the
+	// independent background turn that streams the harvest's own
+	// `memory.harvest` updates and terminal `done`, so the client can open a
+	// second EventSource and surface the live pending -> applied/empty/failed
+	// transition without waiting on (or blocking) the visible turn.
+	| { type: 'memory.harvest.started'; messageId: string; harvestTurnId: string }
 	| { type: 'message.delta'; messageId: string; text: string }
 	| {
 			type: 'message.reasoning';
@@ -583,6 +664,7 @@ export type PortalEvent =
 			type: 'session.settings';
 			conversationId: string;
 			mode?: SessionMode;
+			memoryLevel?: MemorySupportLevel;
 			approveAllTools?: boolean;
 			// Free-form source label so the UI can show "Agent switched to
 			// plan mode" vs "You enabled autopilot" in a future iteration.

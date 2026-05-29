@@ -71,7 +71,8 @@ POST /api/conversations/:id/turns   (JSON body)
 SvelteKit server endpoint:
   1. Persist user message to SQLite
   2. Snapshot workdir and start an in-memory Turn
-  3. Return { turnId } synchronously (no streaming on this response)
+  3. Compose portal context + active memory-bank context for the provider prompt
+  4. Return { turnId } synchronously (no streaming on this response)
         │
         ▼
 Client opens EventSource(/api/conversations/:id/turns/:turnId/stream)
@@ -83,6 +84,8 @@ Client opens EventSource(/api/conversations/:id/turns/:turnId/stream)
         ▼
 On turn end (`done` event):
   - Server has already persisted assistant message, tool calls, edits
+  - A non-blocking memory harvester may update the conversation's memory bank
+    through a tools-disabled synthetic provider session
   - Client closes the EventSource
 ```
 

@@ -22,28 +22,38 @@ const PatchBody = z
 	.object({
 		model: z.string().trim().min(1).optional(),
 		mode: z.enum(['interactive', 'plan', 'autopilot', 'best-effort']).optional(),
+		memoryLevel: z.enum(['none', 'tools', 'injector', 'harvester']).optional(),
 		approveAllTools: z.boolean().optional()
 	})
-	.refine((b) => b.model !== undefined || b.mode !== undefined || b.approveAllTools !== undefined, {
-		message: 'No fields to update'
-	});
+	.refine(
+		(b) =>
+			b.model !== undefined ||
+			b.mode !== undefined ||
+			b.memoryLevel !== undefined ||
+			b.approveAllTools !== undefined,
+		{
+			message: 'No fields to update'
+		}
+	);
 
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 	const conv = authorizeConversation(params.id, locals.userId);
 	const body = await parseBody(request, PatchBody);
 	const provider = getProvider(conv.provider);
 	const modelChanged = body.model !== undefined && body.model !== conv.model;
+	const memoryLevelChanged =
+		body.memoryLevel !== undefined && body.memoryLevel !== conv.memoryLevel;
 	const turn = getTurn(conv.id);
-	if (modelChanged && turn?.status === 'running') {
-		throw error(409, 'Cannot change model while a turn is running.');
+	if ((modelChanged || memoryLevelChanged) && turn?.status === 'running') {
+		throw error(409, 'Cannot change model or memory support while a turn is running.');
 	}
 
 	const persistedPatch = { ...body };
 	convs.updateSessionSettings(conv.id, conv.userId, body);
-	if (modelChanged) {
+	if (modelChanged || memoryLevelChanged) {
 		await pool.release(conv.id);
 	}
-	const live = modelChanged ? null : pool.getActive(conv.id);
+	const live = modelChanged || memoryLevelChanged ? null : pool.getActive(conv.id);
 	if (live) {
 		// Best-effort: the bridge already logs detailed RPC failures, and
 		// the DB row is the source of truth for the next open(). Don't fail

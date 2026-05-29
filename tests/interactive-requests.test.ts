@@ -250,6 +250,7 @@ describe('interactive request registry', () => {
 			defaultModel: null,
 			defaultWorkdir: null,
 			defaultConversationMode: 'interactive',
+			defaultMemoryLevel: 'harvester',
 			defaultPolicy: 'deny-all',
 			theme: 'dark'
 		});
@@ -376,6 +377,7 @@ describe('interactive request registry', () => {
 			defaultModel: null,
 			defaultWorkdir: null,
 			defaultConversationMode: 'interactive',
+			defaultMemoryLevel: 'harvester',
 			defaultPolicy: 'deny-all',
 			theme: 'dark'
 		});

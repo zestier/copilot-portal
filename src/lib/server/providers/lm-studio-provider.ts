@@ -70,7 +70,8 @@ export const lmStudioProvider: ModelBackendProvider = {
 			open: true,
 			resume: false,
 			dispose: true,
-			abort: true
+			abort: true,
+			delete: false
 		},
 		stream: {
 			send: true,

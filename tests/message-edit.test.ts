@@ -4,11 +4,12 @@ import { setupLocalEnv } from './helpers/env';
 async function freshImports() {
 	const users = await import('../src/lib/server/db/repos/users');
 	const convs = await import('../src/lib/server/db/repos/conversations');
+	const memory = await import('../src/lib/server/db/repos/memory');
 	const messages = await import('../src/lib/server/db/repos/messages');
 	const usage = await import('../src/lib/server/db/repos/usage');
 	const edit = await import('../src/lib/server/message-edit');
 	const db = await import('../src/lib/server/db');
-	return { users, convs, messages, usage, edit, db };
+	return { users, convs, memory, messages, usage, edit, db };
 }
 
 describe('message-edit.inlineEditMessage', () => {
@@ -92,5 +93,44 @@ describe('message-edit.inlineEditMessage', () => {
 				newContent: 'edited'
 			})
 		).toThrowError(expect.objectContaining({ reason: 'not_user_message' }));
+	});
+
+	it('restores memory state to before the edited user turn', async () => {
+		const { users, convs, memory, messages, edit } = await freshImports();
+		const u = users.ensureLocalUser();
+		const conv = convs.create(u.id, { title: 'src', workdir: '/tmp', model: null });
+
+		messages.append(conv.id, { role: 'user', content: 'first' });
+		const a1 = messages.append(conv.id, { role: 'assistant', content: 'reply 1' });
+		const kept = memory.write(u.id, conv.id, {
+			scope: 'session',
+			kind: 'fact',
+			content: 'Kept memory.',
+			source: 'model'
+		});
+		memory.snapshotForMessage(u.id, conv.id, a1.id);
+
+		const u2 = messages.append(conv.id, { role: 'user', content: 'second' });
+		messages.append(conv.id, { role: 'assistant', content: 'reply 2' });
+		memory.update(kept.id, u.id, conv.id, { content: 'Mutated later memory.' });
+		memory.write(u.id, conv.id, {
+			scope: 'session',
+			kind: 'fact',
+			content: 'Future memory.',
+			source: 'harvester'
+		});
+
+		edit.inlineEditMessage({
+			userId: u.id,
+			conversationId: conv.id,
+			messageId: u2.id,
+			newContent: 'second edited'
+		});
+
+		expect(memory.query(u.id, conv.id, 'Future', { includeArchived: true })).toEqual([]);
+		expect(memory.get(kept.id, u.id, conv.id)).toMatchObject({
+			content: 'Kept memory.',
+			status: 'active'
+		});
 	});
 });

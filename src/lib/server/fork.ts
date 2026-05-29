@@ -30,6 +30,7 @@
 import { ulid } from './db/ids';
 import { getDb } from './db';
 import * as convs from './db/repos/conversations';
+import * as memory from './db/repos/memory';
 import * as messages from './db/repos/messages';
 import { getTurn } from './runtime/turn-runner';
 import { log } from './log';
@@ -133,6 +134,8 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 		workdir: source.workdir,
 		provider: source.provider,
 		model: source.model,
+		mode: source.mode,
+		memoryLevel: source.memoryLevel,
 		forkedFromConversationId: source.id,
 		forkedFromMessageId: target.id
 	});
@@ -143,7 +146,14 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 	// user picks up by typing the next prompt).
 	const prefixEnd = mode === 'edit' ? targetIdx : targetIdx + 1;
 	const prefix = all.slice(0, prefixEnd);
-	cloneMessagePrefix(newConv.id, prefix);
+	const messageIdMap = cloneMessagePrefix(newConv.id, prefix);
+	memory.cloneSnapshotsForMessages(input.userId, source.id, newConv.id, messageIdMap);
+	const snapshotSource =
+		mode === 'retry'
+			? target.id
+			: [...prefix].reverse().find((message) => message.role === 'assistant')?.id;
+	const snapshotTarget = snapshotSource ? (messageIdMap.get(snapshotSource) ?? null) : null;
+	memory.restoreSnapshotToConversation(input.userId, newConv.id, snapshotTarget);
 	let userMessage: Message | null = null;
 	if (mode === 'edit') {
 		userMessage = messages.append(newConv.id, { role: 'user', content: input.newContent! });
@@ -161,13 +171,14 @@ export async function forkAtMessage(input: ForkInput): Promise<ForkResult> {
 	return { conversation: refreshed, userMessage };
 }
 
-function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {
+function cloneMessagePrefix(targetConvId: string, prefix: Message[]): Map<string, string> {
 	const db = getDb();
 	messages.ensureBackgroundAgentLifecycleTable(db);
 	const baseTs = Date.now() - prefix.length - 1;
+	const messageIdMap = new Map<string, string>();
 	const insertMsg = db.prepare(
-		`INSERT INTO messages(id, conversation_id, role, content, status, error_code, created_at, reasoning, reasoning_duration_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`
+		`INSERT INTO messages(id, conversation_id, role, content, status, error_code, created_at, reasoning, reasoning_duration_ms, memory_context_enabled)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
 	);
 	const insertTool = db.prepare(
 		`INSERT INTO tool_calls(id, message_id, tool, args_json, result_json, status, started_at, ended_at, text_offset, parent_tool_call_id)
@@ -185,11 +196,31 @@ function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {
 		`INSERT INTO reasoning_blocks(id, message_id, segment_index, text, text_offset, started_at, duration_ms, parent_tool_call_id)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	);
+	const insertMemoryContext = db.prepare(
+		`INSERT INTO message_memory_context(id, message_id, memory_id, scope, kind, entity, content_json, tags_json, importance, sort_index)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	);
+	const insertMemoryHarvest = db.prepare(
+		`INSERT INTO message_memory_harvest(
+		   message_id, status, reason, writes, updates, forgets, scene_ended, error,
+		   prompt, response, reasoning, parsed_json, changes_json, updated_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	);
 	const tx = db.transaction(() => {
 		prefix.forEach((m, i) => {
 			const newId = ulid();
+			messageIdMap.set(m.id, newId);
 			const ts = baseTs + i;
-			insertMsg.run(newId, targetConvId, m.role, m.content, m.status, m.errorCode, ts);
+			insertMsg.run(
+				newId,
+				targetConvId,
+				m.role,
+				m.content,
+				m.status,
+				m.errorCode,
+				ts,
+				m.memoryContextEnabled ? 1 : 0
+			);
 			// Remap tool_call ids so parent_tool_call_id references stay
 			// internally consistent within the cloned message.
 			const toolIdRemap = new Map<string, string>();
@@ -243,7 +274,40 @@ function cloneMessagePrefix(targetConvId: string, prefix: Message[]) {
 					r.parentToolCallId ? (toolIdRemap.get(r.parentToolCallId) ?? null) : null
 				);
 			}
+			for (const memory of m.memoryContext ?? []) {
+				insertMemoryContext.run(
+					ulid(),
+					newId,
+					memory.memoryId,
+					memory.scope,
+					memory.kind,
+					memory.entity,
+					JSON.stringify(memory.content),
+					JSON.stringify(memory.tags),
+					memory.importance,
+					memory.sortIndex
+				);
+			}
+			if (m.memoryHarvest) {
+				insertMemoryHarvest.run(
+					newId,
+					m.memoryHarvest.status,
+					m.memoryHarvest.reason,
+					m.memoryHarvest.writes,
+					m.memoryHarvest.updates,
+					m.memoryHarvest.forgets,
+					m.memoryHarvest.sceneEnded ? 1 : 0,
+					m.memoryHarvest.error,
+					m.memoryHarvest.prompt,
+					m.memoryHarvest.response,
+					m.memoryHarvest.reasoning,
+					m.memoryHarvest.parsedJson,
+					m.memoryHarvest.changesJson,
+					m.memoryHarvest.updatedAt
+				);
+			}
 		});
 	});
 	tx();
+	return messageIdMap;
 }

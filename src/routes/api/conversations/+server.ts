@@ -49,7 +49,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		workdir,
 		provider: normalizeBackendProvider(provider),
 		model,
-		mode: userSettings.defaultConversationMode
+		mode: userSettings.defaultConversationMode,
+		memoryLevel: userSettings.defaultMemoryLevel
 	});
 	return json({ ok: true, conversation: conv }, { status: 201 });
 };

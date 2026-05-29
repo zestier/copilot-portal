@@ -2,6 +2,7 @@
 	import type {
 		Conversation,
 		ConversationUsage,
+		MemorySupportLevel,
 		ProviderRuntimeFeatureStatus,
 		ProviderCapabilities,
 		SessionMode
@@ -21,6 +22,7 @@
 		usage = null,
 		recentCompaction = null,
 		mode,
+		memoryLevel,
 		approveAllTools,
 		modelChangeDisabled = false,
 		onSettingsChange
@@ -42,6 +44,7 @@
 		usage?: ConversationUsage | null;
 		recentCompaction?: { tokensRemoved?: number; messagesRemoved?: number } | null;
 		mode: SessionMode;
+		memoryLevel: MemorySupportLevel;
 		approveAllTools: boolean;
 		modelChangeDisabled?: boolean;
 		// Fires with the optimistic patch right before the PATCH request,
@@ -49,6 +52,7 @@
 		onSettingsChange?: (patch: {
 			model?: string;
 			mode?: SessionMode;
+			memoryLevel?: MemorySupportLevel;
 			approveAllTools?: boolean;
 		}) => void;
 	} = $props();
@@ -56,6 +60,7 @@
 	let expanded = $state(false);
 	let savingModel = $state(false);
 	let savingMode = $state(false);
+	let savingMemory = $state(false);
 	let savingApprove = $state(false);
 	let resetting = $state(false);
 	let resetFlash = $state<'ok' | 'err' | null>(null);
@@ -84,6 +89,29 @@
 			value: 'best-effort',
 			label: 'Best effort',
 			hint: 'Autopilot-style execution, but permission prompts auto-reject with feedback.'
+		}
+	];
+
+	const MEMORY_LEVELS: { value: MemorySupportLevel; label: string; hint: string }[] = [
+		{
+			value: 'none',
+			label: 'None',
+			hint: 'No memory tools, injected memories, or harvesting.'
+		},
+		{
+			value: 'tools',
+			label: 'Tools',
+			hint: 'Memory tools only.'
+		},
+		{
+			value: 'injector',
+			label: 'Injector',
+			hint: 'Memory tools plus active-memory injection.'
+		},
+		{
+			value: 'harvester',
+			label: 'Harvester',
+			hint: 'Full support: tools, injector, and post-turn harvesting.'
 		}
 	];
 
@@ -131,6 +159,7 @@
 	async function patchSession(body: {
 		model?: string;
 		mode?: SessionMode;
+		memoryLevel?: MemorySupportLevel;
 		approveAllTools?: boolean;
 	}) {
 		const res = await fetch(`/api/conversations/${conversation.id}/session`, {
@@ -175,6 +204,20 @@
 			onSettingsChange?.({ mode: prev });
 		} finally {
 			savingMode = false;
+		}
+	}
+
+	async function chooseMemoryLevel(next: MemorySupportLevel) {
+		if (next === memoryLevel || savingMemory || modelChangeDisabled) return;
+		savingMemory = true;
+		const prev = memoryLevel;
+		onSettingsChange?.({ memoryLevel: next });
+		try {
+			await patchSession({ memoryLevel: next });
+		} catch {
+			onSettingsChange?.({ memoryLevel: prev });
+		} finally {
+			savingMemory = false;
 		}
 	}
 
@@ -396,6 +439,28 @@
 							<span class="unsupported-chip" title={modeFeature.description}>
 								{currentModeLabel} · provider no-op
 							</span>
+						{/if}
+					</div>
+					<div class="setting-row">
+						<span class="setting-label">Memory</span>
+						<div class="seg" role="radiogroup" aria-label="Memory support" aria-busy={savingMemory}>
+							{#each MEMORY_LEVELS as opt (opt.value)}
+								<button
+									type="button"
+									role="radio"
+									aria-checked={memoryLevel === opt.value}
+									class="seg-btn"
+									class:active={memoryLevel === opt.value}
+									title={opt.hint}
+									disabled={savingMemory || modelChangeDisabled}
+									onclick={() => chooseMemoryLevel(opt.value)}
+								>
+									{opt.label}
+								</button>
+							{/each}
+						</div>
+						{#if modelChangeDisabled}
+							<span class="unsupported-chip">memory locked during turn</span>
 						{/if}
 					</div>
 					<div class="setting-row">

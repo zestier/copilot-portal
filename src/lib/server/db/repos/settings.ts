@@ -3,6 +3,7 @@ import { getDb } from '../index';
 import { loadConfig } from '../../config';
 import {
 	normalizeBackendProvider,
+	normalizeMemorySupportLevel,
 	normalizeSessionMode,
 	type UserSettings,
 	type PermissionPolicy
@@ -14,6 +15,7 @@ interface SettingsRow {
 	default_model: string | null;
 	default_workdir: string | null;
 	default_mode: string | null;
+	default_memory_level: string | null;
 	default_policy: string;
 	theme: string;
 	updated_at: number;
@@ -30,6 +32,7 @@ function rowToSettings(r: SettingsRow): UserSettings {
 		defaultModel: r.default_model,
 		defaultWorkdir: r.default_workdir,
 		defaultConversationMode: normalizeSessionMode(r.default_mode),
+		defaultMemoryLevel: normalizeMemorySupportLevel(r.default_memory_level),
 		defaultPolicy: policy,
 		theme: r.theme === 'light' ? 'light' : r.theme === 'system' ? 'system' : 'dark'
 	};
@@ -53,6 +56,7 @@ export function defaults(): UserSettings {
 		defaultModel: null,
 		defaultWorkdir: null,
 		defaultConversationMode: 'interactive',
+		defaultMemoryLevel: 'harvester',
 		defaultPolicy: 'prompt',
 		theme: 'system'
 	};
@@ -62,14 +66,15 @@ export function save(userId: string, s: UserSettings) {
 	getDb()
 		.prepare(
 			`INSERT INTO user_settings(
-			   user_id, default_provider, default_model, default_workdir, default_mode, default_policy, theme, updated_at
+			   user_id, default_provider, default_model, default_workdir, default_mode, default_memory_level, default_policy, theme, updated_at
 			 )
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(user_id) DO UPDATE SET
 			   default_provider = excluded.default_provider,
 			   default_model = excluded.default_model,
 			   default_workdir = excluded.default_workdir,
 			   default_mode = excluded.default_mode,
+			   default_memory_level = excluded.default_memory_level,
 			   default_policy = excluded.default_policy,
 			   theme = excluded.theme,
 			   updated_at = excluded.updated_at`
@@ -80,6 +85,7 @@ export function save(userId: string, s: UserSettings) {
 			s.defaultModel,
 			s.defaultWorkdir,
 			s.defaultConversationMode,
+			s.defaultMemoryLevel,
 			s.defaultPolicy,
 			s.theme,
 			Date.now()

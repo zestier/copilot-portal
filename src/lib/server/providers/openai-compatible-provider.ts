@@ -3,11 +3,19 @@ import { loadConfig } from '../config';
 import { log } from '../log';
 import { ticketWorkspaceFromConversation } from '../ticket-workspace';
 import { buildGitTools, type PortalTool } from '../tools/git';
+import { buildMemoryTools } from '../tools/memory';
 import { buildPermissionTools } from '../tools/permissions';
 import { validatePortalToolArgs } from '../tools/schema-error';
 import { buildTicketTools } from '../tools/tickets';
 import { fetchWithTimeout, jsonRequestHeaders, parseJson, streamSseData } from './provider-utils';
-import type { BackendProviderId, PortalEvent, SessionMode, ToolCallRecord } from '$lib/types';
+import {
+	memorySupportsTools,
+	normalizeMemorySupportLevel,
+	type BackendProviderId,
+	type PortalEvent,
+	type SessionMode,
+	type ToolCallRecord
+} from '$lib/types';
 import { AsyncQueue } from '../runtime/async-queue';
 import { createInteractiveCallbacks } from '../copilot/interactive-adapter';
 import type {
@@ -135,7 +143,8 @@ export const openAICompatibleProvider: ModelBackendProvider = {
 			open: true,
 			resume: false,
 			dispose: true,
-			abort: true
+			abort: true,
+			delete: false
 		},
 		stream: {
 			send: true,
@@ -387,6 +396,7 @@ export function openOpenAICompatibleSession(
 	let activeQueue: AsyncQueue<PortalEvent> | null = null;
 	let approveAllTools = opts.approveAllTools === true;
 	let currentMode: SessionMode = opts.mode ?? 'interactive';
+	const memoryLevel = normalizeMemorySupportLevel(opts.memoryLevel);
 	const messages: ChatMessage[] = restoreInitialMessages(cfg, opts);
 
 	function emit(ev: PortalEvent) {
@@ -401,10 +411,12 @@ export function openOpenAICompatibleSession(
 		approveAllTools = enabled;
 	}
 
-	const tools = buildOpenAITools({
-		opts,
-		getMode: () => currentMode
-	});
+	const tools = opts.disableTools
+		? []
+		: buildOpenAITools({
+				opts,
+				getMode: () => currentMode
+			});
 	const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
 	const toolPermissionBehavior = new Map(
 		tools.map((tool) => [tool.name, tool.permissionBehavior ?? 'normal'] as const)
@@ -447,8 +459,7 @@ export function openOpenAICompatibleSession(
 					body: JSON.stringify({
 						model: opts.model,
 						messages,
-						tools: openAITools,
-						tool_choice: 'auto',
+						...(openAITools.length > 0 ? { tools: openAITools, tool_choice: 'auto' } : {}),
 						stream: true,
 						...cfg.sampling,
 						...(cfg.includeUsage ? { stream_options: { include_usage: true } } : {})
@@ -592,6 +603,7 @@ export function openOpenAICompatibleSession(
 		providerSessionId,
 		workingDirectory: opts.workingDirectory,
 		model: opts.model,
+		memoryLevel,
 		lastUsed: Date.now(),
 		async *send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent> {
 			if (activeQueue) throw new Error('session busy: a turn is already in progress');
@@ -821,6 +833,12 @@ function buildOpenAITools(opts: {
 			workspaceKey: ticketWorkspaceFromConversation(opts.opts.workingDirectory),
 			conversationId: opts.opts.conversationId
 		}),
+		...(memorySupportsTools(opts.opts.memoryLevel)
+			? buildMemoryTools({
+					userId: opts.opts.userId,
+					conversationId: opts.opts.conversationId
+				})
+			: []),
 		...buildPermissionTools({
 			userId: opts.opts.userId,
 			conversationId: opts.opts.conversationId,

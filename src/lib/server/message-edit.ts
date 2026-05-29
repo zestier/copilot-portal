@@ -1,4 +1,5 @@
 import * as convs from '$lib/server/db/repos/conversations';
+import * as memory from '$lib/server/db/repos/memory';
 import * as messages from '$lib/server/db/repos/messages';
 import * as usage from '$lib/server/db/repos/usage';
 import { getTurn } from '$lib/server/runtime/turn-runner';
@@ -48,11 +49,16 @@ export function inlineEditMessage(input: InlineEditInput): InlineEditResult {
 	}
 
 	const all = messages.listByConversation(conv.id);
-	const target = all.find((m) => m.id === input.messageId);
+	const targetIdx = all.findIndex((m) => m.id === input.messageId);
+	const target = targetIdx >= 0 ? all[targetIdx] : undefined;
 	if (!target) throw new InlineEditRejected('message_not_found');
 	if (target.role !== 'user') {
 		throw new InlineEditRejected('not_user_message', 'Only user messages can be edited inline.');
 	}
+	const restoreSnapshotMessageId =
+		targetIdx > 0
+			? [...all.slice(0, targetIdx)].reverse().find((m) => m.role === 'assistant')?.id
+			: null;
 
 	cancelPendingInteractive(conv.id, 'message_inline_edit');
 	const userMessage = messages.truncateAfterAndUpdateUserMessage(
@@ -61,6 +67,7 @@ export function inlineEditMessage(input: InlineEditInput): InlineEditResult {
 		input.newContent
 	);
 	if (!userMessage) throw new InlineEditRejected('message_not_found');
+	memory.restoreSnapshotToConversation(input.userId, conv.id, restoreSnapshotMessageId ?? null);
 	usage.remove(conv.id);
 	const providerSessionId = convs.rotateProviderSession(conv.id, input.userId);
 	if (!providerSessionId) throw new InlineEditRejected('conversation_not_found');

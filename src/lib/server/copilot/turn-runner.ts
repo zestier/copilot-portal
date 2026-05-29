@@ -15,15 +15,23 @@ import { log } from '../log';
 import { appGlobalSymbols, getOrCreateGlobalSingleton } from '../global-singleton';
 import * as messages from '../db/repos/messages';
 import * as convs from '../db/repos/conversations';
+import * as memoryRepo from '../db/repos/memory';
 import * as usageRepo from '../db/repos/usage';
 import * as pool from './pool';
 import * as interactiveRequests from './interactive-requests';
-import { PORTAL_PRELUDE } from './portal-prelude';
+import { scheduleHarvest, waitForPendingHarvest } from './memory-harvester';
+import { buildMemoryBlockFromRows, buildPortalPrelude } from './portal-prelude';
+import {
+	memorySupportsHarvester,
+	memorySupportsInjector,
+	type MemoryContextRecord,
+	type MemoryHarvestRecord,
+	type PortalEvent
+} from '$lib/types';
 import { isStubMode } from './bridge-stub';
 import { AsyncQueue } from '../runtime/async-queue';
 import { snapshot as takeSnapshot } from '../snapshots';
 import type { ProviderOpenOptions } from '../providers';
-import type { PortalEvent } from '$lib/types';
 
 interface PendingTool {
 	toolCallId: string;
@@ -90,6 +98,15 @@ const TURNS_KEYS = appGlobalSymbols('turns');
 type TurnRegistry = Map<string, InternalTurn>;
 const turns: TurnRegistry = getOrCreateGlobalSingleton(TURNS_KEYS, () => new Map());
 
+// Background turns run independently of the user-facing turn slot above:
+// the post-turn memory harvester drives one so its pending ->
+// applied/empty/failed transition streams live without occupying the
+// conversation's single primary slot (which would block the user's next
+// message). Kept in a separate registry, but reuses the same event-log /
+// fan-out / replay machinery and the same stream endpoint.
+const BG_TURNS_KEYS = appGlobalSymbols('turns.background');
+const backgroundTurns: TurnRegistry = getOrCreateGlobalSingleton(BG_TURNS_KEYS, () => new Map());
+
 // How long a finished turn lingers in the registry so that a slightly-late
 // subscriber (e.g., a page that reloaded just as the turn completed) can
 // still replay the full event log instead of missing it.
@@ -102,10 +119,113 @@ export function getTurn(conversationId: string): Turn | null {
 // Look up a turn by its own id (the ulid in `turn.id`), scoped to a
 // conversation. Used by the streaming endpoint, which keys URLs by
 // `turnId` so reconnects always land on the same logical stream even
-// if a new turn replaced the registry slot.
+// if a new turn replaced the registry slot. Checks the primary registry
+// first, then the background registry, so a single stream URL shape can
+// serve both kinds of turn.
 export function getTurnById(conversationId: string, turnId: string): Turn | null {
 	const t = turns.get(conversationId);
-	return t && t.id === turnId ? t : null;
+	if (t && t.id === turnId) return t;
+	const bg = backgroundTurns.get(conversationId);
+	return bg && bg.id === turnId ? bg : null;
+}
+
+// The currently-running background turn for a conversation, if any. Used by
+// page load / conversation GET so a reload mid-harvest can reattach its
+// stream (mirrors getTurn for the primary slot).
+export function getBackgroundTurn(conversationId: string): Turn | null {
+	const t = backgroundTurns.get(conversationId);
+	return t && t.status === 'running' ? t : null;
+}
+
+// Append an event to a turn's log and fan it out to live subscribers with
+// its monotonic id (= index in the log). All paths that surface an event
+// MUST go through here so ids stay contiguous and aligned with the replay
+// buffer. Live-only events (per-tool partial output, progress) fan out but
+// are not logged: reconnects don't replay them; the authoritative final
+// state comes from `tool.result`.
+function emitTo(turn: InternalTurn, ev: PortalEvent) {
+	if (ev.type === 'tool.partial_output' || ev.type === 'tool.progress') {
+		const wrapped: IdentifiedEvent = { id: -1, event: ev };
+		for (const q of turn.subscribers) q.push(wrapped);
+		return;
+	}
+	const id = turn.eventLog.length;
+	turn.eventLog.push(ev);
+	const wrapped: IdentifiedEvent = { id, event: ev };
+	for (const q of turn.subscribers) q.push(wrapped);
+}
+
+// Evict a finished turn from its registry after a grace window so a
+// slightly-late subscriber can still replay it.
+function scheduleEviction(registry: TurnRegistry, conversationId: string, turn: InternalTurn) {
+	const t = setTimeout(() => {
+		if (registry.get(conversationId) === turn) registry.delete(conversationId);
+	}, FINISHED_GRACE_MS);
+	(t as { unref?: () => void }).unref?.();
+}
+
+// A minimal event sink the harvester drives to stream its progress on a
+// dedicated background turn. `emit` surfaces a `memory.harvest` record;
+// `finish` ends the stream with a terminal `done`.
+export interface HarvestSink {
+	turnId: string;
+	emit(record: MemoryHarvestRecord): void;
+	finish(): void;
+	// Tear down a sink that was created speculatively but won't be used
+	// (e.g. the harvester declined to run), without emitting anything.
+	discard(): void;
+}
+
+// Create and register a background turn for a conversation, returning a sink
+// the harvester emits through. Replaces any prior background turn in the
+// slot (the previous one has already finished; the harvest chain serializes
+// passes per conversation).
+export function createBackgroundHarvestTurn(
+	conversationId: string,
+	messageId: string
+): HarvestSink {
+	const eventLog: PortalEvent[] = [];
+	const subscribers = new Set<AsyncQueue<IdentifiedEvent>>();
+	const turn: InternalTurn = {
+		id: ulid(),
+		conversationId,
+		startedAt: Date.now(),
+		endedAt: null,
+		status: 'running',
+		eventLog,
+		subscribers,
+		finishedPromise: Promise.resolve(),
+		subscribe(subOpts?: SubscribeOptions) {
+			return subscribe(turn, subOpts);
+		},
+		async abort() {
+			/* background turns are not user-abortable */
+		}
+	};
+	backgroundTurns.set(conversationId, turn);
+	let finished = false;
+	const finish = () => {
+		if (finished) return;
+		finished = true;
+		turn.status = 'complete';
+		turn.endedAt = Date.now();
+		if (!eventLog.some((e) => e.type === 'done')) emitTo(turn, { type: 'done' });
+		for (const q of subscribers) q.end();
+		subscribers.clear();
+		scheduleEviction(backgroundTurns, conversationId, turn);
+	};
+	return {
+		turnId: turn.id,
+		emit: (record: MemoryHarvestRecord) =>
+			emitTo(turn, { type: 'memory.harvest', messageId, harvest: record }),
+		finish,
+		discard: () => {
+			finished = true;
+			if (backgroundTurns.get(conversationId) === turn) backgroundTurns.delete(conversationId);
+			for (const q of subscribers) q.end();
+			subscribers.clear();
+		}
+	};
 }
 
 export interface StartTurnOptions {
@@ -131,24 +251,12 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	const turnAc = new AbortController();
 	let session: Awaited<ReturnType<typeof pool.acquire>> | null = null;
 
-	// Append an event to the log and fan it out to live subscribers with
-	// its monotonic id (= index in `eventLog`). All paths that need to
-	// surface an event MUST go through here so that ids stay contiguous
-	// and aligned with the replay buffer.
+	// Append an event to the log and fan it out to live subscribers (see
+	// `emitTo`). All paths that need to surface an event for this turn MUST
+	// go through here so ids stay contiguous and aligned with the replay
+	// buffer.
 	function emit(ev: PortalEvent) {
-		// Live-only events (per-tool partial output, progress messages):
-		// fan out to active subscribers but do NOT append to the event log.
-		// Reconnects don't replay them; the authoritative final state comes
-		// from `tool.result`.
-		if (ev.type === 'tool.partial_output' || ev.type === 'tool.progress') {
-			const wrapped: IdentifiedEvent = { id: -1, event: ev };
-			for (const q of subscribers) q.push(wrapped);
-			return;
-		}
-		const id = eventLog.length;
-		eventLog.push(ev);
-		const wrapped: IdentifiedEvent = { id, event: ev };
-		for (const q of subscribers) q.push(wrapped);
+		emitTo(turn, ev);
 	}
 
 	const turn: InternalTurn = {
@@ -204,16 +312,23 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 		// `done` in the finally block after persistence work completes.
 		if (ev.type === 'done') return;
 
-		emit(ev);
-
 		if (ev.type === 'message.start') {
+			const id = ensurePersistedAssistant();
+			emit({
+				...ev,
+				messageId: id,
+				memoryContextEnabled,
+				memoryContext: memoryContextForMessage(id)
+			});
 			assistantId = ev.messageId;
-			ensurePersistedAssistant();
 		} else if (ev.type === 'message.delta') {
+			const id = ensurePersistedAssistant();
+			emit({ ...ev, messageId: id });
 			assistantBuf += ev.text;
-			messages.updateContentOnly(ensurePersistedAssistant(), assistantBuf);
+			messages.updateContentOnly(id, assistantBuf);
 		} else if (ev.type === 'message.reasoning') {
 			const persistedId = ensurePersistedAssistant();
+			emit({ ...ev, messageId: persistedId });
 			let seg = pendingReasoning.get(ev.segmentId);
 			if (!seg) {
 				const isChild = !!ev.parentToolCallId;
@@ -233,12 +348,17 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 			seg.text += ev.text;
 			messages.upsertReasoningBlock(persistedId, seg);
 		} else if (ev.type === 'message.reasoning.end') {
+			const persistedId = ensurePersistedAssistant();
+			emit({ ...ev, messageId: persistedId });
 			const seg = pendingReasoning.get(ev.segmentId);
 			if (seg) {
 				seg.durationMs = ev.durationMs;
-				messages.upsertReasoningBlock(ensurePersistedAssistant(), seg);
+				messages.upsertReasoningBlock(persistedId, seg);
 			}
+		} else if (ev.type === 'message.end') {
+			emit({ ...ev, messageId: ensurePersistedAssistant() });
 		} else if (ev.type === 'tool.call') {
+			emit(ev);
 			const isChild = !!ev.parentToolCallId;
 			const persistedId = ensurePersistedAssistant();
 			const tool: PendingTool = {
@@ -265,6 +385,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				parentToolCallId: tool.parentToolCallId
 			});
 		} else if (ev.type === 'tool.result') {
+			emit(ev);
 			const tc = pendingTools.get(ev.toolCallId);
 			if (tc) {
 				tc.status = ev.ok ? 'ok' : 'error';
@@ -277,8 +398,10 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				});
 			}
 		} else if (ev.type === 'subagent.lifecycle') {
+			emit(ev);
 			messages.updateBackgroundAgentLifecycle(ev.toolCallId, ev.agentId, ev.status);
 		} else if (ev.type === 'file.edit') {
+			emit(ev);
 			const isChild = !!ev.parentToolCallId;
 			const textOffset = isChild ? null : assistantBuf.length;
 			const parentToolCallId = ev.parentToolCallId ?? null;
@@ -294,6 +417,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				);
 			}
 		} else if (ev.type === 'context.usage') {
+			emit(ev);
 			try {
 				usageRepo.upsert(opts.conversationId, {
 					currentTokens: ev.currentTokens,
@@ -309,6 +433,8 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 					err: String(usageErr)
 				});
 			}
+		} else {
+			emit(ev);
 		}
 	}
 
@@ -323,12 +449,54 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 	// receives, so dumping the prelude into its reply breaks tests that
 	// assert on the literal user prompt and wastes tokens against a
 	// fixed-string responder that wouldn't act on the guidance anyway.
-	const prelude = isStubMode() ? '' : PORTAL_PRELUDE;
-	const promptToSend = prelude ? `${prelude}\n\n${opts.prompt}` : opts.prompt;
+	const prelude = isStubMode() ? '' : buildPortalPrelude(opts.bridge.memoryLevel);
+	const memoryContextEnabled = !isStubMode() && memorySupportsInjector(opts.bridge.memoryLevel);
+	// The injected memory digest and final prompt are built inside the turn
+	// body (below), after any in-progress background harvest from the prior
+	// turn settles, so the model sees the harvested memory state instead of
+	// racing it. `memoryContextInputs` and `promptToSend` are populated there
+	// before the provider session is sent to.
+	let memoryContextInputs: messages.MemoryContextInput[] = [];
+	const memoryContextForMessage = (messageId: string): MemoryContextRecord[] =>
+		memoryContextInputs.map((row, sortIndex) => ({
+			messageId,
+			...row,
+			sortIndex
+		}));
+	let promptToSend = opts.prompt;
 
 	turn.finishedPromise = (async () => {
 		try {
 			await opts.beforeSend?.();
+			// Gate on any in-progress background memory harvest from the prior
+			// turn so the injected digest reflects the harvested memory state
+			// and the prior turn's snapshot has settled before we mutate again.
+			await waitForPendingHarvest(opts.conversationId);
+			let injectedMemoryRows: memoryRepo.MemoryRow[] = [];
+			if (memoryContextEnabled) {
+				injectedMemoryRows = memoryRepo.getActiveDigest(
+					opts.bridge.userId,
+					opts.conversationId,
+					4000
+				);
+				memoryContextInputs = injectedMemoryRows.map((row) => ({
+					memoryId: row.id,
+					scope: row.scope,
+					kind: row.kind,
+					entity: row.entity,
+					content: row.content,
+					tags: row.tags,
+					importance: row.importance
+				}));
+			}
+			const memoryBlock =
+				injectedMemoryRows.length === 0
+					? ''
+					: buildMemoryBlockFromRows(
+							injectedMemoryRows,
+							memoryRepo.currentScene(opts.bridge.userId, opts.conversationId)
+						);
+			promptToSend = [prelude, memoryBlock, opts.prompt].filter(Boolean).join('\n\n');
 			session = await pool.acquire(opts.bridge);
 			if (turnAc.signal.aborted) {
 				await session.abort();
@@ -355,6 +523,9 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 				if (persistedAssistantId || assistantBuf || assistantId || pendingTools.size) {
 					const id = ensurePersistedAssistant();
 					messages.updateContent(id, assistantBuf, status);
+					if (memoryContextEnabled) {
+						messages.replaceMemoryContext(id, memoryContextInputs);
+					}
 					for (const t of pendingTools.values()) {
 						if (t.status === 'pending') {
 							t.status = 'error';
@@ -389,9 +560,87 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 					});
 				}
 			}
+			const takeMemorySnapshot = () => {
+				if (!persistedAssistantId) return;
+				try {
+					memoryRepo.snapshotForMessage(
+						opts.bridge.userId,
+						opts.conversationId,
+						persistedAssistantId
+					);
+				} catch (snapshotErr) {
+					log.warn('memory.snapshot.failed', {
+						conversationId: opts.conversationId,
+						messageId: persistedAssistantId,
+						err: String(snapshotErr)
+					});
+				}
+			};
+
+			// Schedule the post-turn harvester as a true background pass on its
+			// own background turn: we do NOT await it, so the visible turn
+			// completes immediately. The harvester emits its `memory.harvest`
+			// updates and a terminal `done` on that background turn, which the
+			// client opens as a second stream (announced via the
+			// `memory.harvest.started` event below) so the live pending ->
+			// applied/empty/failed transition is visible without blocking. The
+			// memory-bank snapshot for this message is taken once the harvest
+			// settles (onSettled) so it captures the harvested state, and the
+			// next turn's memory injection waits on the harvest chain via
+			// waitForPendingHarvest(). When no harvester runs, the snapshot is
+			// taken inline below.
+			let snapshotDeferredToHarvester = false;
+			let harvestTurnId: string | null = null;
+			if (
+				persistedAssistantId &&
+				status === 'complete' &&
+				assistantBuf.trim() &&
+				memorySupportsHarvester(opts.bridge.memoryLevel)
+			) {
+				const harvestMessageId = persistedAssistantId;
+				if (!eventLog.some((e) => e.type === 'message.end' && e.messageId === harvestMessageId)) {
+					emit({ type: 'message.end', messageId: harvestMessageId });
+				}
+				const sink = createBackgroundHarvestTurn(opts.conversationId, harvestMessageId);
+				const harvest = scheduleHarvest({
+					bridge: opts.bridge,
+					assistantMessageId: harvestMessageId,
+					userPrompt: opts.prompt,
+					assistantReply: assistantBuf,
+					onUpdate: (record) => sink.emit(record),
+					// Snapshot post-harvest state, then close the background
+					// turn's stream. Runs once the harvest settles (applied,
+					// empty, skipped, or failed) and its writes are committed.
+					onSettled: () => {
+						takeMemorySnapshot();
+						sink.finish();
+					}
+				});
+				if (harvest) {
+					snapshotDeferredToHarvester = true;
+					harvestTurnId = sink.turnId;
+				} else {
+					// Harvester declined to run (e.g. stub mode): drop the
+					// speculative background turn without announcing it.
+					sink.discard();
+				}
+			}
+			if (persistedAssistantId && status === 'complete' && !snapshotDeferredToHarvester) {
+				takeMemorySnapshot();
+			}
 
 			turn.status = status === 'interrupted' ? 'interrupted' : 'complete';
 			turn.endedAt = Date.now();
+
+			// Announce the background harvest turn before the terminal `done`
+			// so the client can open its stream as this one closes.
+			if (harvestTurnId && persistedAssistantId) {
+				emit({
+					type: 'memory.harvest.started',
+					messageId: persistedAssistantId,
+					harvestTurnId
+				});
+			}
 
 			// Make sure subscribers see a terminal event even if the SDK
 			// didn't emit `done` (e.g., on abort path).
@@ -403,12 +652,7 @@ export async function startTurn(opts: StartTurnOptions): Promise<Turn> {
 
 			// Keep the finished turn around briefly so that a subscriber that
 			// races with completion still gets the full replay.
-			const t = setTimeout(() => {
-				if (turns.get(opts.conversationId) === turn) {
-					turns.delete(opts.conversationId);
-				}
-			}, FINISHED_GRACE_MS);
-			(t as { unref?: () => void }).unref?.();
+			scheduleEviction(turns, opts.conversationId, turn);
 		}
 	})();
 

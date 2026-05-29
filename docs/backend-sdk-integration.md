@@ -36,6 +36,44 @@ SSE layer. A provider may translate any native streaming format into that union,
 but turn persistence, replay, and frontend rendering must not depend on
 provider-native events.
 
+Before each non-stub turn, the turn runner prepends a portal context block to
+the raw user prompt. If the conversation's memory support level is `injector` or
+`harvester`, it also prepends the active conversation memory-bank digest. The
+digest is read from SQLite and capped by a character budget so the provider sees
+the most important typed scene/session continuity records (`kind`, stable
+`entity`, and native JSON `content`) without unbounded context growth.
+
+After a completed assistant reply is persisted and the post-turn snapshot is
+attempted, `memory-harvester.ts` schedules a fire-and-forget maintenance pass
+only when the memory support level is `harvester`. It opens a short-lived
+synthetic provider session using the same backend/model with portal tools
+disabled (`disableTools: true`), asks for strict JSON memory writes/updates/
+forgets, validates the payload, and applies it through the memory repository.
+The prompt includes active memories with their kind/source so the harvester can
+compact, correct, rewrite, split, or forget bloated/stale direct-agent entries
+without creating duplicates. It prefers updating existing stable entities and
+using native structured JSON content instead of JSON strings. The harvester
+redacts common secret-shaped text before prompting, creates a current scene when
+a harvested scene memory needs one, and ignores stale updates when a memory row
+changed after harvesting began. The harvester does **not** block the visible
+turn, and it streams its progress on its **own background turn** rather than on
+the primary turn. When a harvest is scheduled the primary turn emits a
+`memory.harvest.started` event (carrying the assistant `messageId` and the
+background turn id) just before its terminal `done`. The harvest's own
+`memory.harvest` updates (`pending` → `applied`/`empty`/`skipped`/`failed`) and
+its terminal `done` are emitted on that background turn, which lives in a
+separate registry slot so it never occupies the conversation's single
+user-facing turn (the user can send their next message immediately). The same
+`/turns/[turnId]/stream` endpoint serves it — `getTurnById` checks the primary
+registry then the background one — so the client opens a second `EventSource` to
+surface the live transition; `getBackgroundTurn()` lets a reload mid-harvest
+reattach. The persisted `message_memory_harvest` row remains the source of truth
+on refresh. The post-turn memory-bank snapshot is taken once the harvest settles
+so it captures the harvested state, and the next turn's memory injection calls
+`waitForPendingHarvest()` to gate on the in-progress chain so it sees the
+harvested memories instead of racing them. Harvester failures are logged only and
+must never fail the user-visible turn.
+
 Copilot-only features are modeled as optional provider capabilities:
 permission/user-input/elicitation/exit-plan/auto-mode-switch callbacks,
 infinite-session metadata, context-window usage and compaction events, file-edit

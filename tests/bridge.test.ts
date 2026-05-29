@@ -29,7 +29,8 @@ const clientStub = {
 	listModels: vi.fn(),
 	createSession: vi.fn().mockResolvedValue(sdkSessionStub),
 	resumeSession: vi.fn().mockResolvedValue(sdkSessionStub),
-	getSessionMetadata: vi.fn()
+	getSessionMetadata: vi.fn(),
+	deleteSession: vi.fn()
 };
 
 // Count how many times `new CopilotClient(...)` runs so tests can
@@ -95,6 +96,7 @@ beforeEach(async () => {
 	clientStub.getAuthStatus.mockResolvedValue({ authenticated: true });
 	clientStub.listModels.mockResolvedValue([]);
 	clientStub.getSessionMetadata.mockResolvedValue(undefined);
+	clientStub.deleteSession.mockResolvedValue(undefined);
 	sdkSessionStub.workspacePath = sessionWorkspace;
 	sdkSessionStub.abort.mockResolvedValue(undefined);
 	sdkSessionStub.disconnect.mockResolvedValue(undefined);
@@ -157,6 +159,18 @@ describe('bridge.open() session resume behavior', () => {
 		expect(clientStub.resumeSession).not.toHaveBeenCalled();
 		expect(clientStub.createSession).toHaveBeenCalledTimes(1);
 		expect(clientStub.createSession.mock.calls[0][0].sessionId).toBe('conv-123');
+	});
+
+	it('deletes durable SDK session data through the provider abstraction', async () => {
+		clientStub.getSessionMetadata.mockResolvedValue(undefined);
+		const { copilotProvider } = await importBridge();
+
+		await copilotProvider.deleteSession?.({
+			userId: baseOpts.userId,
+			providerSessionId: 'harvest-session'
+		});
+
+		expect(clientStub.deleteSession).toHaveBeenCalledWith('harvest-session');
 	});
 });
 

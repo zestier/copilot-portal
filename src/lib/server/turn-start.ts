@@ -43,6 +43,7 @@ export async function startTurnFromUserMessage(
 			model: conv.model ?? cfg.DEFAULT_MODEL,
 			policy: userSettings.defaultPolicy,
 			mode: conv.mode,
+			memoryLevel: conv.memoryLevel,
 			approveAllTools: conv.approveAllTools,
 			providerAuthToken: providerAuthToken(conv.provider, conv.userId),
 			initialMessages:

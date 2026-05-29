@@ -6,7 +6,12 @@
 // upgrading, audit this file plus sdk-events.ts / interactive-adapter.ts.
 
 import { CopilotClient } from '@github/copilot-sdk';
-import type { PortalEvent, SessionMode } from '$lib/types';
+import {
+	memorySupportsTools,
+	normalizeMemorySupportLevel,
+	type PortalEvent,
+	type SessionMode
+} from '$lib/types';
 import { AsyncQueue } from '../runtime/async-queue';
 import { createInteractiveCallbacks } from './interactive-adapter';
 import { SdkEventAdapter, toRuntimeMode, type RuntimeSessionMode } from './sdk-events';
@@ -23,6 +28,7 @@ import { loadConfig } from '../config';
 import { log } from '../log';
 import { StubCopilotClient, isStubMode } from './bridge-stub';
 import { buildGitTools } from '../tools/git';
+import { buildMemoryTools } from '../tools/memory';
 import { buildTicketTools } from '../tools/tickets';
 import { buildPermissionTools } from '../tools/permissions';
 import { buildToolArgsValidator } from '../tools/schema-error';
@@ -110,6 +116,15 @@ export async function fetchModels(
 	return models;
 }
 
+export async function deleteSession(opts: {
+	userId: string;
+	providerSessionId: string;
+	providerAuthToken?: string;
+}): Promise<void> {
+	const client = await getClient(opts.userId, opts.providerAuthToken);
+	await client.deleteSession(opts.providerSessionId);
+}
+
 export type BridgeOpenOptions = ProviderOpenOptions;
 export type ConversationSession = ProviderSession &
 	Required<Pick<ProviderSession, 'setMode' | 'setApproveAll' | 'resetSessionApprovals'>>;
@@ -152,6 +167,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 	// the change without a recreate.
 	let approveAllTools = opts.approveAllTools === true;
 	let currentMode: SessionMode = opts.mode ?? 'interactive';
+	const memoryLevel = normalizeMemorySupportLevel(opts.memoryLevel);
 	let sessionWorkspacePath: string | null = null;
 	const toolPermissionBehavior = new Map<string, 'normal' | 'always-prompt'>();
 
@@ -169,20 +185,28 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 			messagesRepo.updateBackgroundAgentLifecycle(ev.toolCallId, ev.agentId, ev.status);
 		}
 	});
-	const portalTools = [
-		...buildGitTools(opts.workingDirectory),
-		...buildTicketTools({
-			userId: opts.userId,
-			workspaceKey: ticketWorkspaceFromConversation(opts.workingDirectory),
-			conversationId: opts.conversationId
-		}),
-		...buildPermissionTools({
-			userId: opts.userId,
-			conversationId: opts.conversationId,
-			policy: opts.policy,
-			getMode: () => currentMode
-		})
-	];
+	const portalTools = opts.disableTools
+		? []
+		: [
+				...buildGitTools(opts.workingDirectory),
+				...buildTicketTools({
+					userId: opts.userId,
+					workspaceKey: ticketWorkspaceFromConversation(opts.workingDirectory),
+					conversationId: opts.conversationId
+				}),
+				...(memorySupportsTools(memoryLevel)
+					? buildMemoryTools({
+							userId: opts.userId,
+							conversationId: opts.conversationId
+						})
+					: []),
+				...buildPermissionTools({
+					userId: opts.userId,
+					conversationId: opts.conversationId,
+					policy: opts.policy,
+					getMode: () => currentMode
+				})
+			];
 	const validateCustomToolArgs = buildToolArgsValidator(portalTools);
 	const {
 		onPermissionRequest,
@@ -303,6 +327,7 @@ export async function open(opts: BridgeOpenOptions): Promise<ConversationSession
 		providerSessionId,
 		workingDirectory: opts.workingDirectory,
 		model: opts.model,
+		memoryLevel,
 		lastUsed: Date.now(),
 		async *send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent> {
 			if (activeQueue) throw new Error('session busy: a turn is already in progress');
@@ -392,7 +417,8 @@ export const copilotProvider: ModelBackendProvider = {
 			open: true,
 			resume: true,
 			dispose: true,
-			abort: true
+			abort: true,
+			delete: true
 		},
 		stream: {
 			send: true,
@@ -468,6 +494,7 @@ export const copilotProvider: ModelBackendProvider = {
 	fetchAuthStatus,
 	listModels: fetchModels,
 	openSession: open,
+	deleteSession,
 	shutdown: shutdownClient
 };
 

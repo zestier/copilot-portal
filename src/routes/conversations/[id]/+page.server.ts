@@ -6,7 +6,7 @@ import * as promptTemplates from '$lib/server/db/repos/prompt-templates';
 import * as tickets from '$lib/server/db/repos/tickets';
 import * as usage from '$lib/server/db/repos/usage';
 import { getBuiltInPromptTemplate } from '$lib/prompt-templates';
-import { getTurn } from '$lib/server/runtime/turn-runner';
+import { getTurn, getBackgroundTurn } from '$lib/server/runtime/turn-runner';
 import { listForConversation as listPendingInteractive } from '$lib/server/runtime/interactive-requests';
 import { fetchModels, getProvider } from '$lib/server/providers';
 import { providerAuthToken } from '$lib/server/providers/auth';
@@ -50,6 +50,11 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
 	// still-cached turns would just replay then immediately yield `done`.
 	const turn = getTurn(conv.id);
 	const activeTurnId = turn && turn.status === 'running' ? turn.id : null;
+	// A post-turn memory harvest may still be running on its own background
+	// turn after the visible turn finished; surface it so a reload mid-harvest
+	// can reattach and show the final result live.
+	const harvestTurn = getBackgroundTurn(conv.id);
+	const activeHarvestTurnId = harvestTurn ? harvestTurn.id : null;
 
 	// Snapshot any prompts currently waiting on a user response so a fresh
 	// page load shows them immediately, without waiting for the SSE stream
@@ -119,6 +124,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
 		contextUsage,
 		parent,
 		activeTurnId,
+		activeHarvestTurnId,
 		pendingInteractive,
 		initialComposer
 	};

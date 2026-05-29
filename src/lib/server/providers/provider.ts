@@ -3,6 +3,7 @@ import type {
 	PortalEvent,
 	PermissionPolicy,
 	ProviderCapabilities,
+	MemorySupportLevel,
 	SessionMode,
 	MessageStatus,
 	Role,
@@ -50,8 +51,12 @@ export interface ProviderOpenOptions {
 	policy: PermissionPolicy;
 	/** Initial session mode. Providers without mode support may ignore it. */
 	mode?: SessionMode;
+	/** Model-visible memory support level for the session. */
+	memoryLevel?: MemorySupportLevel;
 	/** Initial approve-all setting. Providers without approve-all support may ignore it. */
 	approveAllTools?: boolean;
+	/** Disable model-visible portal tools for completion-only internal turns. */
+	disableTools?: boolean;
 	/** Provider-specific bearer credential resolved by the route layer, if needed. */
 	providerAuthToken?: string;
 	/**
@@ -78,12 +83,19 @@ export interface ProviderConversationMessage {
 	toolCalls?: ToolCallRecord[];
 }
 
+export interface ProviderDeleteSessionOptions {
+	userId: string;
+	providerSessionId: string;
+	providerAuthToken?: string;
+}
+
 export interface ProviderSession {
 	provider?: BackendProviderId;
 	conversationId: string;
 	providerSessionId: string;
 	workingDirectory: string;
 	model: string;
+	memoryLevel?: MemorySupportLevel;
 	lastUsed: number;
 	send(prompt: string, signal: AbortSignal): AsyncIterable<PortalEvent>;
 	abort(): Promise<void>;
@@ -111,6 +123,8 @@ export interface ModelBackendProvider {
 	 * session while keeping the portal conversation durable in SQLite.
 	 */
 	openSession(opts: ProviderOpenOptions): Promise<ProviderSession>;
+	/** Delete durable provider-side session state, if the provider persists it. */
+	deleteSession?(opts: ProviderDeleteSessionOptions): Promise<void>;
 	/**
 	 * Providers with durable resume but no request-time assistant-history import
 	 * can ask the portal to wrap prior messages into the next prompt until a

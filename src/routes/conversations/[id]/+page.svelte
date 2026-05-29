@@ -81,6 +81,7 @@
 			initialUsage={data.contextUsage}
 			parent={data.parent}
 			initialActiveTurnId={data.activeTurnId}
+			initialActiveHarvestTurnId={data.activeHarvestTurnId}
 			initialPendingInteractive={data.pendingInteractive}
 			initialComposer={data.initialComposer}
 		/>
